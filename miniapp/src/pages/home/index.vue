@@ -206,7 +206,7 @@ onLoad(() => {
 <template>
   <view class="min-h-screen bg-[#F5F7FA] pb-[120rpx]">
     <!-- 7.1 顶部地址搜索模块 -->
-    <view class="sticky top-0 z-20 bg-[#FF373D] pt-safe px-[28rpx] pb-[24rpx]">
+    <view class="sticky top-0 z-20 bg-[#FF373D] px-[28rpx] pb-[24rpx]" style="padding-top: calc(env(safe-area-inset-top) + 20rpx);">
       <!-- 地址行 -->
       <view class="flex items-center pt-[16rpx] pb-[16rpx]" @tap="onAddressTap">
         <view class="i-carbon-location text-white text-[32rpx]" />
