@@ -1,0 +1,682 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ==================== 1. Users and Auth ====================
+
+model User {
+  id        BigInt    @id @default(autoincrement())
+  uuid      String    @unique @default(uuid()) @db.VarChar(36)
+  openid    String?   @unique @db.VarChar(64)
+  unionid   String?   @db.VarChar(64)
+  phone     String?   @db.VarChar(20)
+  nickname  String?   @db.VarChar(64)
+  avatarUrl String?   @map("avatar_url") @db.VarChar(512)
+  gender    Int       @default(0) @db.SmallInt
+  status    Int       @default(1) @db.SmallInt
+  cityCode  String?   @map("city_code") @db.VarChar(20)
+  storeId   BigInt?   @map("store_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  addresses       UserAddress[]
+  orders          Order[]
+  reviews         Review[]
+  tickets         Ticket[]
+  userCoupons     UserCoupon[]
+  userMemberCards UserMemberCard[]
+  favorites       ServiceFavorite[]
+
+  @@index([phone])
+  @@index([cityCode])
+  @@map("users")
+}
+
+model Staff {
+  id           BigInt    @id @default(autoincrement())
+  uuid         String    @unique @default(uuid()) @db.VarChar(36)
+  name         String    @db.VarChar(64)
+  phone        String    @db.VarChar(20)
+  passwordHash String    @map("password_hash") @db.VarChar(128)
+  avatarUrl    String?   @map("avatar_url") @db.VarChar(512)
+  idCard       String?   @map("id_card") @db.VarChar(20)
+  skills       Json?
+  status       Int       @default(1) @db.SmallInt
+  workStatus   Int       @default(0) @map("work_status") @db.SmallInt
+  cityCode     String?   @map("city_code") @db.VarChar(20)
+  storeId      BigInt?   @map("store_id")
+  rating       Decimal   @default(5.00) @db.Decimal(3, 2)
+  totalOrders  Int       @default(0) @map("total_orders")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  orders        Order[]
+  assignments   OrderAssignment[]
+  checkins      ServiceCheckin[]
+  photos        ServicePhoto[]
+  incomeRecords StaffIncomeRecord[]
+  reviews       Review[]
+
+  @@index([phone])
+  @@index([status])
+  @@index([workStatus])
+  @@index([cityCode])
+  @@map("staff")
+}
+
+model AdminUser {
+  id           BigInt    @id @default(autoincrement())
+  uuid         String    @unique @default(uuid()) @db.VarChar(36)
+  username     String    @unique @db.VarChar(64)
+  passwordHash String    @map("password_hash") @db.VarChar(128)
+  name         String    @db.VarChar(64)
+  phone        String?   @db.VarChar(20)
+  role         String    @db.VarChar(32)
+  status       Int       @default(1) @db.SmallInt
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("admin_users")
+}
+
+model Role {
+  id          BigInt   @id @default(autoincrement())
+  name        String   @unique @db.VarChar(64)
+  displayName String   @map("display_name") @db.VarChar(64)
+  permissions Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("roles")
+}
+
+model LoginLog {
+  id          BigInt   @id @default(autoincrement())
+  userType    String   @map("user_type") @db.VarChar(16)
+  userId      BigInt   @map("user_id")
+  loginMethod String   @map("login_method") @db.VarChar(32)
+  ip          String?  @db.VarChar(64)
+  userAgent   String?  @map("user_agent") @db.VarChar(512)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([userType, userId])
+  @@map("login_logs")
+}
+
+// ==================== 2. Service Management ====================
+
+model ServiceCategory {
+  id          BigInt   @id @default(autoincrement())
+  name        String   @db.VarChar(64)
+  icon        String?  @db.VarChar(256)
+  description String?  @db.VarChar(512)
+  sortOrder   Int      @default(0) @map("sort_order")
+  status      Int      @default(1) @db.SmallInt
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  services Service[]
+
+  @@map("service_categories")
+}
+
+model Service {
+  id              BigInt    @id @default(autoincrement())
+  uuid            String    @unique @default(uuid()) @db.VarChar(36)
+  categoryId      BigInt    @map("category_id")
+  name            String    @db.VarChar(128)
+  description     String?   @db.Text
+  detail          String?   @db.Text
+  coverImage      String?   @map("cover_image") @db.VarChar(512)
+  basePrice       Decimal   @map("base_price") @db.Decimal(10, 2)
+  priceUnit       String    @map("price_unit") @db.VarChar(16)
+  minPrice        Decimal?  @map("min_price") @db.Decimal(10, 2)
+  durationMinutes Int?      @map("duration_minutes")
+  serviceArea     String?   @map("service_area") @db.VarChar(256)
+  notice          String?   @db.Text
+  status          Int       @default(1) @db.SmallInt
+  sortOrder       Int       @default(0) @map("sort_order")
+  cityCode        String?   @map("city_code") @db.VarChar(20)
+  totalOrders     Int       @default(0) @map("total_orders")
+  rating          Decimal   @default(5.00) @db.Decimal(3, 2)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  category   ServiceCategory  @relation(fields: [categoryId], references: [id])
+  priceRules ServicePriceRule[]
+  images     ServiceImage[]
+  orders     Order[]
+  reviews    Review[]
+  favorites  ServiceFavorite[]
+
+  @@index([categoryId])
+  @@index([status])
+  @@index([cityCode])
+  @@map("services")
+}
+
+model ServicePriceRule {
+  id         BigInt   @id @default(autoincrement())
+  serviceId  BigInt   @map("service_id")
+  ruleType   String   @map("rule_type") @db.VarChar(32)
+  ruleName   String   @map("rule_name") @db.VarChar(64)
+  ruleConfig Json     @map("rule_config")
+  status     Int      @default(1) @db.SmallInt
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  service Service @relation(fields: [serviceId], references: [id])
+
+  @@index([serviceId])
+  @@map("service_price_rules")
+}
+
+model ServiceImage {
+  id        BigInt   @id @default(autoincrement())
+  serviceId BigInt   @map("service_id")
+  url       String   @db.VarChar(512)
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  service Service @relation(fields: [serviceId], references: [id])
+
+  @@index([serviceId])
+  @@map("service_images")
+}
+
+// ==================== 3. User Address ====================
+
+model UserAddress {
+  id           BigInt    @id @default(autoincrement())
+  userId       BigInt    @map("user_id")
+  contactName  String    @map("contact_name") @db.VarChar(64)
+  contactPhone String    @map("contact_phone") @db.VarChar(20)
+  province     String    @db.VarChar(32)
+  city         String    @db.VarChar(32)
+  district     String    @db.VarChar(32)
+  address      String    @db.VarChar(256)
+  latitude     Decimal?  @db.Decimal(10, 7)
+  longitude    Decimal?  @db.Decimal(10, 7)
+  isDefault    Boolean   @default(false) @map("is_default")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("user_addresses")
+}
+
+// ==================== 4. Orders ====================
+
+model Order {
+  id                   BigInt    @id @default(autoincrement())
+  orderNo              String    @unique @map("order_no") @db.VarChar(32)
+  userId               BigInt    @map("user_id")
+  staffId              BigInt?   @map("staff_id")
+  serviceId            BigInt    @map("service_id")
+  status               String    @db.VarChar(32)
+  serviceSnapshot      Json      @map("service_snapshot")
+  addressSnapshot      Json      @map("address_snapshot")
+  appointmentStartTime DateTime  @map("appointment_start_time")
+  appointmentEndTime   DateTime  @map("appointment_end_time")
+  originalAmount       Decimal   @map("original_amount") @db.Decimal(10, 2)
+  discountAmount       Decimal   @default(0) @map("discount_amount") @db.Decimal(10, 2)
+  payableAmount        Decimal   @map("payable_amount") @db.Decimal(10, 2)
+  paidAmount           Decimal   @default(0) @map("paid_amount") @db.Decimal(10, 2)
+  couponId             BigInt?   @map("coupon_id")
+  memberCardId         BigInt?   @map("member_card_id")
+  remark               String?   @db.VarChar(512)
+  adminRemark          String?   @map("admin_remark") @db.VarChar(512)
+  source               String    @default("miniapp") @db.VarChar(16)
+  cityCode             String?   @map("city_code") @db.VarChar(20)
+  storeId              BigInt?   @map("store_id")
+  paidAt               DateTime? @map("paid_at")
+  completedAt          DateTime? @map("completed_at")
+  cancelledAt          DateTime? @map("cancelled_at")
+  cancelReason         String?   @map("cancel_reason") @db.VarChar(256)
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  user              User              @relation(fields: [userId], references: [id])
+  staff             Staff?            @relation(fields: [staffId], references: [id])
+  service           Service           @relation(fields: [serviceId], references: [id])
+  statusLogs        OrderStatusLog[]
+  assignments       OrderAssignment[]
+  payments          Payment[]
+  checkins          ServiceCheckin[]
+  photos            ServicePhoto[]
+  review            Review?
+  tickets           Ticket[]
+  incomeRecords     StaffIncomeRecord[]
+  memberCardRecords MemberCardRecord[]
+
+  @@index([userId])
+  @@index([staffId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderStatusLog {
+  id           BigInt   @id @default(autoincrement())
+  orderId      BigInt   @map("order_id")
+  fromStatus   String?  @map("from_status") @db.VarChar(32)
+  toStatus     String   @map("to_status") @db.VarChar(32)
+  operatorType String   @map("operator_type") @db.VarChar(16)
+  operatorId   BigInt   @map("operator_id")
+  remark       String?  @db.VarChar(256)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@map("order_status_logs")
+}
+
+model OrderAssignment {
+  id           BigInt    @id @default(autoincrement())
+  orderId      BigInt    @map("order_id")
+  staffId      BigInt    @map("staff_id")
+  assignType   String    @map("assign_type") @db.VarChar(16)
+  assignStatus String    @map("assign_status") @db.VarChar(16)
+  assignedBy   BigInt    @map("assigned_by")
+  rejectReason String?   @map("reject_reason") @db.VarChar(256)
+  assignedAt   DateTime  @default(now()) @map("assigned_at")
+  acceptedAt   DateTime? @map("accepted_at")
+  rejectedAt   DateTime? @map("rejected_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+  staff Staff @relation(fields: [staffId], references: [id])
+
+  @@index([orderId])
+  @@index([staffId])
+  @@map("order_assignments")
+}
+
+// ==================== 5. Payment ====================
+
+model Payment {
+  id            BigInt    @id @default(autoincrement())
+  paymentNo     String    @unique @map("payment_no") @db.VarChar(64)
+  orderId       BigInt    @map("order_id")
+  userId        BigInt    @map("user_id")
+  channel       String    @db.VarChar(16)
+  amount        Decimal   @db.Decimal(10, 2)
+  status        String    @db.VarChar(16)
+  transactionNo String?   @map("transaction_no") @db.VarChar(64)
+  prepayId      String?   @map("prepay_id") @db.VarChar(128)
+  paidAt        DateTime? @map("paid_at")
+  callbackRaw   String?   @map("callback_raw") @db.Text
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  order      Order              @relation(fields: [orderId], references: [id])
+  refunds    Refund[]
+  notifyLogs PaymentNotifyLog[]
+
+  @@index([orderId])
+  @@index([transactionNo])
+  @@map("payments")
+}
+
+model PaymentNotifyLog {
+  id            BigInt   @id @default(autoincrement())
+  paymentId     BigInt?  @map("payment_id")
+  paymentNo     String   @map("payment_no") @db.VarChar(64)
+  channel       String   @db.VarChar(16)
+  rawBody       String   @map("raw_body") @db.Text
+  processResult String   @map("process_result") @db.VarChar(16)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  payment Payment? @relation(fields: [paymentId], references: [id])
+
+  @@index([paymentNo])
+  @@map("payment_notify_logs")
+}
+
+model Refund {
+  id              BigInt    @id @default(autoincrement())
+  refundNo        String    @unique @map("refund_no") @db.VarChar(64)
+  orderId         BigInt    @map("order_id")
+  paymentId       BigInt    @map("payment_id")
+  amount          Decimal   @db.Decimal(10, 2)
+  reason          String?   @db.VarChar(256)
+  status          String    @db.VarChar(16)
+  channelRefundNo String?   @map("channel_refund_no") @db.VarChar(64)
+  operatedBy      BigInt    @map("operated_by")
+  refundedAt      DateTime? @map("refunded_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@index([orderId])
+  @@map("refunds")
+}
+
+// ==================== 6. Service Fulfillment ====================
+
+model ServiceCheckin {
+  id          BigInt   @id @default(autoincrement())
+  orderId     BigInt   @map("order_id")
+  staffId     BigInt   @map("staff_id")
+  checkinType String   @map("checkin_type") @db.VarChar(16)
+  latitude    Decimal? @db.Decimal(10, 7)
+  longitude   Decimal? @db.Decimal(10, 7)
+  addressText String?  @map("address_text") @db.VarChar(256)
+  photoUrl    String?  @map("photo_url") @db.VarChar(512)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+  staff Staff @relation(fields: [staffId], references: [id])
+
+  @@index([orderId])
+  @@map("service_checkins")
+}
+
+model ServicePhoto {
+  id        BigInt   @id @default(autoincrement())
+  orderId   BigInt   @map("order_id")
+  staffId   BigInt   @map("staff_id")
+  photoType String   @map("photo_type") @db.VarChar(16)
+  url       String   @db.VarChar(512)
+  remark    String?  @db.VarChar(256)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+  staff Staff @relation(fields: [staffId], references: [id])
+
+  @@index([orderId])
+  @@map("service_photos")
+}
+
+// ==================== 7. Review and After-sale ====================
+
+model Review {
+  id          BigInt   @id @default(autoincrement())
+  orderId     BigInt   @unique @map("order_id")
+  userId      BigInt   @map("user_id")
+  staffId     BigInt   @map("staff_id")
+  serviceId   BigInt   @map("service_id")
+  rating      Int      @db.SmallInt
+  content     String?  @db.Text
+  isAnonymous Boolean  @default(false) @map("is_anonymous")
+  status      Int      @default(1) @db.SmallInt
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  order   Order        @relation(fields: [orderId], references: [id])
+  user    User         @relation(fields: [userId], references: [id])
+  staff   Staff        @relation(fields: [staffId], references: [id])
+  service Service      @relation(fields: [serviceId], references: [id])
+  images  ReviewImage[]
+
+  @@index([staffId])
+  @@index([serviceId])
+  @@map("reviews")
+}
+
+model ReviewImage {
+  id        BigInt   @id @default(autoincrement())
+  reviewId  BigInt   @map("review_id")
+  url       String   @db.VarChar(512)
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  review Review @relation(fields: [reviewId], references: [id])
+
+  @@index([reviewId])
+  @@map("review_images")
+}
+
+model Ticket {
+  id          BigInt    @id @default(autoincrement())
+  ticketNo    String    @unique @map("ticket_no") @db.VarChar(32)
+  orderId     BigInt    @map("order_id")
+  userId      BigInt    @map("user_id")
+  staffId     BigInt?   @map("staff_id")
+  type        String    @db.VarChar(32)
+  title       String    @db.VarChar(128)
+  description String?   @db.Text
+  status      String    @db.VarChar(32)
+  priority    Int       @default(0) @db.SmallInt
+  handledBy   BigInt?   @map("handled_by")
+  resolvedAt  DateTime? @map("resolved_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  order    Order           @relation(fields: [orderId], references: [id])
+  user     User            @relation(fields: [userId], references: [id])
+  messages TicketMessage[]
+
+  @@index([orderId])
+  @@index([userId])
+  @@index([status])
+  @@map("tickets")
+}
+
+model TicketMessage {
+  id         BigInt   @id @default(autoincrement())
+  ticketId   BigInt   @map("ticket_id")
+  senderType String   @map("sender_type") @db.VarChar(16)
+  senderId   BigInt   @map("sender_id")
+  content    String   @db.Text
+  images     Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  ticket Ticket @relation(fields: [ticketId], references: [id])
+
+  @@index([ticketId])
+  @@map("ticket_messages")
+}
+
+// ==================== 8. Coupon ====================
+
+model Coupon {
+  id                 BigInt   @id @default(autoincrement())
+  name               String   @db.VarChar(64)
+  type               String   @db.VarChar(16)
+  amount             Decimal  @db.Decimal(10, 2)
+  minAmount          Decimal  @default(0) @map("min_amount") @db.Decimal(10, 2)
+  applicableServices Json?    @map("applicable_services")
+  totalCount         Int      @map("total_count")
+  issuedCount        Int      @default(0) @map("issued_count")
+  startTime          DateTime @map("start_time")
+  endTime            DateTime @map("end_time")
+  status             Int      @default(1) @db.SmallInt
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  userCoupons UserCoupon[]
+
+  @@map("coupons")
+}
+
+model UserCoupon {
+  id          BigInt    @id @default(autoincrement())
+  couponId    BigInt    @map("coupon_id")
+  userId      BigInt    @map("user_id")
+  status      String    @db.VarChar(16)
+  usedOrderId BigInt?   @map("used_order_id")
+  receivedAt  DateTime  @default(now()) @map("received_at")
+  usedAt      DateTime? @map("used_at")
+  expireAt    DateTime  @map("expire_at")
+
+  coupon Coupon @relation(fields: [couponId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([userId, status])
+  @@map("user_coupons")
+}
+
+// ==================== 9. Member Card ====================
+
+model MemberCard {
+  id                 BigInt   @id @default(autoincrement())
+  name               String   @db.VarChar(64)
+  applicableServices Json     @map("applicable_services")
+  totalTimes         Int      @map("total_times")
+  price              Decimal  @db.Decimal(10, 2)
+  validityDays       Int      @map("validity_days")
+  status             Int      @default(1) @db.SmallInt
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  userCards UserMemberCard[]
+
+  @@map("member_cards")
+}
+
+model UserMemberCard {
+  id             BigInt   @id @default(autoincrement())
+  cardId         BigInt   @map("card_id")
+  userId         BigInt   @map("user_id")
+  remainingTimes Int      @map("remaining_times")
+  status         String   @db.VarChar(16)
+  source         String   @db.VarChar(16)
+  expireAt       DateTime @map("expire_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  card    MemberCard       @relation(fields: [cardId], references: [id])
+  user    User             @relation(fields: [userId], references: [id])
+  records MemberCardRecord[]
+
+  @@index([userId, status])
+  @@map("user_member_cards")
+}
+
+model MemberCardRecord {
+  id               BigInt   @id @default(autoincrement())
+  userMemberCardId BigInt   @map("user_member_card_id")
+  orderId          BigInt   @map("order_id")
+  timesUsed        Int      @default(1) @map("times_used")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  userMemberCard UserMemberCard @relation(fields: [userMemberCardId], references: [id])
+  order          Order          @relation(fields: [orderId], references: [id])
+
+  @@index([userMemberCardId])
+  @@map("member_card_records")
+}
+
+// ==================== 10. Notification ====================
+
+model Notification {
+  id           BigInt   @id @default(autoincrement())
+  receiverType String   @map("receiver_type") @db.VarChar(16)
+  receiverId   BigInt   @map("receiver_id")
+  type         String   @db.VarChar(32)
+  title        String   @db.VarChar(128)
+  content      String   @db.Text
+  bizType      String?  @map("biz_type") @db.VarChar(32)
+  bizId        BigInt?  @map("biz_id")
+  isRead       Boolean  @default(false) @map("is_read")
+  channel      String   @db.VarChar(16)
+  sendStatus   String   @map("send_status") @db.VarChar(16)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([receiverType, receiverId])
+  @@index([isRead])
+  @@map("notifications")
+}
+
+// ==================== 11. File ====================
+
+model File {
+  id           BigInt   @id @default(autoincrement())
+  uuid         String   @unique @default(uuid()) @db.VarChar(36)
+  uploaderType String   @map("uploader_type") @db.VarChar(16)
+  uploaderId   BigInt   @map("uploader_id")
+  bizType      String   @map("biz_type") @db.VarChar(32)
+  bizId        BigInt?  @map("biz_id")
+  filename     String   @db.VarChar(256)
+  url          String   @db.VarChar(512)
+  storageKey   String   @map("storage_key") @db.VarChar(512)
+  mimeType     String   @map("mime_type") @db.VarChar(64)
+  size         BigInt
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([bizType, bizId])
+  @@map("files")
+}
+
+// ==================== 12. Finance ====================
+
+model StaffIncomeRecord {
+  id        BigInt    @id @default(autoincrement())
+  staffId   BigInt    @map("staff_id")
+  orderId   BigInt    @map("order_id")
+  amount    Decimal   @db.Decimal(10, 2)
+  type      String    @db.VarChar(16)
+  status    String    @db.VarChar(16)
+  settledAt DateTime? @map("settled_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  staff Staff @relation(fields: [staffId], references: [id])
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([staffId])
+  @@map("staff_income_records")
+}
+
+model WithdrawRequest {
+  id        BigInt    @id @default(autoincrement())
+  staffId   BigInt    @map("staff_id")
+  amount    Decimal   @db.Decimal(10, 2)
+  status    String    @db.VarChar(16)
+  bankInfo  Json      @map("bank_info")
+  handledBy BigInt?   @map("handled_by")
+  handledAt DateTime? @map("handled_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  @@index([staffId])
+  @@map("withdraw_requests")
+}
+
+// ==================== 13. Audit Log ====================
+
+model AuditLog {
+  id           BigInt   @id @default(autoincrement())
+  operatorType String   @map("operator_type") @db.VarChar(16)
+  operatorId   BigInt   @map("operator_id")
+  action       String   @db.VarChar(64)
+  module       String   @db.VarChar(32)
+  targetType   String?  @map("target_type") @db.VarChar(32)
+  targetId     BigInt?  @map("target_id")
+  detail       Json?
+  ip           String?  @db.VarChar(64)
+  requestId    String?  @map("request_id") @db.VarChar(64)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([operatorType, operatorId])
+  @@index([module])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ==================== 14. Favorite ====================
+
+model ServiceFavorite {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt   @map("user_id")
+  serviceId BigInt   @map("service_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id])
+  service Service @relation(fields: [serviceId], references: [id])
+
+  @@unique([userId, serviceId])
+  @@map("service_favorites")
+}

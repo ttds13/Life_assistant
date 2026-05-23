@@ -1,0 +1,26 @@
+{
+  "name": "life-assistant-rear",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Life Assistant rear backend minimum service",
+  "scripts": {
+    "dev": "node src/main.js",
+    "start": "node src/main.js",
+    "seed": "node scripts/seed.js",
+    "test:contract": "node scripts/contract-test.js",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop life-assistant-rear",
+    "pm2:restart": "pm2 restart life-assistant-rear",
+    "docker:build": "docker build -t life-assistant-rear .",
+    "docker:run": "docker run -d -p 3000:3000 --name rear life-assistant-rear"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.8.0",
+    "dotenv": "^17.4.2",
+    "jsonwebtoken": "^9.0.2",
+    "prisma": "^7.8.0"
+  }
+}
