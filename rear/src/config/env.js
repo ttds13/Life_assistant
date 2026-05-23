@@ -61,6 +61,7 @@ const config = Object.freeze({
   jwtExpiresIn: Number.parseInt(process.env.JWT_EXPIRES_IN || '604800', 10),
   wechatAppid: process.env.WECHAT_APPID || '',
   wechatSecret: process.env.WECHAT_SECRET || '',
+  dbMode: process.env.DB_MODE || 'prisma',
 })
 
 module.exports = { config }

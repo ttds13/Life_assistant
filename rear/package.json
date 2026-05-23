@@ -7,6 +7,9 @@
     "dev": "node src/main.js",
     "start": "node src/main.js",
     "seed": "node scripts/seed.js",
+    "seed:db": "node scripts/seed-db.js",
+    "prisma:generate": "npx prisma generate",
+    "prisma:studio": "npx prisma studio",
     "test:contract": "node scripts/contract-test.js",
     "pm2:start": "pm2 start ecosystem.config.js",
     "pm2:stop": "pm2 stop life-assistant-rear",
@@ -18,9 +21,10 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@prisma/client": "^7.8.0",
+    "@prisma/client": "^6.19.3",
     "dotenv": "^17.4.2",
     "jsonwebtoken": "^9.0.2",
-    "prisma": "^7.8.0"
+    "mysql2": "^3.22.3",
+    "prisma": "^6.19.3"
   }
 }
