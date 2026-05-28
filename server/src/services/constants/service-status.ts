@@ -1,0 +1,1 @@
+export const SERVICE_STATUS_ONLINE = 1

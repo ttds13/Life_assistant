@@ -1,0 +1,6 @@
+When executing shell commands on this Windows system:
+- Use `cmd /c "command"` syntax instead of bash syntax
+- Do NOT use `&&` to chain commands in PowerShell. Use `; ` or wrap in `cmd /c "cmd1 && cmd2"`
+- Use `cd /d "path"` for changing directories in cmd
+- The default shell is PowerShell which does not support `&&` in older versions
+- For git commands, run them directly without cd since the working directory is already the project root
