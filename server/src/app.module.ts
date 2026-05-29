@@ -1,10 +1,13 @@
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common'
 import { ConfigModule } from '@nestjs/config'
 import { AuthModule } from './auth/auth.module'
+import { AddressesModule } from './addresses/addresses.module'
 import { AppLoggerService } from './common/logger/app-logger.service'
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware'
 import { DevModule } from './dev/dev.module'
 import { HealthModule } from './health/health.module'
+import { OrdersModule } from './orders/orders.module'
+import { PaymentsModule } from './payments/payments.module'
 import { PrismaModule } from './prisma/prisma.module'
 import { ServicesModule } from './services/services.module'
 import { UsersModule } from './users/users.module'
@@ -17,6 +20,9 @@ import { UsersModule } from './users/users.module'
     ServicesModule,
     UsersModule,
     AuthModule,
+    AddressesModule,
+    OrdersModule,
+    PaymentsModule,
     DevModule,
   ],
   providers: [AppLoggerService],
