@@ -15,7 +15,7 @@ const userStore = useUserStore()
 
 type StatAction = 'wallet' | 'card' | 'coupon'
 type OrderAction = 'all' | 'pendingPayment' | 'pendingDispatch' | 'pendingConfirm' | 'pendingReview' | 'afterSales'
-type AppAction = 'address' | 'applyStaff' | 'applyPartner' | 'faq' | 'customerService' | 'feedback' | 'settings'
+type AppAction = 'address' | 'staffWorkbench' | 'applyStaff' | 'applyPartner' | 'faq' | 'customerService' | 'feedback' | 'settings'
 
 interface StatEntry {
   label: string
@@ -94,6 +94,7 @@ const orderEntries = computed<OrderEntry[]>(() => [
 
 const appEntries: AppEntry[] = [
   { label: '我的地址', action: 'address', icon: 'i-carbon-location', color: '#1677FF', auth: true },
+  { label: '师傅端', action: 'staffWorkbench', icon: 'i-carbon-user-certification', color: '#FF373D', auth: true },
   { label: '申请师傅', action: 'applyStaff', icon: 'i-carbon-user-role', color: '#20C997', auth: true },
   { label: '申请合作商', action: 'applyPartner', icon: 'i-carbon-store', color: '#FF7A59', auth: true },
   { label: '常见问题', action: 'faq', icon: 'i-carbon-help', color: '#4D8DFF', auth: false },
@@ -101,6 +102,14 @@ const appEntries: AppEntry[] = [
   { label: '问题反馈', action: 'feedback', icon: 'i-carbon-user-feedback', color: '#EC4899', auth: true },
   { label: '设置', action: 'settings', icon: 'i-carbon-settings', color: '#8B5CF6', auth: true },
 ]
+
+const displayAppEntries = computed(() => {
+  return appEntries.filter((item) => {
+    if (item.action !== 'staffWorkbench')
+      return true
+    return tokenStore.hasLogin && userStore.userInfo.role === 'staff'
+  })
+})
 
 function onLogin() {
   uni.navigateTo({ url: '/pages/login/index' })
@@ -200,7 +209,16 @@ function onAppTap(item: AppEntry) {
     return
   }
 
-  const titleMap: Record<Exclude<AppAction, 'address'>, string> = {
+  if (item.action === 'staffWorkbench') {
+    if (userStore.userInfo.role !== 'staff') {
+      showPendingToast('当前账号暂未开通师傅端')
+      return
+    }
+    uni.navigateTo({ url: '/pages/staff/home' })
+    return
+  }
+
+  const titleMap: Record<Exclude<AppAction, 'address' | 'staffWorkbench'>, string> = {
     applyStaff: '申请师傅功能待完善',
     applyPartner: '申请合作商功能待完善',
     faq: '常见问题待配置',
@@ -299,7 +317,7 @@ function onAppTap(item: AppEntry) {
 
         <view class="mt-5 flex flex-wrap">
           <view
-            v-for="item in appEntries"
+            v-for="item in displayAppEntries"
             :key="item.action"
             class="w-1/4 h-[156rpx] center flex-col"
             @tap="onAppTap(item)"
