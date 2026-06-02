@@ -14,7 +14,7 @@ const period = ref<StaffStatsPeriod>('today')
 const staffName = ref('黄岛爱干净')
 const avatar = ref('/static/images/default-avatar.png')
 const verified = ref(true)
-const regionText = ref('山东省-青岛市-黄岛区')
+const staffPhone = ref('')
 const statsMap = ref<Record<StaffStatsPeriod, StaffProfileStats> | null>(null)
 
 const periodTabs: { label: string, value: StaffStatsPeriod }[] = [
@@ -34,6 +34,7 @@ const statItems = computed(() => [
 ])
 
 const appEntries = [
+  { label: '地址管理', icon: 'i-carbon-location' },
   { label: '我的钱包', icon: 'i-carbon-wallet' },
   { label: '我的服务', icon: 'i-carbon-user-role' },
   { label: '证件管理', icon: 'i-carbon-id' },
@@ -57,11 +58,15 @@ async function loadProfile() {
   staffName.value = profile.staffName
   avatar.value = profile.avatar || '/static/images/default-avatar.png'
   verified.value = profile.verified
-  regionText.value = profile.regionText
+  staffPhone.value = profile.staffPhone || profile.regionText || ''
   statsMap.value = profile.stats
 }
 
 function onTodo(title: string) {
+  if (title === '地址管理') {
+    uni.navigateTo({ url: '/pages/staff/address-list' })
+    return
+  }
   uni.showToast({ icon: 'none', title: `${title}待接入` })
 }
 
@@ -94,8 +99,8 @@ onShow(() => {
             <text v-if="verified" class="ml-[16rpx] rounded-[10rpx] border border-white/80 px-[14rpx] py-[4rpx] text-[24rpx] text-white">已认证</text>
           </view>
           <view class="mt-[18rpx] flex items-center">
-            <text class="i-carbon-location-filled text-[30rpx] text-white mr-[10rpx]" />
-            <text class="truncate text-[28rpx] text-white opacity-90">{{ regionText }}</text>
+            <text class="i-carbon-phone text-[30rpx] text-white mr-[10rpx]" />
+            <text class="truncate text-[28rpx] text-white opacity-90">{{ staffPhone || '手机号未设置' }}</text>
           </view>
         </view>
       </view>

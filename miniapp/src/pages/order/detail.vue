@@ -1,6 +1,6 @@
 <script lang="ts" setup>
+import { cancelOrder, confirmOrder, getOrderDetail, mockPaymentSuccess, payOrder } from '@/api/orders'
 import type { OrderDetail } from '@/api/types/orders'
-import { getMockOrderDetail } from '@/utils/mockDay4'
 
 definePage({
   style: {
@@ -12,6 +12,14 @@ const orderId = ref(0)
 const order = ref<OrderDetail | null>(null)
 const loading = ref(true)
 const actionLoading = ref(false)
+const mockPayLoading = ref(false)
+
+const canMockPay = computed(() => {
+  return import.meta.env.VITE_ENABLE_MOCK_PAYMENT === 'true'
+    || import.meta.env.VITE_SERVER_BASEURL?.includes('192.168.')
+    || import.meta.env.VITE_SERVER_BASEURL?.includes('127.0.0.1')
+    || import.meta.env.VITE_SERVER_BASEURL?.includes('localhost')
+})
 
 const statusInfo = computed(() => {
   const status = order.value?.status
@@ -54,17 +62,56 @@ const actionConfig = computed(() => {
   }
 })
 
-function loadOrder() {
+async function loadOrder() {
   loading.value = true
-  // TODO: 接入 GET /orders/:id
-  order.value = getMockOrderDetail(orderId.value || 101)
-  loading.value = false
+  try {
+    order.value = await getOrderDetail(orderId.value)
+  }
+  finally {
+    loading.value = false
+  }
+}
+
+async function runMockPay() {
+  if (!order.value || mockPayLoading.value)
+    return
+  mockPayLoading.value = true
+  try {
+    const payment = await payOrder(order.value.id)
+    const paymentNo = payment.paymentNo || String(payment.paymentParams?.paymentNo || '')
+    const result = await mockPaymentSuccess(paymentNo ? { paymentNo } : { orderId: order.value.id })
+    if (result.order)
+      order.value = result.order
+    else
+      await loadOrder()
+    uni.showToast({ icon: 'success', title: '支付成功' })
+  }
+  finally {
+    mockPayLoading.value = false
+  }
+}
+
+function onMockPay() {
+  if (!order.value)
+    return
+  uni.showModal({
+    title: '模拟支付成功',
+    content: '开发环境将直接把该订单推进到待派单状态，是否继续？',
+    success: async (res) => {
+      if (res.confirm)
+        await runMockPay()
+    },
+  })
 }
 
 function onPrimary() {
   if (!order.value)
     return
   if (order.value.status === 'pending_payment') {
+    if (canMockPay.value) {
+      onMockPay()
+      return
+    }
     uni.navigateTo({ url: `/pages/payment/result?orderId=${order.value.id}&status=pending&amount=${order.value.payableAmount}` })
     return
   }
@@ -72,14 +119,16 @@ function onPrimary() {
     uni.showModal({
       title: '确认完成',
       content: '确认服务已经完成吗？',
-      success: (res) => {
+      success: async (res) => {
         if (res.confirm) {
           actionLoading.value = true
-          setTimeout(() => {
-            actionLoading.value = false
-            order.value = getMockOrderDetail(105)
+          try {
+            order.value = await confirmOrder(order.value!.id, { version: order.value!.version })
             uni.showToast({ icon: 'success', title: '已确认' })
-          }, 400)
+          }
+          finally {
+            actionLoading.value = false
+          }
         }
       },
     })
@@ -103,10 +152,16 @@ function onSecondary() {
     uni.showModal({
       title: '取消订单',
       content: '确定取消该订单吗？',
-      success: (res) => {
+      success: async (res) => {
         if (res.confirm) {
-          order.value = { ...order.value!, status: 'cancelled' }
-          uni.showToast({ icon: 'success', title: '已取消' })
+          actionLoading.value = true
+          try {
+            order.value = await cancelOrder(order.value!.id, { version: order.value!.version })
+            uni.showToast({ icon: 'success', title: '已取消' })
+          }
+          finally {
+            actionLoading.value = false
+          }
         }
       },
     })
@@ -124,8 +179,14 @@ function onCallStaff() {
 }
 
 onLoad((query) => {
-  orderId.value = Number(query?.id || 101)
-  loadOrder()
+  orderId.value = Number(query?.id || 0)
+  if (orderId.value)
+    loadOrder()
+})
+
+onShow(() => {
+  if (orderId.value)
+    loadOrder()
 })
 </script>
 
@@ -198,6 +259,16 @@ onLoad((query) => {
         </form-section>
 
         <form-section title="支付信息">
+          <view v-if="order.status === 'pending_payment' && canMockPay" class="mb-3 rounded-[12rpx] bg-[#FFF7ED] p-3">
+            <text class="block text-[24rpx] leading-[36rpx] text-[#B45309]">开发环境可使用模拟支付推进真实订单状态。</text>
+            <button
+              class="mt-3 h-[72rpx] rounded-full bg-[#F59E0B] text-white text-[26rpx] flex items-center justify-center"
+              :loading="mockPayLoading"
+              @tap="onMockPay"
+            >
+              模拟支付成功
+            </button>
+          </view>
           <view class="flex py-2">
             <text class="w-[140rpx] text-[26rpx] text-gray-400">订单号</text>
             <text class="flex-1 text-[26rpx] text-gray-700">{{ order.orderNo }}</text>

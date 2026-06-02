@@ -26,6 +26,8 @@ export interface StaffTask {
   id: number
   orderNo: string
   status: StaffTaskStatus
+  rawStatus?: string
+  version?: number
   group: StaffTaskGroup
   serviceName: string
   serviceSpec?: string
@@ -65,10 +67,13 @@ export interface StaffProfileStats {
 }
 
 export interface StaffProfile {
+  staffId?: number
   staffName: string
+  staffPhone?: string
   avatar?: string
   verified: boolean
   regionText: string
+  rating?: number
   stats: Record<StaffStatsPeriod, StaffProfileStats>
 }
 
@@ -88,4 +93,3 @@ export interface UploadImageItem {
   status?: 'local' | 'uploading' | 'done' | 'error'
   type?: 'before' | 'process' | 'after' | 'other'
 }
-

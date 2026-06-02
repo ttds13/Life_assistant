@@ -2,6 +2,7 @@
 import { wechatLogin, mockLogin } from '@/api/auth'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
+import { clearDevStaffSession } from '@/utils/devStaffStorage'
 
 definePage({
   style: {
@@ -13,6 +14,11 @@ const tokenStore = useTokenStore()
 const userStore = useUserStore()
 const loading = ref(false)
 const agreed = ref(false)
+const mockLoginFlagKey = 'life-assistant:mock-login'
+const showMockLogin = import.meta.env.VITE_WX_APPID === 'touristappid'
+  || import.meta.env.VITE_SERVER_BASEURL?.includes('192.168.')
+  || import.meta.env.VITE_SERVER_BASEURL?.includes('127.0.0.1')
+  || import.meta.env.VITE_SERVER_BASEURL?.includes('localhost')
 
 // 微信手机号快捷登录
 async function onGetPhoneNumber(e: any) {
@@ -36,11 +42,15 @@ async function onGetPhoneNumber(e: any) {
     const result = await wechatLogin({ loginCode, phoneCode })
     tokenStore.setTokenInfo({ token: result.accessToken, expiresIn: result.expiresIn })
     userStore.setFromProfile(result.user)
+    uni.removeStorageSync(mockLoginFlagKey)
+    clearDevStaffSession()
     uni.showToast({ icon: 'success', title: '登录成功' })
     setTimeout(() => navigateBack(), 500)
   }
   catch (err: any) {
     console.error('微信登录失败:', err)
+    const message = err?.message || err?.errMsg || '微信登录失败'
+    uni.showToast({ icon: 'none', title: message.slice(0, 20) })
   }
   finally {
     loading.value = false
@@ -58,11 +68,15 @@ async function onMockLogin() {
     const result = await mockLogin({ phone: '13800001111' })
     tokenStore.setTokenInfo({ token: result.accessToken, expiresIn: result.expiresIn })
     userStore.setFromProfile(result.user)
+    uni.setStorageSync(mockLoginFlagKey, '1')
+    clearDevStaffSession()
     uni.showToast({ icon: 'success', title: '登录成功' })
     setTimeout(() => navigateBack(), 500)
   }
   catch (err: any) {
     console.error('模拟登录失败:', err)
+    const message = err?.message || err?.errMsg || '模拟登录失败'
+    uni.showToast({ icon: 'none', title: message.slice(0, 20) })
   }
   finally {
     loading.value = false
@@ -99,6 +113,14 @@ function navigateBack() {
         @getphonenumber="onGetPhoneNumber"
       >
         微信手机号快捷登录
+      </button>
+      <button
+        v-if="showMockLogin"
+        class="w-full h-[88rpx] mt-4 bg-[#1677FF] text-white text-[30rpx] rounded-full flex items-center justify-center"
+        :loading="loading"
+        @tap="onMockLogin"
+      >
+        开发模拟登录
       </button>
       <!-- #endif -->
 

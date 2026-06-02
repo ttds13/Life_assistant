@@ -1,9 +1,13 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common'
+import { AdminAuthGuard } from '../admin-auth/admin-auth.guard'
 import { ConfigService } from '@nestjs/config'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
+import { StaffIdentityService } from '../auth/staff-identity.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { getRequestId, RequestWithContext } from '../common/utils/request-context'
+import { AdminOrderRemarkDto } from './dto/admin-order-remark.dto'
+import { AdminQueryOrdersDto } from './dto/admin-query-orders.dto'
 import { AssignOrderDto } from './dto/assign-order.dto'
 import { CompleteServiceDto } from './dto/complete-service.dto'
 import { CreateOrderDto } from './dto/create-order.dto'
@@ -19,6 +23,7 @@ export class OrdersController {
   constructor(
     @Inject(OrdersService) private readonly ordersService: OrdersService,
     @Inject(ConfigService) private readonly config: ConfigService,
+    @Inject(StaffIdentityService) private readonly staffIdentity: StaffIdentityService,
   ) {}
 
   @Get('orders/price-preview')
@@ -55,61 +60,95 @@ export class OrdersController {
   }
 
   @Get('admin/orders')
-  listAdminOrders(@Req() request: RequestWithContext, @Query() query: QueryOrdersDto) {
+  @UseGuards(AdminAuthGuard)
+  listAdminOrders(@Req() request: RequestWithContext, @Query() query: AdminQueryOrdersDto) {
     this.parseAdminId(request)
     return this.ordersService.listAdminOrders(query)
   }
 
   @Get('admin/orders/:id')
+  @UseGuards(AdminAuthGuard)
   getAdminOrderDetail(@Req() request: RequestWithContext, @Param('id') idText: string) {
     this.parseAdminId(request)
     return this.ordersService.getAdminOrderDetail(this.parseId(idText))
   }
 
   @Post('admin/orders/:id/assign')
+  @UseGuards(AdminAuthGuard)
   @HttpCode(200)
   assignOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AssignOrderDto) {
-    return this.ordersService.assignOrder(this.parseAdminId(request), this.parseId(idText), dto, getRequestId(request))
+    return this.ordersService.assignOrder(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
+  }
+
+  @Put('admin/orders/:id/remark')
+  @UseGuards(AdminAuthGuard)
+  @HttpCode(200)
+  updateAdminOrderRemark(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminOrderRemarkDto) {
+    return this.ordersService.updateAdminOrderRemark(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
+  }
+
+  @Get('admin/staff/options')
+  @UseGuards(AdminAuthGuard)
+  listAssignableStaffOptions(@Req() request: RequestWithContext) {
+    this.parseAdminId(request)
+    return this.ordersService.listAssignableStaffOptions()
   }
 
   @Get('staff/orders')
-  listStaffOrders(@Req() request: RequestWithContext, @Query() query: QueryOrdersDto) {
-    return this.ordersService.listStaffOrders(this.parseStaffId(request), query)
+  async listStaffOrders(@Req() request: RequestWithContext, @Query() query: QueryOrdersDto) {
+    return this.ordersService.listStaffOrders(await this.parseStaffId(request), query)
+  }
+
+  @Get('staff/profile')
+  async getStaffProfile(@Req() request: RequestWithContext, @Query('period') period?: string) {
+    return this.ordersService.getStaffProfile(await this.parseStaffId(request), period)
   }
 
   @Get('staff/orders/:id')
-  getStaffOrderDetail(@Req() request: RequestWithContext, @Param('id') idText: string) {
-    return this.ordersService.getStaffOrderDetail(this.parseStaffId(request), this.parseId(idText))
+  async getStaffOrderDetail(@Req() request: RequestWithContext, @Param('id') idText: string) {
+    return this.ordersService.getStaffOrderDetail(await this.parseStaffId(request), this.parseId(idText))
   }
 
   @Post('staff/orders/:id/accept')
   @HttpCode(200)
-  staffAccept(@Req() request: RequestWithContext, @Param('id') idText: string) {
-    return this.ordersService.staffAccept(this.parseStaffId(request), this.parseId(idText), getRequestId(request))
+  async staffAccept(@Req() request: RequestWithContext, @Param('id') idText: string) {
+    return this.ordersService.staffAccept(await this.parseStaffId(request), this.parseId(idText), getRequestId(request))
   }
 
   @Post('staff/orders/:id/reject')
   @HttpCode(200)
-  staffReject(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: RejectOrderDto) {
-    return this.ordersService.staffReject(this.parseStaffId(request), this.parseId(idText), dto, getRequestId(request))
+  async staffReject(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: RejectOrderDto) {
+    return this.ordersService.staffReject(await this.parseStaffId(request), this.parseId(idText), dto, getRequestId(request))
   }
 
   @Post('staff/orders/:id/on-the-way')
   @HttpCode(200)
-  staffOnTheWay(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: TransitionVersionDto) {
-    return this.ordersService.staffOnTheWay(this.parseStaffId(request), this.parseId(idText), dto, getRequestId(request))
+  async staffOnTheWay(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: TransitionVersionDto) {
+    return this.ordersService.staffOnTheWay(await this.parseStaffId(request), this.parseId(idText), dto, getRequestId(request))
   }
 
   @Post('staff/orders/:id/start-service')
   @HttpCode(200)
-  staffStartService(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: TransitionVersionDto) {
-    return this.ordersService.staffStartService(this.parseStaffId(request), this.parseId(idText), dto, getRequestId(request))
+  async staffStartService(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: TransitionVersionDto) {
+    return this.ordersService.staffStartService(await this.parseStaffId(request), this.parseId(idText), dto, getRequestId(request))
   }
 
   @Post('staff/orders/:id/complete')
   @HttpCode(200)
-  staffComplete(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: CompleteServiceDto) {
-    return this.ordersService.staffComplete(this.parseStaffId(request), this.parseId(idText), dto, getRequestId(request))
+  async staffComplete(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: CompleteServiceDto) {
+    return this.ordersService.staffComplete(await this.parseStaffId(request), this.parseId(idText), dto, getRequestId(request))
   }
 
   private parseId(value: string) {
@@ -121,23 +160,12 @@ export class OrdersController {
   }
 
   private parseStaffId(request: RequestWithContext) {
-    if (request.user?.role === 'staff') {
-      return request.user.userId
-    }
-    if (this.config.get<string>('NODE_ENV') === 'production') {
-      throw new BusinessException(ErrorCode.STAFF_FORBIDDEN, 'staff auth is not configured', 403)
-    }
-    const header = request.headers['x-staff-id']
-    const staffId = Number(Array.isArray(header) ? header[0] : header)
-    if (!Number.isInteger(staffId) || staffId < 1) {
-      throw new BusinessException(ErrorCode.STAFF_FORBIDDEN, 'missing staff identity', 403)
-    }
-    return staffId
+    return this.staffIdentity.resolveStaffId(request)
   }
 
   private parseAdminId(request: RequestWithContext) {
-    if (request.user?.role === 'admin') {
-      return request.user.userId
+    if (request.user?.userType === 'admin' || request.user?.adminId) {
+      return request.user.adminId || request.user.userId
     }
     if (this.config.get<string>('NODE_ENV') === 'production') {
       throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'admin auth is not configured', 403)
@@ -148,5 +176,16 @@ export class OrdersController {
       throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'missing admin identity', 403)
     }
     return adminId
+  }
+
+  private getClientIp(request: RequestWithContext) {
+    const forwardedFor = request.headers['x-forwarded-for']
+    if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+      return forwardedFor.split(',')[0].trim()
+    }
+    if (Array.isArray(forwardedFor) && forwardedFor[0]) {
+      return forwardedFor[0].split(',')[0].trim()
+    }
+    return request.ip
   }
 }

@@ -25,7 +25,6 @@ model User {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  addresses       UserAddress[]
   orders          Order[]
   reviews         Review[]
   tickets         Ticket[]
@@ -193,28 +192,42 @@ model ServiceImage {
   @@map("service_images")
 }
 
-// ==================== 3. User Address ====================
+// ==================== 3. Unified Address ====================
 
-model UserAddress {
-  id           BigInt    @id @default(autoincrement())
-  userId       BigInt    @map("user_id")
-  contactName  String    @map("contact_name") @db.VarChar(64)
-  contactPhone String    @map("contact_phone") @db.VarChar(20)
-  province     String    @db.VarChar(32)
-  city         String    @db.VarChar(32)
-  district     String    @db.VarChar(32)
-  address      String    @db.VarChar(256)
-  latitude     Decimal?  @db.Decimal(10, 7)
-  longitude    Decimal?  @db.Decimal(10, 7)
-  isDefault    Boolean   @default(false) @map("is_default")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
-  deletedAt    DateTime? @map("deleted_at")
+model Address {
+  id               BigInt    @id @default(autoincrement())
+  uuid             String    @unique @default(uuid()) @db.VarChar(36)
+  ownerType        String    @map("owner_type") @db.VarChar(16)
+  ownerId          BigInt    @map("owner_id")
+  addressType      String    @default("service") @map("address_type") @db.VarChar(32)
+  contactName      String    @map("contact_name") @db.VarChar(64)
+  contactPhone     String    @map("contact_phone") @db.VarChar(20)
+  country          String?   @db.VarChar(32)
+  province         String?   @db.VarChar(32)
+  city             String?   @db.VarChar(32)
+  district         String?   @db.VarChar(32)
+  street           String?   @db.VarChar(64)
+  addressTitle     String?   @map("address_title") @db.VarChar(128)
+  detailAddress    String    @map("detail_address") @db.VarChar(256)
+  houseNumber      String?   @map("house_number") @db.VarChar(64)
+  formattedAddress String    @map("formatted_address") @db.VarChar(512)
+  latitude         Decimal?  @db.Decimal(10, 7)
+  longitude        Decimal?  @db.Decimal(10, 7)
+  coordinateType   String?   @map("coordinate_type") @db.VarChar(16)
+  poiId            String?   @map("poi_id") @db.VarChar(128)
+  mapProvider      String?   @map("map_provider") @db.VarChar(16)
+  isDefault        Boolean   @default(false) @map("is_default")
+  source           String    @default("manual") @db.VarChar(16)
+  status           Int       @default(1) @db.SmallInt
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  deletedAt        DateTime? @map("deleted_at")
 
-  user User @relation(fields: [userId], references: [id])
-
-  @@index([userId])
-  @@map("user_addresses")
+  @@index([ownerType, ownerId])
+  @@index([ownerType, ownerId, addressType])
+  @@index([city, district])
+  @@index([latitude, longitude])
+  @@map("addresses")
 }
 
 // ==================== 4. Orders ====================

@@ -1,9 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { Order, Prisma } from '@prisma/client'
+import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { ORDER_ACTION } from './constants/order-action'
 import { ORDER_STATUS } from './constants/order-status'
+import type { AdminOrderRemarkDto } from './dto/admin-order-remark.dto'
+import type { AdminQueryOrdersDto } from './dto/admin-query-orders.dto'
 import type { AssignOrderDto } from './dto/assign-order.dto'
 import type { CompleteServiceDto } from './dto/complete-service.dto'
 import type { CreateOrderDto } from './dto/create-order.dto'
@@ -11,7 +14,14 @@ import type { QueryOrdersDto } from './dto/query-orders.dto'
 import type { RejectOrderDto } from './dto/reject-order.dto'
 import type { TransitionVersionDto } from './dto/transition-version.dto'
 import { OrderTransitionService } from './order-transition.service'
-import { presentOrderDetail, presentPricePreview, presentUserOrder } from './order-presenter'
+import {
+  presentAdminOrderDetail,
+  presentAdminOrderListItem,
+  presentOrderDetail,
+  presentPricePreview,
+  presentStaffOption,
+  presentUserOrder,
+} from './order-presenter'
 import { OrderDetailRecord, OrdersRepository } from './orders.repository'
 
 @Injectable()
@@ -19,6 +29,7 @@ export class OrdersService {
   constructor(
     @Inject(OrdersRepository) private readonly repository: OrdersRepository,
     @Inject(OrderTransitionService) private readonly transitions: OrderTransitionService,
+    @Inject(AdminAuditService) private readonly adminAudit: AdminAuditService,
   ) {}
 
   async getPricePreview(serviceId: number) {
@@ -55,7 +66,7 @@ export class OrdersService {
   async createOrder(userId: number, dto: CreateOrderDto, requestId?: string) {
     const [service, address] = await Promise.all([
       this.repository.findActiveService(dto.serviceId),
-      this.repository.findUserAddress(userId, dto.addressId),
+      this.repository.findUserServiceAddress(userId, dto.addressId),
     ])
 
     if (!service) {
@@ -79,15 +90,25 @@ export class OrdersService {
       sortOrder: service.sortOrder,
     }
     const addressSnapshot = {
+      addressId: Number(address.id),
       id: Number(address.id),
+      ownerType: address.ownerType,
+      addressType: address.addressType,
       contactName: address.contactName,
       contactPhone: address.contactPhone,
-      province: address.province,
-      city: address.city,
-      district: address.district,
-      address: address.address,
+      provinceName: address.province || '',
+      cityName: address.city || '',
+      districtName: address.district || '',
+      streetName: address.street || '',
+      addressTitle: address.addressTitle || '',
+      detailAddress: address.detailAddress,
+      houseNumber: address.houseNumber || '',
+      formattedAddress: address.formattedAddress,
       latitude: address.latitude?.toNumber() ?? null,
       longitude: address.longitude?.toNumber() ?? null,
+      coordinateType: address.coordinateType || '',
+      poiId: address.poiId || '',
+      mapProvider: address.mapProvider || '',
     }
 
     const created = await this.repository.client.$transaction(async (tx) => {
@@ -184,16 +205,19 @@ export class OrdersService {
     return this.getUserOrderDetail(userId, orderId)
   }
 
-  async listAdminOrders(query: QueryOrdersDto) {
-    const page = query.page || 1
-    const pageSize = query.pageSize || 20
+  async listAdminOrders(query: AdminQueryOrdersDto) {
+    const page = this.normalizePositiveInt(query.page || query.pageNum, 1)
+    const pageSize = this.normalizePositiveInt(query.pageSize, 20, 100)
     const result = await this.repository.findAdminOrders({
       status: query.status,
+      keyword: query.keyword || query.keywords,
+      dateStart: this.parseDateStart(query.dateStart || query.startDate),
+      dateEnd: this.parseDateEnd(query.dateEnd || query.endDate),
       page,
       pageSize,
     })
     return {
-      items: result.items.map(order => presentUserOrder(order)),
+      items: result.items.map(order => presentAdminOrderListItem(order)),
       page,
       pageSize,
       total: result.total,
@@ -202,10 +226,10 @@ export class OrdersService {
 
   async getAdminOrderDetail(orderId: number) {
     const order = await this.getOrderDetailOrThrow(orderId)
-    return presentOrderDetail(order)
+    return presentAdminOrderDetail(order)
   }
 
-  async assignOrder(adminId: number, orderId: number, dto: AssignOrderDto, requestId?: string) {
+  async assignOrder(adminId: number, orderId: number, dto: AssignOrderDto, requestId?: string, ip?: string) {
     const staff = await this.repository.client.staff.findFirst({
       where: { id: BigInt(dto.staffId), status: 1, deletedAt: null },
     })
@@ -233,10 +257,57 @@ export class OrdersService {
             assignedAt: now,
           },
         })
+        await this.adminAudit.writeWithClient(tx, {
+          adminId,
+          action: 'order:assign',
+          module: 'order',
+          targetType: 'order',
+          targetId: order.id,
+          requestId,
+          ip,
+          detail: {
+            staffId: dto.staffId,
+            remark: dto.remark || '',
+            fromStatus: order.status,
+            toStatus: ORDER_STATUS.DISPATCHED,
+          },
+        })
       },
     })
 
     return this.getAdminOrderDetail(orderId)
+  }
+
+  async updateAdminOrderRemark(adminId: number, orderId: number, dto: AdminOrderRemarkDto, requestId?: string, ip?: string) {
+    const current = await this.getOrderDetailOrThrow(orderId)
+    const nextRemark = dto.remark.trim()
+
+    await this.repository.client.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id: BigInt(orderId) },
+        data: { adminRemark: nextRemark },
+      })
+      await this.adminAudit.writeWithClient(tx, {
+        adminId,
+        action: 'order:remark:update',
+        module: 'order',
+        targetType: 'order',
+        targetId: current.id,
+        requestId,
+        ip,
+        detail: {
+          before: { adminRemark: current.adminRemark || '' },
+          after: { adminRemark: nextRemark },
+        },
+      })
+    })
+
+    return this.getAdminOrderDetail(orderId)
+  }
+
+  async listAssignableStaffOptions() {
+    const staff = await this.repository.findAssignableStaffOptions()
+    return staff.map(item => presentStaffOption(item))
   }
 
   async listStaffOrders(staffId: number, query: QueryOrdersDto) {
@@ -253,6 +324,41 @@ export class OrdersService {
       page,
       pageSize,
       total: result.total,
+    }
+  }
+
+  async getStaffProfile(staffId: number, _period?: string) {
+    const staff = await this.repository.client.staff.findFirst({
+      where: { id: BigInt(staffId), status: 1, deletedAt: null },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        avatarUrl: true,
+        cityCode: true,
+        rating: true,
+      },
+    })
+    if (!staff) {
+      throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
+    }
+
+    const [today, week, month, total] = await Promise.all([
+      this.getStaffProfileStats(staffId, 'today'),
+      this.getStaffProfileStats(staffId, 'week'),
+      this.getStaffProfileStats(staffId, 'month'),
+      this.getStaffProfileStats(staffId, 'total'),
+    ])
+
+    return {
+      staffId: Number(staff.id),
+      staffName: staff.name,
+      staffPhone: staff.phone,
+      avatar: staff.avatarUrl || '',
+      verified: true,
+      regionText: staff.cityCode || staff.phone,
+      rating: staff.rating.toNumber(),
+      stats: { today, week, month, total },
     }
   }
 
@@ -472,6 +578,84 @@ export class OrdersService {
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid appointment time', 400)
     }
+    return { start, end }
+  }
+
+  private parseDateStart(value?: string) {
+    if (!value) return undefined
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid dateStart', 400)
+    }
+    return date
+  }
+
+  private parseDateEnd(value?: string) {
+    if (!value) return undefined
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid dateEnd', 400)
+    }
+    return date
+  }
+
+  private normalizePositiveInt(value: unknown, fallback: number, max?: number) {
+    const parsed = Number(value)
+    if (!Number.isInteger(parsed) || parsed < 1) return fallback
+    return max ? Math.min(parsed, max) : parsed
+  }
+
+  private async getStaffProfileStats(staffId: number, period: 'today' | 'week' | 'month' | 'total') {
+    const range = this.getPeriodDateRange(period)
+    const createdWhere: Prisma.OrderWhereInput = {
+      staffId: BigInt(staffId),
+      ...(range ? { createdAt: { gte: range.start, lt: range.end } } : {}),
+    }
+    const completedWhere: Prisma.OrderWhereInput = {
+      staffId: BigInt(staffId),
+      status: ORDER_STATUS.COMPLETED,
+      ...(range ? { completedAt: { gte: range.start, lt: range.end } } : {}),
+    }
+
+    const [newOrderCount, completedOrderCount, completedAmount] = await Promise.all([
+      this.repository.client.order.count({ where: createdWhere }),
+      this.repository.client.order.count({ where: completedWhere }),
+      this.repository.client.order.aggregate({
+        where: completedWhere,
+        _sum: { payableAmount: true },
+      }),
+    ])
+
+    return {
+      period,
+      newStaffCount: 0,
+      newOrderCount,
+      writeOrderCount: 0,
+      completedOrderCount,
+      commissionAmount: completedAmount._sum.payableAmount?.toNumber() || 0,
+      bonusAmount: 0,
+    }
+  }
+
+  private getPeriodDateRange(period: 'today' | 'week' | 'month' | 'total') {
+    if (period === 'total') return null
+    const now = new Date()
+    const start = new Date(now)
+    start.setHours(0, 0, 0, 0)
+
+    if (period === 'week') {
+      const day = start.getDay() || 7
+      start.setDate(start.getDate() - day + 1)
+    }
+    if (period === 'month') {
+      start.setDate(1)
+    }
+
+    const end = new Date(start)
+    if (period === 'today') end.setDate(end.getDate() + 1)
+    if (period === 'week') end.setDate(end.getDate() + 7)
+    if (period === 'month') end.setMonth(end.getMonth() + 1)
+
     return { start, end }
   }
 

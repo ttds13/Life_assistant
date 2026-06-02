@@ -75,11 +75,11 @@ async function doPrimary() {
       uni.showToast({ icon: 'success', title: '已接单' })
     }
     else if (task.value.status === 'accepted') {
-      task.value = await checkinStaffTask(task.value.id)
+      task.value = await checkinStaffTask(task.value.id, task.value.version)
       uni.showToast({ icon: 'success', title: '已打卡' })
     }
     else if (task.value.status === 'on_the_way') {
-      task.value = await startStaffTask(task.value.id)
+      task.value = await startStaffTask(task.value.id, task.value.version)
       uni.showToast({ icon: 'success', title: '已开始' })
     }
     else if (task.value.status === 'in_service') {
@@ -93,7 +93,10 @@ async function doPrimary() {
         success: async (res) => {
           if (!res.confirm)
             return
-          task.value = await completeStaffTask(task.value!.id)
+          task.value = await completeStaffTask(task.value!.id, {
+            version: task.value!.version,
+            photoUrls: task.value!.photos?.map(photo => photo.url) || [],
+          })
           uni.showToast({ icon: 'success', title: '已提交' })
         },
       })

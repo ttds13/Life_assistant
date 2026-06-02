@@ -7,8 +7,11 @@ export interface RequestContext {
   startedAt?: bigint
   user?: {
     userId: number
+    adminId?: number
     phone?: string
+    username?: string
     role?: string
+    userType?: 'user' | 'staff' | 'admin'
   }
 }
 

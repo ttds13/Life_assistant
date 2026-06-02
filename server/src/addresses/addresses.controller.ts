@@ -8,28 +8,58 @@ import { SaveAddressDto } from './dto/save-address.dto'
 
 @Controller('user/addresses')
 @UseGuards(JwtAuthGuard)
-export class AddressesController {
+export class UserAddressesController {
   constructor(@Inject(AddressesService) private readonly addressesService: AddressesService) {}
 
   @Get()
   list(@Req() request: RequestWithContext) {
-    return this.addressesService.listUserAddresses(request.user!.userId)
+    return this.addressesService.listAddresses({
+      ownerType: 'user',
+      ownerId: request.user!.userId,
+      addressType: 'service',
+    })
+  }
+
+  @Get(':id')
+  get(@Req() request: RequestWithContext, @Param('id') idText: string) {
+    return this.addressesService.getAddress({
+      ownerType: 'user',
+      ownerId: request.user!.userId,
+      addressType: 'service',
+      addressId: this.parseId(idText),
+    })
   }
 
   @Post()
   @HttpCode(200)
   create(@Req() request: RequestWithContext, @Body() dto: SaveAddressDto) {
-    return this.addressesService.createUserAddress(request.user!.userId, dto)
+    return this.addressesService.createAddress({
+      ownerType: 'user',
+      ownerId: request.user!.userId,
+      addressType: 'service',
+      dto,
+    })
   }
 
   @Put(':id')
   update(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: SaveAddressDto) {
-    return this.addressesService.updateUserAddress(request.user!.userId, this.parseId(idText), dto)
+    return this.addressesService.updateAddress({
+      ownerType: 'user',
+      ownerId: request.user!.userId,
+      addressType: 'service',
+      addressId: this.parseId(idText),
+      dto,
+    })
   }
 
   @Delete(':id')
   delete(@Req() request: RequestWithContext, @Param('id') idText: string) {
-    return this.addressesService.deleteUserAddress(request.user!.userId, this.parseId(idText))
+    return this.addressesService.deleteAddress({
+      ownerType: 'user',
+      ownerId: request.user!.userId,
+      addressType: 'service',
+      addressId: this.parseId(idText),
+    })
   }
 
   private parseId(value: string) {

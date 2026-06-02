@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { JwtService } from '@nestjs/jwt'
+import { PrismaService } from '../prisma/prisma.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { UsersRepository, UserProfileRecord } from '../users/users.repository'
@@ -12,6 +13,7 @@ export class AuthService {
     @Inject(ConfigService) private readonly config: ConfigService,
     @Inject(JwtService) private readonly jwt: JwtService,
     @Inject(UsersRepository) private readonly users: UsersRepository,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
   ) {}
 
   async mockLogin(phone: string) {
@@ -90,6 +92,50 @@ export class AuthService {
     return this.formatUser(user)
   }
 
+  async createDevStaffSession(userId: number) {
+    if (this.config.get<string>('NODE_ENV') === 'production') {
+      throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'dev staff session disabled', 403)
+    }
+
+    const user = await this.users.findUserById(userId)
+    if (!user) {
+      throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, 'user not found', 401)
+    }
+
+    const uuid = `dev-staff-user-${user.id}`
+    const phone = user.phone || `dev${user.id}`.padEnd(11, '0').slice(0, 11)
+    const staff = await this.prisma.staff.upsert({
+      where: { uuid },
+      create: {
+        uuid,
+        name: user.nickname || `Dev Staff ${user.id}`,
+        phone,
+        passwordHash: 'dev',
+        avatarUrl: user.avatar || '',
+        status: 1,
+        workStatus: 1,
+        cityCode: 'dev',
+      },
+      update: {
+        name: user.nickname || `Dev Staff ${user.id}`,
+        phone,
+        avatarUrl: user.avatar || '',
+        status: 1,
+        workStatus: 1,
+        deletedAt: null,
+        cityCode: 'dev',
+      },
+    })
+
+    return {
+      staffId: Number(staff.id),
+      userId: user.id,
+      phone: user.phone,
+      staffName: staff.name,
+      staffPhone: staff.phone,
+    }
+  }
+
   private async signToken(user: UserProfileRecord) {
     const expiresIn = Number(this.config.get<string | number>('JWT_EXPIRES_IN', 604800))
     const accessToken = await this.jwt.signAsync(
@@ -99,15 +145,10 @@ export class AuthService {
     return { accessToken, expiresIn }
   }
 
-  private maskPhone(phone: string) {
-    if (!phone || phone.length < 7) return phone
-    return `${phone.slice(0, 3)}****${phone.slice(-4)}`
-  }
-
   private formatUser(user: UserProfileRecord) {
     return {
       id: user.id,
-      phone: this.maskPhone(user.phone),
+      phone: user.phone,
       nickname: user.nickname,
       avatar: user.avatar,
       role: user.role,

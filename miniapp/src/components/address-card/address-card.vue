@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import type { UserAddress } from '@/api/types/address'
-import { formatAddress } from '@/utils/mockDay4'
+import { formatAddress } from '@/utils/addressSelection'
 
 const props = withDefaults(defineProps<{
   address: UserAddress

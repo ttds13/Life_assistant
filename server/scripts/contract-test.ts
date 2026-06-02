@@ -1,10 +1,12 @@
 import { strict as assert } from 'node:assert'
 import { PrismaClient } from '@prisma/client'
 import { createConfiguredApp } from '../src/main'
+import { hashAdminPassword } from '../src/admin-auth/admin-password'
 
 const port = Number(process.env.CONTRACT_PORT || 3210)
 const baseUrl = `http://127.0.0.1:${port}/api`
 const prisma = new PrismaClient()
+const CONTRACT_USER_PHONE = '13800009999'
 
 interface ApiResponse<T = any> {
   code: number
@@ -43,26 +45,27 @@ async function authed<T>(token: string, pathname: string, options: RequestInit =
   })
 }
 
-async function ensureStaff() {
-  const staff = await prisma.staff.upsert({
-    where: { uuid: 'contract-staff-uuid' },
+async function ensureAdmin() {
+  const username = 'contract-admin'
+  const password = 'ContractAdmin123'
+  const passwordHash = await hashAdminPassword(password)
+  await prisma.adminUser.upsert({
+    where: { username },
     create: {
-      uuid: 'contract-staff-uuid',
-      name: 'Contract Staff',
-      phone: '13900001111',
-      passwordHash: 'dev',
+      username,
+      passwordHash,
+      name: 'Contract Admin',
+      role: 'super_admin',
       status: 1,
-      workStatus: 1,
     },
     update: {
-      name: 'Contract Staff',
-      phone: '13900001111',
+      passwordHash,
+      name: 'Contract Admin',
+      role: 'super_admin',
       status: 1,
-      workStatus: 1,
-      deletedAt: null,
     },
   })
-  return Number(staff.id)
+  return { username, password }
 }
 
 async function runBasicContract(token: string) {
@@ -104,9 +107,12 @@ async function runBasicContract(token: string) {
   const noAuth = await request('/auth/me')
   assert.equal(noAuth.response.status, 401)
   assert.equal(noAuth.body.code, 20001)
+
+  const forbiddenAdmin = await authed<any>(token, '/admin/orders')
+  assert.equal(forbiddenAdmin.response.status, 403)
 }
 
-async function runOrderMainFlow(token: string, staffId: number) {
+async function runOrderMainFlow(token: string, adminToken: string, staffId: number, staffName: string) {
   const services = await request<{ items: any[] }>('/services?page=1&pageSize=1')
   const serviceId = services.body.data.items[0].id
 
@@ -114,7 +120,7 @@ async function runOrderMainFlow(token: string, staffId: number) {
     method: 'POST',
     body: JSON.stringify({
       contactName: 'Contract User',
-      contactPhone: '13800001111',
+      contactPhone: CONTRACT_USER_PHONE,
       cityName: 'Shanghai',
       districtName: 'Pudong',
       detailAddress: 'Contract Road 1',
@@ -155,14 +161,20 @@ async function runOrderMainFlow(token: string, staffId: number) {
   assert.equal(paid.response.status, 200)
   assert.equal(paid.body.data.order.status, 'pending_dispatch')
 
-  const assigned = await authed<any>(token, `/admin/orders/${orderId}/assign`, {
+  const assigned = await authed<any>(adminToken, `/admin/orders/${orderId}/assign`, {
     method: 'POST',
-    headers: { 'X-Admin-Id': '1' },
     body: JSON.stringify({ staffId }),
   })
   assert.equal(assigned.response.status, 200)
   assert.equal(assigned.body.data.status, 'dispatched')
-  assert.equal(assigned.body.data.staffName, 'Contract Staff')
+  assert.equal(assigned.body.data.staffName, staffName)
+
+  const staffProfile = await authed<any>(token, '/staff/profile', {
+    headers: { 'X-Staff-Id': String(staffId) },
+  })
+  assert.equal(staffProfile.response.status, 200)
+  assert.equal(staffProfile.body.data.staffId, staffId)
+  assert.equal(staffProfile.body.data.staffName, staffName)
 
   const accepted = await authed<any>(token, `/staff/orders/${orderId}/accept`, {
     method: 'POST',
@@ -223,6 +235,228 @@ async function runOrderMainFlow(token: string, staffId: number) {
   ])
 }
 
+async function runAddressContracts(token: string, adminToken: string, staffId: number, userId: number) {
+  const first = await authed<any>(token, '/user/addresses', {
+    method: 'POST',
+    body: JSON.stringify({
+      contactName: 'Address Contract A',
+      contactPhone: CONTRACT_USER_PHONE,
+      provinceName: 'Shanghai',
+      cityName: 'Shanghai',
+      districtName: 'Pudong',
+      streetName: 'Contract Street',
+      addressTitle: 'Contract Garden',
+      detailAddress: 'Building 1 Unit 101',
+      houseNumber: '101',
+      latitude: 31.2304,
+      longitude: 121.4737,
+      poiId: 'contract-poi-a',
+      mapProvider: 'tencent',
+      isDefault: true,
+    }),
+  })
+  assert.equal(first.response.status, 200)
+  assert.equal(first.body.data.isDefault, true)
+  assert.equal(first.body.data.addressType, 'service')
+  assert.equal(first.body.data.formattedAddress.includes('Contract Garden'), true)
+
+  const second = await authed<any>(token, '/user/addresses', {
+    method: 'POST',
+    body: JSON.stringify({
+      contactName: 'Address Contract B',
+      contactPhone: '13800001112',
+      cityName: 'Shanghai',
+      districtName: 'Minhang',
+      detailAddress: 'Second Road 2',
+      isDefault: true,
+    }),
+  })
+  assert.equal(second.response.status, 200)
+  assert.equal(second.body.data.isDefault, true)
+
+  const firstReloaded = await authed<any>(token, `/user/addresses/${first.body.data.id}`)
+  assert.equal(firstReloaded.response.status, 200)
+  assert.equal(firstReloaded.body.data.isDefault, false)
+
+  const updatedSecond = await authed<any>(token, `/user/addresses/${second.body.data.id}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      contactName: 'Address Contract B2',
+      contactPhone: '13800001112',
+      cityName: 'Shanghai',
+      districtName: 'Minhang',
+      detailAddress: 'Second Road 2 Updated',
+    }),
+  })
+  assert.equal(updatedSecond.response.status, 200)
+  assert.equal(updatedSecond.body.data.isDefault, true)
+
+  const userList = await authed<any[]>(token, '/user/addresses')
+  assert.equal(userList.response.status, 200)
+  assert.ok(userList.body.data.some((item: any) => item.id === second.body.data.id && item.isDefault === true))
+
+  const deleteDefault = await authed<any>(token, `/user/addresses/${second.body.data.id}`, { method: 'DELETE' })
+  assert.equal(deleteDefault.response.status, 200)
+  const firstAfterDelete = await authed<any>(token, `/user/addresses/${first.body.data.id}`)
+  assert.equal(firstAfterDelete.response.status, 200)
+  assert.equal(firstAfterDelete.body.data.isDefault, true)
+
+  const staffHome = await authed<any>(token, '/staff/addresses', {
+    method: 'POST',
+    headers: { 'X-Staff-Id': String(staffId) },
+    body: JSON.stringify({
+      contactName: 'Staff Address Home',
+      contactPhone: CONTRACT_USER_PHONE,
+      cityName: 'Shanghai',
+      districtName: 'Pudong',
+      detailAddress: 'Staff Home 1',
+      addressType: 'home',
+      isDefault: true,
+      latitude: 31.2201,
+      longitude: 121.4802,
+    }),
+  })
+  assert.equal(staffHome.response.status, 200)
+  assert.equal(staffHome.body.data.addressType, 'home')
+  assert.equal(staffHome.body.data.isDefault, true)
+
+  const staffWork = await authed<any>(token, '/staff/addresses', {
+    method: 'POST',
+    headers: { 'X-Staff-Id': String(staffId) },
+    body: JSON.stringify({
+      contactName: 'Staff Address Work',
+      contactPhone: CONTRACT_USER_PHONE,
+      cityName: 'Shanghai',
+      districtName: 'Huangpu',
+      detailAddress: 'Staff Work 1',
+      addressType: 'work',
+      isDefault: true,
+    }),
+  })
+  assert.equal(staffWork.response.status, 200)
+  assert.equal(staffWork.body.data.addressType, 'work')
+  assert.equal(staffWork.body.data.isDefault, true)
+
+  const staffList = await authed<any[]>(token, '/staff/addresses', {
+    headers: { 'X-Staff-Id': String(staffId) },
+  })
+  assert.equal(staffList.response.status, 200)
+  assert.ok(staffList.body.data.some((item: any) => item.id === staffHome.body.data.id))
+  assert.ok(staffList.body.data.some((item: any) => item.id === staffWork.body.data.id))
+
+  const staffHomeDetail = await authed<any>(token, `/staff/addresses/${staffHome.body.data.id}`, {
+    headers: { 'X-Staff-Id': String(staffId) },
+  })
+  assert.equal(staffHomeDetail.response.status, 200)
+  assert.equal(staffHomeDetail.body.data.addressType, 'home')
+
+  const updatedStaffWork = await authed<any>(token, `/staff/addresses/${staffWork.body.data.id}`, {
+    method: 'PUT',
+    headers: { 'X-Staff-Id': String(staffId) },
+    body: JSON.stringify({
+      contactName: 'Staff Address Work Updated',
+      contactPhone: CONTRACT_USER_PHONE,
+      cityName: 'Shanghai',
+      districtName: 'Huangpu',
+      detailAddress: 'Staff Work Updated',
+      addressType: 'work',
+    }),
+  })
+  assert.equal(updatedStaffWork.response.status, 200)
+  assert.equal(updatedStaffWork.body.data.isDefault, true)
+
+  const adminUserAddress = await authed<any>(adminToken, `/admin/users/${userId}/addresses`, {
+    method: 'POST',
+    body: JSON.stringify({
+      contactName: 'Admin User Address',
+      contactPhone: '13800001113',
+      cityName: 'Shanghai',
+      districtName: 'Xuhui',
+      detailAddress: 'Admin User Road 3',
+      isDefault: true,
+    }),
+  })
+  assert.equal(adminUserAddress.response.status, 200)
+  assert.equal(adminUserAddress.body.data.ownerType, 'user')
+
+  const adminUserOwnerId = adminUserAddress.body.data.ownerId
+  const adminUserList = await authed<any>(adminToken, `/admin/users/${adminUserOwnerId}/addresses`)
+  assert.equal(adminUserList.response.status, 200)
+  assert.ok(adminUserList.body.data.items.some((item: any) => item.id === adminUserAddress.body.data.id))
+
+  const adminUserDetail = await authed<any>(adminToken, `/admin/users/${adminUserOwnerId}/addresses/${adminUserAddress.body.data.id}`)
+  assert.equal(adminUserDetail.response.status, 200)
+  assert.equal(adminUserDetail.body.data.ownerId, adminUserOwnerId)
+
+  const adminUserUpdated = await authed<any>(adminToken, `/admin/users/${adminUserOwnerId}/addresses/${adminUserAddress.body.data.id}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      contactName: 'Admin User Address Updated',
+      contactPhone: '13800001113',
+      cityName: 'Shanghai',
+      districtName: 'Xuhui',
+      detailAddress: 'Admin User Road 3 Updated',
+      isDefault: true,
+    }),
+  })
+  assert.equal(adminUserUpdated.response.status, 200)
+  assert.equal(adminUserUpdated.body.data.contactName, 'Admin User Address Updated')
+
+  const adminStaffAddress = await authed<any>(adminToken, `/admin/staff/${staffId}/addresses`, {
+    method: 'POST',
+    body: JSON.stringify({
+      contactName: 'Admin Staff Address',
+      contactPhone: CONTRACT_USER_PHONE,
+      cityName: 'Shanghai',
+      districtName: 'Jingan',
+      detailAddress: 'Admin Staff Road 5',
+      addressType: 'home',
+      isDefault: true,
+    }),
+  })
+  assert.equal(adminStaffAddress.response.status, 200)
+  assert.equal(adminStaffAddress.body.data.ownerType, 'staff')
+  assert.equal(adminStaffAddress.body.data.ownerId, staffId)
+
+  const adminStaffList = await authed<any>(adminToken, `/admin/staff/${staffId}/addresses`)
+  assert.equal(adminStaffList.response.status, 200)
+  assert.ok(adminStaffList.body.data.items.some((item: any) => item.id === adminStaffAddress.body.data.id))
+
+  const adminGenericList = await authed<any>(adminToken, `/admin/addresses?ownerType=staff&ownerId=${staffId}`)
+  assert.equal(adminGenericList.response.status, 200)
+  assert.ok(adminGenericList.body.data.items.some((item: any) => item.id === adminStaffAddress.body.data.id))
+
+  const deleteAdminStaff = await authed<any>(adminToken, `/admin/staff/${staffId}/addresses/${adminStaffAddress.body.data.id}`, { method: 'DELETE' })
+  assert.equal(deleteAdminStaff.response.status, 200)
+
+  const deleteAdminUser = await authed<any>(adminToken, `/admin/users/${adminUserOwnerId}/addresses/${adminUserAddress.body.data.id}`, { method: 'DELETE' })
+  assert.equal(deleteAdminUser.response.status, 200)
+
+  const deleteStaffWork = await authed<any>(token, `/staff/addresses/${staffWork.body.data.id}`, {
+    method: 'DELETE',
+    headers: { 'X-Staff-Id': String(staffId) },
+  })
+  assert.equal(deleteStaffWork.response.status, 200)
+
+  const map = await request('/maps/reverse-geocode?latitude=31.2304&longitude=121.4737')
+  assert.ok(map.response.status === 200 || map.response.status === 400)
+  if (map.response.status === 400) {
+    assert.equal(map.body.code, 10002)
+  }
+  else {
+    assert.equal(map.body.code, 0)
+    assert.equal(typeof map.body.data.provider, 'string')
+  }
+
+  const addressAudit = await prisma.auditLog.findFirst({
+    where: {
+      module: 'address',
+      action: { in: ['user-address:create', 'staff-address:create'] },
+    },
+  })
+  assert.ok(addressAudit)
+}
+
 async function createPendingOrder(token: string) {
   const services = await request<{ items: any[] }>('/services?page=1&pageSize=1')
   const serviceId = services.body.data.items[0].id
@@ -230,7 +464,7 @@ async function createPendingOrder(token: string) {
     method: 'POST',
     body: JSON.stringify({
       contactName: 'Conflict User',
-      contactPhone: '13800001111',
+      contactPhone: CONTRACT_USER_PHONE,
       cityName: 'Shanghai',
       districtName: 'Pudong',
       detailAddress: 'Conflict Road 1',
@@ -248,7 +482,7 @@ async function createPendingOrder(token: string) {
   return order.body.data
 }
 
-async function runConflictContracts(token: string, staffId: number) {
+async function runConflictContracts(token: string, adminToken: string, staffId: number) {
   const cancelVsPay = await createPendingOrder(token)
   const pay = await authed<any>(token, `/orders/${cancelVsPay.id}/pay`, { method: 'POST' })
   const [cancelResult, payResult] = await Promise.all([
@@ -278,14 +512,12 @@ async function runConflictContracts(token: string, staffId: number) {
     body: JSON.stringify({ paymentNo: assignPay.body.data.paymentNo }),
   })
   const [assignA, assignB] = await Promise.all([
-    authed<any>(token, `/admin/orders/${assignConflict.id}/assign`, {
+    authed<any>(adminToken, `/admin/orders/${assignConflict.id}/assign`, {
       method: 'POST',
-      headers: { 'X-Admin-Id': '1' },
       body: JSON.stringify({ staffId }),
     }),
-    authed<any>(token, `/admin/orders/${assignConflict.id}/assign`, {
+    authed<any>(adminToken, `/admin/orders/${assignConflict.id}/assign`, {
       method: 'POST',
-      headers: { 'X-Admin-Id': '2' },
       body: JSON.stringify({ staffId }),
     }),
   ])
@@ -298,9 +530,8 @@ async function runConflictContracts(token: string, staffId: number) {
     method: 'POST',
     body: JSON.stringify({ paymentNo: acceptPay.body.data.paymentNo }),
   })
-  await authed<any>(token, `/admin/orders/${acceptRejectConflict.id}/assign`, {
+  await authed<any>(adminToken, `/admin/orders/${acceptRejectConflict.id}/assign`, {
     method: 'POST',
-    headers: { 'X-Admin-Id': '1' },
     body: JSON.stringify({ staffId }),
   })
   const [accept, reject] = await Promise.all([
@@ -318,6 +549,74 @@ async function runConflictContracts(token: string, staffId: number) {
   assert.equal([accept, reject].filter(item => item.response.status === 409).length, 1)
 }
 
+async function runAdminOrderContracts(token: string, adminToken: string, staffId: number) {
+  const pending = await createPendingOrder(token)
+  const pay = await authed<any>(token, `/orders/${pending.id}/pay`, { method: 'POST' })
+  await authed<any>(token, '/payments/mock-success', {
+    method: 'POST',
+    body: JSON.stringify({ paymentNo: pay.body.data.paymentNo }),
+  })
+
+  const pendingList = await authed<any>(adminToken, '/admin/orders?status=pending_dispatch&page=1&pageSize=10')
+  assert.equal(pendingList.response.status, 200)
+  assert.ok(Array.isArray(pendingList.body.data.items))
+  assert.equal(pendingList.body.data.page, 1)
+  assert.equal(pendingList.body.data.pageSize, 10)
+  assert.ok(pendingList.body.data.items.some((item: any) => item.id === String(pending.id)))
+
+  const keywordList = await authed<any>(adminToken, `/admin/orders?keyword=${pending.orderNo}`)
+  assert.equal(keywordList.response.status, 200)
+  assert.ok(keywordList.body.data.items.some((item: any) => item.orderNo === pending.orderNo))
+
+  const detail = await authed<any>(adminToken, `/admin/orders/${pending.id}`)
+  assert.equal(detail.response.status, 200)
+  assert.equal(detail.body.data.id, String(pending.id))
+  assert.ok(Array.isArray(detail.body.data.statusLogs))
+
+  const options = await authed<any>(adminToken, '/admin/staff/options')
+  assert.equal(options.response.status, 200)
+  assert.ok(options.body.data.some((item: any) => Number(item.id) === staffId))
+
+  const assigned = await authed<any>(adminToken, `/admin/orders/${pending.id}/assign`, {
+    method: 'POST',
+    body: JSON.stringify({ staffId, remark: 'admin order contract assign' }),
+  })
+  assert.equal(assigned.response.status, 200)
+  assert.equal(assigned.body.data.status, 'dispatched')
+  assert.equal(assigned.body.data.staffId, staffId)
+
+  const assignLog = await prisma.orderStatusLog.findFirst({
+    where: { orderId: BigInt(pending.id), action: 'admin_assign' },
+  })
+  assert.ok(assignLog)
+
+  const assignAudit = await prisma.auditLog.findFirst({
+    where: {
+      module: 'order',
+      action: 'order:assign',
+      targetId: BigInt(pending.id),
+    },
+  })
+  assert.ok(assignAudit)
+
+  const remark = await authed<any>(adminToken, `/admin/orders/${pending.id}/remark`, {
+    method: 'PUT',
+    body: JSON.stringify({ remark: 'admin checked remark' }),
+  })
+  assert.equal(remark.response.status, 200)
+  assert.equal(remark.body.data.adminRemark, 'admin checked remark')
+  assert.equal(remark.body.data.status, 'dispatched')
+
+  const remarkAudit = await prisma.auditLog.findFirst({
+    where: {
+      module: 'order',
+      action: 'order:remark:update',
+      targetId: BigInt(pending.id),
+    },
+  })
+  assert.ok(remarkAudit)
+}
+
 async function main() {
   process.env.HOST = '127.0.0.1'
   process.env.PORT = String(port)
@@ -327,7 +626,7 @@ async function main() {
   try {
     const login = await request<any>('/auth/mock-login', {
       method: 'POST',
-      body: JSON.stringify({ phone: '13800001111' }),
+      body: JSON.stringify({ phone: CONTRACT_USER_PHONE }),
     })
     assert.equal(login.response.status, 200)
     assert.equal(login.body.code, 0)
@@ -335,10 +634,26 @@ async function main() {
     assert.equal(typeof login.body.data.user.id, 'number')
 
     const token = login.body.data.accessToken
-    const staffId = await ensureStaff()
+    const adminAccount = await ensureAdmin()
+    const adminLogin = await request<any>('/admin/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(adminAccount),
+    })
+    assert.equal(adminLogin.response.status, 200)
+    assert.equal(typeof adminLogin.body.data.accessToken, 'string')
+    const adminToken = adminLogin.body.data.accessToken
+    const userId = login.body.data.user.id
+
+    const staffSession = await authed<any>(token, '/auth/dev-staff-session', { method: 'POST' })
+    assert.equal(staffSession.response.status, 200)
+    assert.equal(staffSession.body.data.userId, userId)
+    const staffId = staffSession.body.data.staffId
+    const staffName = staffSession.body.data.staffName
     await runBasicContract(token)
-    await runOrderMainFlow(token, staffId)
-    await runConflictContracts(token, staffId)
+    await runAddressContracts(token, adminToken, staffId, userId)
+    await runOrderMainFlow(token, adminToken, staffId, staffName)
+    await runConflictContracts(token, adminToken, staffId)
+    await runAdminOrderContracts(token, adminToken, staffId)
 
     console.info('contract-test-ok')
   }

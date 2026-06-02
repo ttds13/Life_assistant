@@ -1,6 +1,9 @@
 <script lang="ts" setup>
 import type { Service, ServiceCategory } from '@/api/types/services'
+import { getUserAddresses } from '@/api/address'
 import { getServiceCategories, getServices } from '@/api/services'
+import { useTokenStore } from '@/store/token'
+import { clearSelectedAddress, formatAddress, getSelectedAddress } from '@/utils/addressSelection'
 
 definePage({
   type: 'home',
@@ -39,8 +42,10 @@ interface HomeStaffAvatar {
 }
 
 // ===== Step 1: 静态配置 =====
-const defaultAddress = ref('吉林大学(南岭校区)')
+const fallbackAddress = '请选择服务地址'
+const defaultAddress = ref(fallbackAddress)
 const cartCount = ref(0)
+const tokenStore = useTokenStore()
 
 const bannerConfig = {
   title: '日常保洁服务',
@@ -169,6 +174,29 @@ function onAddressTap() {
   uni.navigateTo({ url: '/pages/address/list?mode=select' })
 }
 
+async function syncSelectedAddress() {
+  const selectedAddress = getSelectedAddress()
+  if (!selectedAddress) {
+    defaultAddress.value = fallbackAddress
+    return
+  }
+
+  defaultAddress.value = formatAddress(selectedAddress) || fallbackAddress
+  if (!tokenStore.hasLogin)
+    return
+
+  try {
+    const addresses = await getUserAddresses()
+    if (!addresses.some(item => item.id === selectedAddress.id)) {
+      clearSelectedAddress()
+      defaultAddress.value = fallbackAddress
+    }
+  }
+  catch {
+    // 首页不要因为地址校验失败影响服务数据展示。
+  }
+}
+
 function onSearchTap() {
   showTodo('搜索功能建设中')
 }
@@ -199,7 +227,12 @@ function onPassCardTap(item: HomePassCard) {
 }
 
 onLoad(() => {
+  void syncSelectedAddress()
   loadData()
+})
+
+onShow(() => {
+  void syncSelectedAddress()
 })
 </script>
 

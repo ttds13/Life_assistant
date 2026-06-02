@@ -1,6 +1,6 @@
 <script lang="ts" setup>
+import { cancelOrder, getOrders } from '@/api/orders'
 import type { OrderStatus, UserOrder } from '@/api/types/orders'
-import { getMockOrders } from '@/utils/mockDay4'
 
 definePage({
   style: {
@@ -36,11 +36,15 @@ const filteredOrders = computed(() => {
   return orders.value.filter(item => item.status === currentStatus.value)
 })
 
-function loadOrders() {
+async function loadOrders() {
   loading.value = true
-  // TODO: 接入 GET /orders
-  orders.value = getMockOrders()
-  loading.value = false
+  try {
+    const result = await getOrders({ page: 1, pageSize: 100 })
+    orders.value = result.items
+  }
+  finally {
+    loading.value = false
+  }
 }
 
 function onTapOrder(order: UserOrder) {
@@ -49,7 +53,7 @@ function onTapOrder(order: UserOrder) {
 
 function onPrimary(order: UserOrder) {
   if (order.status === 'pending_payment') {
-    uni.navigateTo({ url: `/pages/payment/result?orderId=${order.id}&status=pending&amount=${order.payableAmount}` })
+    uni.navigateTo({ url: `/pages/order/detail?id=${order.id}` })
     return
   }
   if (order.status === 'completed') {
@@ -64,9 +68,12 @@ function onSecondary(order: UserOrder) {
     uni.showModal({
       title: '取消订单',
       content: '确定取消该订单吗？',
-      success: (res) => {
-        if (res.confirm)
+      success: async (res) => {
+        if (res.confirm) {
+          await cancelOrder(order.id)
           uni.showToast({ icon: 'success', title: '已取消' })
+          loadOrders()
+        }
       },
     })
     return

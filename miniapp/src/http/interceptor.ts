@@ -1,10 +1,15 @@
 import type { CustomRequestOptions } from '@/http/types'
 import { useTokenStore } from '@/store'
 import { getEnvBaseUrl } from '@/utils'
+import { getCurrentDevStaffId } from '@/utils/devStaffStorage'
 import { stringifyQuery } from './tools/queryString'
 
 // 请求基准地址
 const baseUrl = getEnvBaseUrl()
+
+function shouldAttachDevStaffId(url: string) {
+  return /\/staff\//.test(url)
+}
 
 // 拦截器配置
 const httpInterceptor = {
@@ -50,6 +55,9 @@ const httpInterceptor = {
       'X-Request-Source': 'miniapp',
       'X-Client-Version': '1.0.0',
     }
+    const devStaffId = getCurrentDevStaffId()
+    if (devStaffId && shouldAttachDevStaffId(options.url))
+      options.header['X-Staff-Id'] = devStaffId
     // 3. 添加 token 请求头标识
         const tokenStore = useTokenStore()
     const token = tokenStore.validToken

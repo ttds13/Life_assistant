@@ -1,4 +1,6 @@
 <script lang="ts" setup>
+import { mockPaymentSuccess, payOrder } from '@/api/orders'
+
 definePage({
   style: {
     navigationBarTitleText: '支付结果',
@@ -8,6 +10,14 @@ definePage({
 const orderId = ref('')
 const status = ref<'pending' | 'success' | 'fail'>('pending')
 const amount = ref(0)
+const paying = ref(false)
+
+const canMockPay = computed(() => {
+  return import.meta.env.VITE_ENABLE_MOCK_PAYMENT === 'true'
+    || import.meta.env.VITE_SERVER_BASEURL?.includes('192.168.')
+    || import.meta.env.VITE_SERVER_BASEURL?.includes('127.0.0.1')
+    || import.meta.env.VITE_SERVER_BASEURL?.includes('localhost')
+})
 
 const resultConfig = computed(() => {
   if (status.value === 'success') {
@@ -42,6 +52,34 @@ function onHome() {
   uni.switchTab({ url: '/pages/home/index' })
 }
 
+async function runMockPay() {
+  const id = Number(orderId.value)
+  if (!id || paying.value)
+    return
+  paying.value = true
+  try {
+    const payment = await payOrder(id)
+    const paymentNo = payment.paymentNo || String(payment.paymentParams?.paymentNo || '')
+    await mockPaymentSuccess(paymentNo ? { paymentNo } : { orderId: id })
+    status.value = 'success'
+    uni.showToast({ icon: 'success', title: '支付成功' })
+  }
+  finally {
+    paying.value = false
+  }
+}
+
+function onMockPay() {
+  uni.showModal({
+    title: '模拟支付成功',
+    content: '开发环境将直接把该订单推进到待派单状态，是否继续？',
+    success: async (res) => {
+      if (res.confirm)
+        await runMockPay()
+    },
+  })
+}
+
 onLoad((query) => {
   orderId.value = String(query?.orderId || '')
   status.value = ['success', 'fail', 'pending'].includes(String(query?.status)) ? query?.status as any : 'pending'
@@ -71,6 +109,14 @@ onLoad((query) => {
     </view>
 
     <view class="mt-6">
+      <button
+        v-if="status === 'pending' && canMockPay"
+        class="h-[88rpx] rounded-full bg-[#F59E0B] text-white text-[30rpx] flex items-center justify-center mb-3"
+        :loading="paying"
+        @tap="onMockPay"
+      >
+        模拟支付成功
+      </button>
       <button class="h-[88rpx] rounded-full bg-[#1677FF] text-white text-[30rpx] flex items-center justify-center" @tap="onDetail">
         查看订单
       </button>

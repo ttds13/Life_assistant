@@ -2,8 +2,11 @@
 import type { Service } from '@/api/types/services'
 import type { PricePreview } from '@/api/types/orders'
 import type { UserAddress } from '@/api/types/address'
+import { getUserAddresses } from '@/api/address'
+import { createOrder, getOrderPricePreview } from '@/api/orders'
 import { getServiceDetail } from '@/api/services'
-import { createMockPricePreview, getMockAddresses, getSelectedMockAddress, setSelectedMockAddress } from '@/utils/mockDay4'
+import { createMockPricePreview } from '@/utils/mockDay4'
+import { formatAddress, getSelectedAddress } from '@/utils/addressSelection'
 
 definePage({
   style: {
@@ -58,13 +61,33 @@ async function loadService() {
   }
   finally {
     const amount = service.value?.basePrice || 0
-    pricePreview.value = createMockPricePreview(amount)
+    await loadPricePreview(amount)
     loading.value = false
   }
 }
 
-function syncSelectedAddress() {
-  selectedAddress.value = getSelectedMockAddress() || getMockAddresses().find(item => item.isDefault) || null
+async function loadPricePreview(fallbackAmount = 0) {
+  try {
+    pricePreview.value = await getOrderPricePreview({
+      serviceId: serviceId.value,
+      addressId: selectedAddress.value?.id,
+      appointmentDate: selectedDate.value,
+      appointmentTimeSlot: selectedTimeSlot.value,
+    })
+  }
+  catch {
+    pricePreview.value = createMockPricePreview(fallbackAmount)
+  }
+}
+
+async function syncSelectedAddress() {
+  const cached = getSelectedAddress()
+  if (cached) {
+    selectedAddress.value = cached
+    return
+  }
+  const addresses = await getUserAddresses()
+  selectedAddress.value = addresses.find(item => item.isDefault) || addresses[0] || null
 }
 
 function onChooseAddress() {
@@ -81,27 +104,43 @@ function validate() {
   return ''
 }
 
-function onSubmit() {
+async function onSubmit() {
   const message = validate()
   if (message) {
     uni.showToast({ icon: 'none', title: message })
     return
   }
   submitting.value = true
-  setTimeout(() => {
+  try {
+    const order = await createOrder({
+      serviceId: serviceId.value,
+      appointmentDate: selectedDate.value,
+      appointmentTimeSlot: selectedTimeSlot.value,
+      addressId: selectedAddress.value!.id,
+      remark: remark.value.trim() || undefined,
+    })
     submitting.value = false
-    uni.navigateTo({ url: `/pages/payment/result?orderId=${Date.now()}&status=pending&amount=${pricePreview.value.payableAmount}` })
-  }, 500)
+    uni.navigateTo({ url: `/pages/payment/result?orderId=${order.id}&status=pending&amount=${pricePreview.value.payableAmount}` })
+  }
+  finally {
+    submitting.value = false
+  }
 }
 
 onLoad((query) => {
   serviceId.value = Number(query?.serviceId || query?.id || 0)
-  loadService()
-  syncSelectedAddress()
+  void loadService()
+  void syncSelectedAddress()
 })
 
 onShow(() => {
-  syncSelectedAddress()
+  void syncSelectedAddress()
+})
+
+watch([selectedAddress, selectedDate, selectedTimeSlot], () => {
+  if (service.value) {
+    void loadPricePreview(service.value.basePrice)
+  }
 })
 </script>
 
@@ -157,7 +196,7 @@ onShow(() => {
             <text class="text-[24rpx] text-gray-500">{{ selectedAddress.contactPhone }}</text>
           </view>
           <text class="block mt-2 text-[26rpx] text-gray-700 leading-[38rpx]">
-            {{ `${selectedAddress.cityName || ''}${selectedAddress.districtName || ''}${selectedAddress.detailAddress}${selectedAddress.houseNumber ? ` ${selectedAddress.houseNumber}` : ''}` }}
+            {{ formatAddress(selectedAddress) }}
           </text>
         </view>
         <view v-else class="h-[96rpx] rounded-[12rpx] bg-[#F9FAFB] flex items-center justify-between px-3" @tap="onChooseAddress">

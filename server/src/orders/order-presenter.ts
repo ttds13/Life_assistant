@@ -43,10 +43,13 @@ function formatAppointment(order: OrderDetailRecord) {
 }
 
 function addressText(snapshot: JsonRecord) {
+  const formattedAddress = stringValue(snapshot.formattedAddress)
+  if (formattedAddress) return formattedAddress
   return [
-    stringValue(snapshot.city),
-    stringValue(snapshot.district),
-    stringValue(snapshot.address),
+    stringValue(snapshot.cityName, stringValue(snapshot.city)),
+    stringValue(snapshot.districtName, stringValue(snapshot.district)),
+    stringValue(snapshot.detailAddress, stringValue(snapshot.address)),
+    stringValue(snapshot.houseNumber),
   ].filter(Boolean).join('')
 }
 
@@ -86,6 +89,25 @@ export function presentUserOrder(order: OrderDetailRecord) {
   }
 }
 
+function presentStatusLog(log: OrderDetailRecord['statusLogs'][number]) {
+  return {
+    id: Number(log.id),
+    title: log.action || log.toStatus,
+    label: log.action || log.toStatus,
+    action: log.action || '',
+    fromStatus: log.fromStatus,
+    toStatus: log.toStatus,
+    operatorType: log.operatorType,
+    operatorId: Number(log.operatorId),
+    operator: `${log.operatorType}#${Number(log.operatorId)}`,
+    description: log.remark || `${log.fromStatus || 'new'} -> ${log.toStatus}`,
+    remark: log.remark || '',
+    detail: log.detail || null,
+    time: log.createdAt.toISOString(),
+    active: true,
+  }
+}
+
 export function presentOrderDetail(order: OrderDetailRecord) {
   const base = presentUserOrder(order)
   const serviceSnapshot = jsonRecord(order.serviceSnapshot)
@@ -108,16 +130,24 @@ export function presentOrderDetail(order: OrderDetailRecord) {
       sortOrder: numberValue(serviceSnapshot.sortOrder, order.service?.sortOrder || 0),
     },
     address: {
-      id: numberValue(addressSnapshot.id),
+      id: numberValue(addressSnapshot.addressId, numberValue(addressSnapshot.id)),
       contactName: stringValue(addressSnapshot.contactName),
       contactPhone: stringValue(addressSnapshot.contactPhone),
-      cityName: stringValue(addressSnapshot.city),
-      districtName: stringValue(addressSnapshot.district),
-      detailAddress: stringValue(addressSnapshot.address),
-      houseNumber: '',
+      addressType: stringValue(addressSnapshot.addressType, 'service'),
+      provinceName: stringValue(addressSnapshot.provinceName, stringValue(addressSnapshot.province)),
+      cityName: stringValue(addressSnapshot.cityName, stringValue(addressSnapshot.city)),
+      districtName: stringValue(addressSnapshot.districtName, stringValue(addressSnapshot.district)),
+      streetName: stringValue(addressSnapshot.streetName),
+      addressTitle: stringValue(addressSnapshot.addressTitle),
+      detailAddress: stringValue(addressSnapshot.detailAddress, stringValue(addressSnapshot.address)),
+      houseNumber: stringValue(addressSnapshot.houseNumber),
+      formattedAddress: stringValue(addressSnapshot.formattedAddress, addressText(addressSnapshot)),
       isDefault: false,
       latitude: addressSnapshot.latitude ?? null,
       longitude: addressSnapshot.longitude ?? null,
+      coordinateType: stringValue(addressSnapshot.coordinateType),
+      poiId: stringValue(addressSnapshot.poiId),
+      mapProvider: stringValue(addressSnapshot.mapProvider),
     },
     paymentMethod: payment ? payment.channel : undefined,
     statusLogs: order.statusLogs.length
@@ -136,5 +166,84 @@ export function presentOrderDetail(order: OrderDetailRecord) {
       { label: 'Discount', amount: discountAmount, type: 'discount' as const },
     ],
     servicePhotos: order.photos.map(photo => photo.url),
+  }
+}
+
+export function presentAdminOrderListItem(order: OrderDetailRecord) {
+  const base = presentUserOrder(order)
+  const payment = order.payments[0]
+
+  return {
+    ...base,
+    id: String(order.id),
+    userId: Number(order.userId),
+    userName: order.user?.nickname || order.addressSnapshot && stringValue(jsonRecord(order.addressSnapshot).contactName) || '用户',
+    userPhone: order.user?.phone || stringValue(jsonRecord(order.addressSnapshot).contactPhone),
+    staffId: order.staffId ? Number(order.staffId) : null,
+    paidAmount: decimalToNumber(order.paidAmount),
+    paymentStatus: payment?.status || '',
+    source: order.source,
+    adminRemark: order.adminRemark || '',
+    cityCode: order.cityCode || '',
+    updatedAt: order.updatedAt.toISOString(),
+  }
+}
+
+export function presentAdminOrderDetail(order: OrderDetailRecord) {
+  const base = presentAdminOrderListItem(order)
+  const detail = presentOrderDetail(order)
+  const serviceSnapshot = jsonRecord(order.serviceSnapshot)
+
+  return {
+    ...detail,
+    ...base,
+    serviceSpec: stringValue(serviceSnapshot.priceUnit, order.service?.priceUnit || ''),
+    paidAmount: decimalToNumber(order.paidAmount),
+    originalAmount: decimalToNumber(order.originalAmount),
+    discountAmount: decimalToNumber(order.discountAmount),
+    cancelledAt: order.cancelledAt?.toISOString() || null,
+    completedAt: order.completedAt?.toISOString() || null,
+    paidAt: order.paidAt?.toISOString() || null,
+    cancelReason: order.cancelReason || '',
+    statusLogs: order.statusLogs.map(presentStatusLog),
+    photos: order.photos.map(photo => photo.url),
+    assignments: order.assignments.map(assignment => ({
+      id: Number(assignment.id),
+      staffId: Number(assignment.staffId),
+      assignType: assignment.assignType,
+      assignStatus: assignment.assignStatus,
+      assignedBy: Number(assignment.assignedBy),
+      rejectReason: assignment.rejectReason || '',
+      assignedAt: assignment.assignedAt.toISOString(),
+      acceptedAt: assignment.acceptedAt?.toISOString() || null,
+      rejectedAt: assignment.rejectedAt?.toISOString() || null,
+    })),
+  }
+}
+
+export function presentStaffOption(staff: {
+  id: bigint
+  name: string
+  phone: string
+  workStatus: number
+  rating: Prisma.Decimal
+  cityCode: string | null
+}) {
+  const statusText: Record<number, string> = {
+    0: '空闲',
+    1: '服务中',
+    2: '休息',
+  }
+
+  return {
+    value: String(staff.id),
+    id: Number(staff.id),
+    label: staff.name,
+    name: staff.name,
+    phone: staff.phone,
+    workStatus: statusText[staff.workStatus] || String(staff.workStatus),
+    workStatusValue: staff.workStatus,
+    rating: decimalToNumber(staff.rating),
+    cityCode: staff.cityCode || '',
   }
 }

@@ -43,11 +43,11 @@ async function runPrimary(task: StaffTask) {
     uni.showToast({ icon: 'success', title: '已接单' })
   }
   else if (task.status === 'accepted') {
-    await checkinStaffTask(task.id)
+    await checkinStaffTask(task.id, task.version)
     uni.showToast({ icon: 'success', title: '已打卡' })
   }
   else if (task.status === 'on_the_way') {
-    await startStaffTask(task.id)
+    await startStaffTask(task.id, task.version)
     uni.showToast({ icon: 'success', title: '已开始' })
   }
   else if (task.status === 'in_service') {
@@ -57,7 +57,7 @@ async function runPrimary(task: StaffTask) {
       success: async (res) => {
         if (!res.confirm)
           return
-        await completeStaffTask(task.id)
+        await completeStaffTask(task.id, { version: task.version, photoUrls: task.photos?.map(photo => photo.url) || [] })
         uni.showToast({ icon: 'success', title: '已提交' })
         loadTasks()
       },
@@ -146,4 +146,3 @@ onShow(() => {
     <staff-tabbar active="orders" />
   </view>
 </template>
-

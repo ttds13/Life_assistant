@@ -25,3 +25,11 @@ export interface UpdateProfileParams {
   nickname?: string
   avatar?: string
 }
+
+export interface DevStaffSession {
+  staffId: number
+  userId: number
+  phone: string
+  staffName: string
+  staffPhone: string
+}

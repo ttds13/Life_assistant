@@ -62,9 +62,12 @@ export interface OrderStatusLog {
 }
 
 export interface OrderDetail extends UserOrder {
+  version: number
   service?: Service
   address?: UserAddress
   paymentMethod?: string
+  paidAt?: string | null
+  completedAt?: string | null
   statusLogs: OrderStatusLog[]
   amountItems: AmountDetailItem[]
   servicePhotos?: string[]
@@ -74,4 +77,23 @@ export interface QueryOrdersParams {
   status?: OrderStatus | 'all'
   page?: number
   pageSize?: number
+}
+
+export interface PayOrderResult {
+  paymentNo: string
+  status: string
+  amount?: number
+  channel?: string
+  paymentParams?: Record<string, any>
+}
+
+export interface MockPaymentSuccessPayload {
+  paymentNo?: string
+  orderId?: number
+}
+
+export interface MockPaymentSuccessResult {
+  paymentNo: string
+  status: string
+  order: OrderDetail | null
 }

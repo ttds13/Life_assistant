@@ -1,6 +1,8 @@
 <script lang="ts" setup>
+import { createDevStaffSession } from '@/api/auth'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
+import { clearDevStaffSession, getStoredDevStaffSession, saveDevStaffSession } from '@/utils/devStaffStorage'
 
 definePage({
   style: {
@@ -12,6 +14,9 @@ definePage({
 
 const tokenStore = useTokenStore()
 const userStore = useUserStore()
+const staffEntering = ref(false)
+const mockLoginFlagKey = 'life-assistant:mock-login'
+const isMockLoginSession = ref(false)
 
 type StatAction = 'wallet' | 'card' | 'coupon'
 type OrderAction = 'all' | 'pendingPayment' | 'pendingDispatch' | 'pendingConfirm' | 'pendingReview' | 'afterSales'
@@ -63,7 +68,7 @@ const displayName = computed(() => {
 const displayPhone = computed(() => {
   if (!tokenStore.hasLogin)
     return '点击登录后查看个人信息'
-  return formatPhone(userStore.userInfo.phone) || '未绑定手机号'
+  return userStore.userInfo.phone || '未绑定手机号'
 })
 
 const statEntries = computed<StatEntry[]>(() => [
@@ -92,6 +97,22 @@ const orderEntries = computed<OrderEntry[]>(() => [
   { label: '售后', action: 'afterSales', icon: 'i-carbon-shopping-bag', count: mockOrderStats.afterSales },
 ])
 
+const isDevApi = import.meta.env.VITE_SERVER_BASEURL?.includes('192.168.')
+  || import.meta.env.VITE_SERVER_BASEURL?.includes('127.0.0.1')
+  || import.meta.env.VITE_SERVER_BASEURL?.includes('localhost')
+
+const isMockLoginUser = computed(() => {
+  if (!tokenStore.hasLogin || !isDevApi)
+    return false
+
+  const phone = userStore.userInfo.phone
+  const nickname = userStore.userInfo.nickname
+  return isMockLoginSession.value
+    || phone === '13800001111'
+    || phone === '138****1111'
+    || nickname === '用户_001111'
+})
+
 const appEntries: AppEntry[] = [
   { label: '我的地址', action: 'address', icon: 'i-carbon-location', color: '#1677FF', auth: true },
   { label: '师傅端', action: 'staffWorkbench', icon: 'i-carbon-user-certification', color: '#FF373D', auth: true },
@@ -107,7 +128,7 @@ const displayAppEntries = computed(() => {
   return appEntries.filter((item) => {
     if (item.action !== 'staffWorkbench')
       return true
-    return tokenStore.hasLogin && userStore.userInfo.role === 'staff'
+    return userStore.userInfo.role === 'staff' || isMockLoginUser.value
   })
 })
 
@@ -130,18 +151,13 @@ function onLogout() {
     success: (res) => {
       if (res.confirm) {
         tokenStore.logout()
+        uni.removeStorageSync(mockLoginFlagKey)
+        clearDevStaffSession()
+        isMockLoginSession.value = false
         uni.showToast({ icon: 'success', title: '已退出' })
       }
     },
   })
-}
-
-function formatPhone(phone: string) {
-  if (!phone)
-    return ''
-  if (phone.length < 7)
-    return phone
-  return `${phone.slice(0, 3)}****${phone.slice(-4)}`
 }
 
 function formatMoney(value: number) {
@@ -159,6 +175,10 @@ function formatBadge(count: number) {
 
 function showPendingToast(title: string) {
   uni.showToast({ icon: 'none', title })
+}
+
+function syncMockLoginSession() {
+  isMockLoginSession.value = uni.getStorageSync(mockLoginFlagKey) === '1'
 }
 
 function onProfileTap() {
@@ -198,6 +218,20 @@ function goOrderList(action: OrderAction = 'all') {
   })
 }
 
+async function enterStaffWorkbench() {
+  if (staffEntering.value)
+    return
+  staffEntering.value = true
+  try {
+    const session = getStoredDevStaffSession() || await createDevStaffSession()
+    saveDevStaffSession(session)
+    uni.navigateTo({ url: '/pages/staff/home' })
+  }
+  finally {
+    staffEntering.value = false
+  }
+}
+
 function onAppTap(item: AppEntry) {
   if (item.auth && !tokenStore.hasLogin) {
     onLogin()
@@ -210,11 +244,11 @@ function onAppTap(item: AppEntry) {
   }
 
   if (item.action === 'staffWorkbench') {
-    if (userStore.userInfo.role !== 'staff') {
+    if (userStore.userInfo.role !== 'staff' && !isMockLoginUser.value) {
       showPendingToast('当前账号暂未开通师傅端')
       return
     }
-    uni.navigateTo({ url: '/pages/staff/home' })
+    enterStaffWorkbench()
     return
   }
 
@@ -228,6 +262,10 @@ function onAppTap(item: AppEntry) {
   }
   showPendingToast(titleMap[item.action])
 }
+
+onShow(() => {
+  syncMockLoginSession()
+})
 </script>
 
 <template>

@@ -6,8 +6,11 @@ import type { RequestWithContext } from '../common/utils/request-context'
 
 interface TokenPayload {
   userId: number
+  adminId?: number
   phone?: string
+  username?: string
   role?: string
+  userType?: string
 }
 
 @Injectable()
@@ -23,10 +26,14 @@ export class JwtAuthGuard implements CanActivate {
 
     try {
       const payload = await this.jwt.verifyAsync<TokenPayload>(token)
+      const isAdmin = payload.userType === 'admin' && payload.adminId
       const user = {
-        userId: Number(payload.userId),
+        userId: Number(isAdmin ? payload.adminId : payload.userId),
+        adminId: payload.adminId ? Number(payload.adminId) : undefined,
         phone: payload.phone,
+        username: payload.username,
         role: payload.role || 'user',
+        userType: isAdmin ? 'admin' as const : 'user' as const,
       }
       request.user = user
       request.context = {

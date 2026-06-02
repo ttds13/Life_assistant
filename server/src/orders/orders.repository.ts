@@ -24,6 +24,13 @@ export const ORDER_DETAIL_INCLUDE = Prisma.validator<Prisma.OrderInclude>()({
       rating: true,
     },
   },
+  user: {
+    select: {
+      id: true,
+      nickname: true,
+      phone: true,
+    },
+  },
   statusLogs: {
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   },
@@ -57,9 +64,16 @@ export class OrdersRepository {
     })
   }
 
-  findUserAddress(userId: number, addressId: number) {
-    return this.prisma.userAddress.findFirst({
-      where: { id: BigInt(addressId), userId: BigInt(userId), deletedAt: null },
+  findUserServiceAddress(userId: number, addressId: number) {
+    return this.prisma.address.findFirst({
+      where: {
+        id: BigInt(addressId),
+        ownerType: 'user',
+        ownerId: BigInt(userId),
+        addressType: 'service',
+        status: 1,
+        deletedAt: null,
+      },
     })
   }
 
@@ -92,12 +106,30 @@ export class OrdersRepository {
 
   async findAdminOrders(params: {
     status?: string
+    keyword?: string
+    dateStart?: Date
+    dateEnd?: Date
     page: number
     pageSize: number
   }) {
     const where: Prisma.OrderWhereInput = {}
     if (params.status && params.status !== 'all') {
       where.status = params.status
+    }
+    if (params.keyword) {
+      const keyword = params.keyword
+      where.OR = [
+        { orderNo: { contains: keyword } },
+        { user: { nickname: { contains: keyword } } },
+        { user: { phone: { contains: keyword } } },
+        { service: { name: { contains: keyword } } },
+      ]
+    }
+    if (params.dateStart || params.dateEnd) {
+      where.appointmentStartTime = {
+        ...(params.dateStart ? { gte: params.dateStart } : {}),
+        ...(params.dateEnd ? { lte: params.dateEnd } : {}),
+      }
     }
 
     const [total, items] = await this.prisma.$transaction([
@@ -145,6 +177,21 @@ export class OrdersRepository {
     return this.prisma.order.findUnique({
       where: { id: BigInt(orderId) },
       include: ORDER_DETAIL_INCLUDE,
+    })
+  }
+
+  findAssignableStaffOptions() {
+    return this.prisma.staff.findMany({
+      where: { status: 1, deletedAt: null },
+      orderBy: [{ workStatus: 'asc' }, { rating: 'desc' }, { id: 'asc' }],
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        workStatus: true,
+        rating: true,
+        cityCode: true,
+      },
     })
   }
 }

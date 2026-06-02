@@ -14,6 +14,12 @@ interface ManifestType {
       plugins?: Record<string, any>
     }
   }
+  'mp-weixin'?: {
+    permission?: Record<string, any>
+    requiredPrivateInfos?: string[]
+  }
+  permission?: Record<string, any>
+  requiredPrivateInfos?: string[]
 }
 
 export default function syncManifestPlugin(): Plugin {
@@ -26,6 +32,7 @@ export default function syncManifestPlugin(): Plugin {
       handler() {
         const srcManifestPath = path.resolve(process.cwd(), './src/manifest.json')
         const distAppPath = path.resolve(process.cwd(), './dist/dev/app/manifest.json')
+        const distMpWeixinAppPath = path.resolve(process.cwd(), './dist/build/mp-weixin/app.json')
 
         try {
           // 读取源文件
@@ -57,6 +64,19 @@ export default function syncManifestPlugin(): Plugin {
             // 写入更新后的内容
             fs.writeFileSync(distAppPath, JSON.stringify(distManifest, null, 2))
             console.log('✅ Manifest plugins 同步成功')
+          }
+
+          const mpWeixin = srcManifest['mp-weixin']
+          if (mpWeixin && fs.existsSync(distMpWeixinAppPath)) {
+            const distAppJson = JSON.parse(fs.readFileSync(distMpWeixinAppPath, 'utf8')) as ManifestType
+            if (mpWeixin.permission) {
+              distAppJson.permission = mpWeixin.permission
+            }
+            if (mpWeixin.requiredPrivateInfos) {
+              distAppJson.requiredPrivateInfos = mpWeixin.requiredPrivateInfos
+            }
+            fs.writeFileSync(distMpWeixinAppPath, JSON.stringify(distAppJson, null, 2))
+            console.log('Manifest mp-weixin privacy fields synced')
           }
         }
         catch (error) {

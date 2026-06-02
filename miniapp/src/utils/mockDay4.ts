@@ -12,6 +12,7 @@ export function getMockAddresses(): UserAddress[] {
   const initial: UserAddress[] = [
     {
       id: 1,
+      addressType: 'service',
       contactName: '张女士',
       contactPhone: '13800000000',
       cityName: '上海市',
@@ -146,6 +147,7 @@ export function getMockOrderDetail(id: number): OrderDetail {
 
   return {
     ...order,
+    version: 0,
     paymentMethod: order.status === 'pending_payment' ? '待支付' : '微信支付',
     statusLogs: logLabels.map((label, index) => ({
       label,

@@ -14,7 +14,8 @@
     "prisma:migrate:status": "prisma migrate status",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "seed:db": "tsx scripts/seed-db.ts"
+    "seed:db": "tsx scripts/seed-db.ts",
+    "seed:admin": "tsx scripts/seed-admin.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",

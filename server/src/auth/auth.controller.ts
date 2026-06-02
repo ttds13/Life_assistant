@@ -33,4 +33,11 @@ export class AuthController {
   updateProfile(@Req() request: RequestWithContext, @Body() dto: UpdateProfileDto) {
     return this.authService.updateProfile(request.user!.userId, dto)
   }
+
+  @Post('dev-staff-session')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  createDevStaffSession(@Req() request: RequestWithContext) {
+    return this.authService.createDevStaffSession(request.user!.userId)
+  }
 }
