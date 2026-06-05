@@ -7,6 +7,8 @@ import { ErrorCode } from '../common/errors/error-code'
 import { UsersRepository, UserProfileRecord } from '../users/users.repository'
 import type { UpdateProfileDto } from './dto/update-profile.dto'
 
+type AuthUserProfile = Omit<UserProfileRecord, 'role'> & { role: 'user' | 'staff' }
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -34,9 +36,10 @@ export class AuthService {
       throw new BusinessException(ErrorCode.AUTH_USER_DISABLED, '账号已被禁用', 403)
     }
 
+    const profile = await this.resolveUserProfile(user)
     return {
-      ...await this.signToken(user),
-      user: this.formatUser(user),
+      ...await this.signToken(profile),
+      user: this.formatUser(profile),
     }
   }
 
@@ -66,9 +69,10 @@ export class AuthService {
       user = await this.users.updateUser(user.id, { openid, unionid }) || user
     }
 
+    const profile = await this.resolveUserProfile(user)
     return {
-      ...await this.signToken(user),
-      user: this.formatUser(user),
+      ...await this.signToken(profile),
+      user: this.formatUser(profile),
     }
   }
 
@@ -77,7 +81,7 @@ export class AuthService {
     if (!user) {
       throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, '用户不存在', 401)
     }
-    return this.formatUser(user)
+    return this.formatUser(await this.resolveUserProfile(user))
   }
 
   async updateProfile(userId: number, dto: UpdateProfileDto) {
@@ -89,7 +93,7 @@ export class AuthService {
     if (!user) {
       throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, '用户不存在', 401)
     }
-    return this.formatUser(user)
+    return this.formatUser(await this.resolveUserProfile(user))
   }
 
   async createDevStaffSession(userId: number) {
@@ -102,30 +106,10 @@ export class AuthService {
       throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, 'user not found', 401)
     }
 
-    const uuid = `dev-staff-user-${user.id}`
-    const phone = user.phone || `dev${user.id}`.padEnd(11, '0').slice(0, 11)
-    const staff = await this.prisma.staff.upsert({
-      where: { uuid },
-      create: {
-        uuid,
-        name: user.nickname || `Dev Staff ${user.id}`,
-        phone,
-        passwordHash: 'dev',
-        avatarUrl: user.avatar || '',
-        status: 1,
-        workStatus: 1,
-        cityCode: 'dev',
-      },
-      update: {
-        name: user.nickname || `Dev Staff ${user.id}`,
-        phone,
-        avatarUrl: user.avatar || '',
-        status: 1,
-        workStatus: 1,
-        deletedAt: null,
-        cityCode: 'dev',
-      },
-    })
+    const staff = await this.findActiveStaffForUser(user.id)
+    if (!staff) {
+      throw new BusinessException(ErrorCode.STAFF_FORBIDDEN, 'staff role is not enabled', 403)
+    }
 
     return {
       staffId: Number(staff.id),
@@ -136,7 +120,7 @@ export class AuthService {
     }
   }
 
-  private async signToken(user: UserProfileRecord) {
+  private async signToken(user: AuthUserProfile) {
     const expiresIn = Number(this.config.get<string | number>('JWT_EXPIRES_IN', 604800))
     const accessToken = await this.jwt.signAsync(
       { userId: user.id, phone: user.phone, role: user.role },
@@ -145,7 +129,7 @@ export class AuthService {
     return { accessToken, expiresIn }
   }
 
-  private formatUser(user: UserProfileRecord) {
+  private formatUser(user: AuthUserProfile) {
     return {
       id: user.id,
       phone: user.phone,
@@ -153,6 +137,33 @@ export class AuthService {
       avatar: user.avatar,
       role: user.role,
     }
+  }
+
+  private async resolveUserProfile(user: UserProfileRecord): Promise<AuthUserProfile> {
+    const staff = await this.findActiveStaffForUser(user.id)
+    return {
+      ...user,
+      role: staff ? 'staff' : 'user',
+    }
+  }
+
+  private findActiveStaffForUser(userId: number | string) {
+    const id = BigInt(userId)
+    return this.prisma.staff.findFirst({
+      where: {
+        status: 1,
+        deletedAt: null,
+        OR: [
+          { userId: id },
+          { uuid: this.devStaffUuid(userId) },
+        ],
+      },
+      select: { id: true, name: true, phone: true },
+    })
+  }
+
+  private devStaffUuid(userId: number | string) {
+    return `dev-staff-user-${String(userId)}`
   }
 
   private async callWechatCode2Session(loginCode: string): Promise<{ openid: string, unionid: string }> {

@@ -4,7 +4,7 @@ import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { getRequestId, RequestWithContext } from '../common/utils/request-context'
 import { AdminBusinessService } from './admin-business.service'
-import { AdminAuditReviewDto, AdminPageQueryDto, AdminStatusDto, AdminTicketMessageDto } from './dto/admin-business.dto'
+import { AdminAuditReviewDto, AdminPageQueryDto, AdminStatusDto, AdminTicketMessageDto, AdminUserRoleDto } from './dto/admin-business.dto'
 
 @Controller('admin')
 @UseGuards(AdminAuthGuard)
@@ -36,6 +36,12 @@ export class AdminBusinessController {
   @HttpCode(200)
   updateUserStatus(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminStatusDto) {
     return this.service.updateUserStatus(this.parseId(idText), dto, this.context(request))
+  }
+
+  @Put('users/:id/role')
+  @HttpCode(200)
+  updateUserRole(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminUserRoleDto) {
+    return this.service.updateUserRole(this.parseId(idText), dto, this.context(request))
   }
 
   @Delete('users/:id')

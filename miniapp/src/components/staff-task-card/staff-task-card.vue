@@ -12,6 +12,10 @@ const emit = defineEmits<{
 }>()
 
 const actionConfig = computed(() => {
+  if (props.task.group === 'grab' && props.task.status === 'pending_accept') {
+    return { primary: '立即接单', secondary: '' }
+  }
+
   const map: Record<StaffTaskStatus, { primary: string, secondary: string }> = {
     pending_accept: { primary: '接单', secondary: '拒单' },
     accepted: { primary: '上门打卡', secondary: '' },
@@ -80,4 +84,3 @@ const actionConfig = computed(() => {
     </view>
   </view>
 </template>
-

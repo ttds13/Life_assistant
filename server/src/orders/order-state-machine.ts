@@ -25,6 +25,11 @@ export const ORDER_TRANSITIONS = {
     to: ORDER_STATUS.DISPATCHED,
     lockMode: 'pessimistic',
   },
+  [ORDER_ACTION.AUTO_ASSIGN]: {
+    from: ORDER_STATUS.PENDING_DISPATCH,
+    to: ORDER_STATUS.DISPATCHED,
+    lockMode: 'pessimistic',
+  },
   [ORDER_ACTION.STAFF_ACCEPT]: {
     from: ORDER_STATUS.DISPATCHED,
     to: ORDER_STATUS.ACCEPTED,
@@ -33,6 +38,11 @@ export const ORDER_TRANSITIONS = {
   [ORDER_ACTION.STAFF_REJECT]: {
     from: ORDER_STATUS.DISPATCHED,
     to: ORDER_STATUS.PENDING_DISPATCH,
+    lockMode: 'pessimistic',
+  },
+  [ORDER_ACTION.STAFF_CLAIM]: {
+    from: ORDER_STATUS.PENDING_DISPATCH,
+    to: ORDER_STATUS.ACCEPTED,
     lockMode: 'pessimistic',
   },
   [ORDER_ACTION.STAFF_ON_THE_WAY]: {

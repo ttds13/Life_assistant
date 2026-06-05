@@ -24,7 +24,7 @@ export async function createConfiguredApp() {
   app.enableCors({
     origin: config.get<string>('CORS_ORIGIN', '*'),
     methods: 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-    allowedHeaders: 'Content-Type, Authorization, X-Request-Id, X-Request-Source, X-Client-Version',
+    allowedHeaders: 'Content-Type, Authorization, X-Request-Id, X-Request-Source, X-Client-Version, X-Admin-Id, X-Staff-Id',
     exposedHeaders: 'X-Request-Id',
   })
 

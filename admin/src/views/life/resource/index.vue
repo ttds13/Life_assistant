@@ -65,7 +65,7 @@
             <span v-else>{{ formatValue(row[column.prop], column.type) }}</span>
           </template>
         </el-table-column>
-        <el-table-column fixed="right" label="操作" width="260">
+        <el-table-column fixed="right" label="操作" width="340">
           <template #default="{ row }">
             <el-button type="primary" link size="small" icon="view" @click="handleView(row)">
               查看
@@ -79,6 +79,15 @@
               @click="handleRowAction(action.key, row)"
             >
               {{ action.label }}
+            </el-button>
+            <el-button
+              v-if="moduleKey === 'users'"
+              :type="isStaffRole(row) ? 'warning' : 'success'"
+              link
+              size="small"
+              @click="handleToggleUserRole(row)"
+            >
+              {{ isStaffRole(row) ? "关闭师傅" : "开通师傅" }}
             </el-button>
             <el-button
               v-if="pageConfig?.editable"
@@ -379,6 +388,23 @@ function handleRowAction(action: string, row: LifeResourceRecord) {
   }
 }
 
+function isStaffRole(row: LifeResourceRecord) {
+  return row.roleType === "staff";
+}
+
+async function handleToggleUserRole(row: LifeResourceRecord) {
+  const nextRole = isStaffRole(row) ? "user" : "staff";
+  const actionText = nextRole === "staff" ? "开通师傅角色" : "关闭师傅角色";
+  await ElMessageBox.confirm(`确认${actionText}吗？`, "角色确认", {
+    type: "warning",
+    confirmButtonText: "确认",
+    cancelButtonText: "取消",
+  });
+  await LifeAPI.updateUserRole(String(row.id), nextRole);
+  ElMessage.success("角色已更新");
+  await fetchPage();
+}
+
 async function openOwnerAddresses(row: LifeResourceRecord) {
   const ownerType = moduleKey.value === "staff" ? "staff" : "user";
   const title = String(row.nickname || row.name || row.phone || row.id);
@@ -607,7 +633,7 @@ function resolveTagType(value: unknown) {
   if (matched?.tagType) return matched.tagType;
   if (value === true) return "success";
   if (value === false) return "info";
-  if (value === "active" || value === "published" || value === "online") return "success";
+  if (value === "active" || value === "published" || value === "online" || value === "staff") return "success";
   if (value === "pending" || value === "busy") return "warning";
   if (value === "rejected") return "danger";
   return "info";
@@ -625,6 +651,8 @@ function formatValue(value: unknown, type?: string) {
     const fallback: Record<string, string> = {
       active: "正常",
       disabled: "停用",
+      user: "普通用户",
+      staff: "师傅用户",
       online: "在线",
       busy: "忙碌",
       offline: "离线",

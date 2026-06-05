@@ -42,6 +42,8 @@ export interface UserOrder {
   id: number
   orderNo: string
   status: OrderStatus
+  version?: number
+  staffId?: number | null
   serviceName: string
   serviceImage?: string
   appointmentTime: string

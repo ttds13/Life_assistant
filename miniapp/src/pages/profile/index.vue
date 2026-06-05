@@ -5,7 +5,7 @@ import type { OrderStatus } from '@/api/types/orders'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
 import { saveOrderListFilter } from '@/utils/orderListFilter'
-import { getStoredDevStaffSession, saveDevStaffSession } from '@/utils/devStaffStorage'
+import { clearDevStaffSession, getStoredDevStaffSession, saveDevStaffSession } from '@/utils/devStaffStorage'
 
 definePage({
   style: {
@@ -18,8 +18,6 @@ definePage({
 const tokenStore = useTokenStore()
 const userStore = useUserStore()
 const staffEntering = ref(false)
-const mockLoginFlagKey = 'life-assistant:mock-login'
-const isMockLoginSession = ref(false)
 
 type StatAction = 'wallet' | 'card' | 'coupon'
 type OrderAction = 'all' | 'pendingPayment' | 'pendingDispatch' | 'pendingConfirm' | 'pendingReview' | 'afterSales'
@@ -103,22 +101,6 @@ const orderEntries = computed<OrderEntry[]>(() => [
   { label: '售后', action: 'afterSales', icon: 'i-carbon-shopping-bag', count: orderStats.value.afterSales },
 ])
 
-const isDevApi = import.meta.env.VITE_SERVER_BASEURL?.includes('192.168.')
-  || import.meta.env.VITE_SERVER_BASEURL?.includes('127.0.0.1')
-  || import.meta.env.VITE_SERVER_BASEURL?.includes('localhost')
-
-const isMockLoginUser = computed(() => {
-  if (!tokenStore.hasLogin || !isDevApi)
-    return false
-
-  const phone = userStore.userInfo.phone
-  const nickname = userStore.userInfo.nickname
-  return isMockLoginSession.value
-    || phone === '13800001111'
-    || phone === '138****1111'
-    || nickname === '用户_001111'
-})
-
 const appEntries: AppEntry[] = [
   { label: '我的地址', action: 'address', icon: 'i-carbon-location', color: '#1677FF', auth: true },
   { label: '师傅端', action: 'staffWorkbench', icon: 'i-carbon-user-certification', color: '#FF373D', auth: true },
@@ -134,7 +116,7 @@ const displayAppEntries = computed(() => {
   return appEntries.filter((item) => {
     if (item.action !== 'staffWorkbench')
       return true
-    return userStore.userInfo.role === 'staff' || isMockLoginUser.value
+    return userStore.userInfo.role === 'staff'
   })
 })
 
@@ -174,10 +156,6 @@ function showPendingToast(title: string) {
   uni.showToast({ icon: 'none', title })
 }
 
-function syncMockLoginSession() {
-  isMockLoginSession.value = uni.getStorageSync(mockLoginFlagKey) === '1'
-}
-
 async function loadOrderStats() {
   if (!tokenStore.hasLogin) {
     orderStats.value = { ...emptyOrderStats }
@@ -197,6 +175,22 @@ async function loadOrderStats() {
   }
   catch {
     orderStats.value = { ...emptyOrderStats }
+  }
+}
+
+async function refreshUserProfile() {
+  if (!tokenStore.hasLogin) {
+    clearDevStaffSession()
+    return
+  }
+
+  try {
+    await userStore.fetchUserInfo()
+    if (userStore.userInfo.role !== 'staff')
+      clearDevStaffSession()
+  }
+  catch {
+    clearDevStaffSession()
   }
 }
 
@@ -299,7 +293,7 @@ function onAppTap(item: AppEntry) {
   }
 
   if (item.action === 'staffWorkbench') {
-    if (userStore.userInfo.role !== 'staff' && !isMockLoginUser.value) {
+    if (userStore.userInfo.role !== 'staff') {
       showPendingToast('当前账号暂未开通师傅端')
       return
     }
@@ -323,7 +317,7 @@ function onAppTap(item: AppEntry) {
 }
 
 onShow(() => {
-  syncMockLoginSession()
+  refreshUserProfile()
   loadOrderStats()
 })
 </script>

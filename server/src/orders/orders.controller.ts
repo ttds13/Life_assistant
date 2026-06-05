@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common'
 import { AdminAuthGuard } from '../admin-auth/admin-auth.guard'
 import { ConfigService } from '@nestjs/config'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
@@ -6,8 +6,10 @@ import { StaffIdentityService } from '../auth/staff-identity.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { getRequestId, RequestWithContext } from '../common/utils/request-context'
+import { AutoAssignOrderDto } from './dto/auto-assign-order.dto'
 import { AdminOrderRemarkDto } from './dto/admin-order-remark.dto'
 import { AdminQueryOrdersDto } from './dto/admin-query-orders.dto'
+import { AdminUpdateOrderDto } from './dto/admin-update-order.dto'
 import { AssignOrderDto } from './dto/assign-order.dto'
 import { CompleteServiceDto } from './dto/complete-service.dto'
 import { CreateOrderDto } from './dto/create-order.dto'
@@ -74,11 +76,49 @@ export class OrdersController {
     return this.ordersService.getAdminOrderDetail(this.parseId(idText))
   }
 
+  @Put('admin/orders/:id')
+  @UseGuards(AdminAuthGuard)
+  @HttpCode(200)
+  updateAdminOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminUpdateOrderDto) {
+    return this.ordersService.updateAdminOrder(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
+  }
+
+  @Delete('admin/orders/:id')
+  @UseGuards(AdminAuthGuard)
+  @HttpCode(200)
+  deleteAdminOrder(@Req() request: RequestWithContext, @Param('id') idText: string) {
+    return this.ordersService.deleteAdminOrder(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      getRequestId(request),
+      this.getClientIp(request),
+    )
+  }
+
   @Post('admin/orders/:id/assign')
   @UseGuards(AdminAuthGuard)
   @HttpCode(200)
   assignOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AssignOrderDto) {
     return this.ordersService.assignOrder(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
+  }
+
+  @Post('admin/orders/:id/auto-assign')
+  @UseGuards(AdminAuthGuard)
+  @HttpCode(200)
+  autoAssignOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AutoAssignOrderDto) {
+    return this.ordersService.autoAssignOrder(
       this.parseAdminId(request),
       this.parseId(idText),
       dto,
@@ -112,6 +152,16 @@ export class OrdersController {
     return this.ordersService.listStaffOrders(await this.parseStaffId(request), query)
   }
 
+  @Get('staff/available-orders')
+  async listAvailableStaffOrders(@Req() request: RequestWithContext, @Query() query: QueryOrdersDto) {
+    return this.ordersService.listAvailableStaffOrders(await this.parseStaffId(request), query)
+  }
+
+  @Get('staff/available-orders/:id')
+  async getAvailableStaffOrderDetail(@Req() request: RequestWithContext, @Param('id') idText: string) {
+    return this.ordersService.getAvailableStaffOrderDetail(await this.parseStaffId(request), this.parseId(idText))
+  }
+
   @Get('staff/profile')
   async getStaffProfile(@Req() request: RequestWithContext, @Query('period') period?: string) {
     return this.ordersService.getStaffProfile(await this.parseStaffId(request), period)
@@ -131,6 +181,12 @@ export class OrdersController {
   @HttpCode(200)
   async staffAccept(@Req() request: RequestWithContext, @Param('id') idText: string) {
     return this.ordersService.staffAccept(await this.parseStaffId(request), this.parseId(idText), getRequestId(request))
+  }
+
+  @Post('staff/orders/:id/claim')
+  @HttpCode(200)
+  async staffClaim(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: TransitionVersionDto) {
+    return this.ordersService.staffClaim(await this.parseStaffId(request), this.parseId(idText), dto, getRequestId(request))
   }
 
   @Post('staff/orders/:id/reject')

@@ -75,8 +75,12 @@ export function presentUserOrder(order: OrderDetailRecord) {
     id: Number(order.id),
     orderNo: order.orderNo,
     status: order.status,
+    version: order.version,
+    staffId: order.staffId ? Number(order.staffId) : null,
     serviceName: stringValue(serviceSnapshot.name, order.service?.name || ''),
     serviceImage: stringValue(serviceSnapshot.coverImage, order.service?.coverImage || ''),
+    appointmentStartTime: order.appointmentStartTime.toISOString(),
+    appointmentEndTime: order.appointmentEndTime.toISOString(),
     appointmentTime: formatAppointment(order),
     addressText: addressText(addressSnapshot),
     totalAmount,
@@ -86,6 +90,7 @@ export function presentUserOrder(order: OrderDetailRecord) {
     staffPhone: order.staff?.phone || '',
     staffRating: order.staff ? decimalToNumber(order.staff.rating) : undefined,
     createdAt: order.createdAt.toISOString(),
+    completedAt: order.completedAt?.toISOString() || null,
   }
 }
 
@@ -181,10 +186,15 @@ export function presentAdminOrderListItem(order: OrderDetailRecord) {
     userPhone: order.user?.phone || stringValue(jsonRecord(order.addressSnapshot).contactPhone),
     staffId: order.staffId ? Number(order.staffId) : null,
     paidAmount: decimalToNumber(order.paidAmount),
+    originalAmount: decimalToNumber(order.originalAmount),
+    discountAmount: decimalToNumber(order.discountAmount),
     paymentStatus: payment?.status || '',
     source: order.source,
     adminRemark: order.adminRemark || '',
     cityCode: order.cityCode || '',
+    paidAt: order.paidAt?.toISOString() || null,
+    cancelledAt: order.cancelledAt?.toISOString() || null,
+    cancelReason: order.cancelReason || '',
     updatedAt: order.updatedAt.toISOString(),
   }
 }
@@ -198,13 +208,6 @@ export function presentAdminOrderDetail(order: OrderDetailRecord) {
     ...detail,
     ...base,
     serviceSpec: stringValue(serviceSnapshot.priceUnit, order.service?.priceUnit || ''),
-    paidAmount: decimalToNumber(order.paidAmount),
-    originalAmount: decimalToNumber(order.originalAmount),
-    discountAmount: decimalToNumber(order.discountAmount),
-    cancelledAt: order.cancelledAt?.toISOString() || null,
-    completedAt: order.completedAt?.toISOString() || null,
-    paidAt: order.paidAt?.toISOString() || null,
-    cancelReason: order.cancelReason || '',
     statusLogs: order.statusLogs.map(presentStatusLog),
     photos: order.photos.map(photo => photo.url),
     assignments: order.assignments.map(assignment => ({
@@ -230,9 +233,9 @@ export function presentStaffOption(staff: {
   cityCode: string | null
 }) {
   const statusText: Record<number, string> = {
-    0: '空闲',
-    1: '服务中',
-    2: '休息',
+    0: '离线',
+    1: '在线',
+    2: '忙碌',
   }
 
   return {

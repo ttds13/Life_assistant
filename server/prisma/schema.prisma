@@ -31,6 +31,7 @@ model User {
   userCoupons     UserCoupon[]
   userMemberCards UserMemberCard[]
   favorites       ServiceFavorite[]
+  staffProfile    Staff?
 
   @@index([phone])
   @@index([cityCode])
@@ -40,6 +41,7 @@ model User {
 model Staff {
   id           BigInt    @id @default(autoincrement())
   uuid         String    @unique @default(uuid()) @db.VarChar(36)
+  userId       BigInt?   @unique @map("user_id")
   name         String    @db.VarChar(64)
   phone        String    @db.VarChar(20)
   passwordHash String    @map("password_hash") @db.VarChar(128)
@@ -62,6 +64,7 @@ model Staff {
   photos        ServicePhoto[]
   incomeRecords StaffIncomeRecord[]
   reviews       Review[]
+  user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([phone])
   @@index([status])

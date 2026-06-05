@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import type { StaffOrderFilter, StaffTask } from '@/api/types/staff'
-import { acceptStaffTask, checkinStaffTask, completeStaffTask, getStaffTasks, rejectStaffTask, startStaffTask } from '@/api/staff'
+import { acceptStaffTask, checkinStaffTask, claimStaffTask, completeStaffTask, getStaffTasks, rejectStaffTask, startStaffTask } from '@/api/staff'
 
 definePage({
   style: {
@@ -34,13 +34,19 @@ function onTabTap(value: StaffOrderFilter) {
 }
 
 function onTaskTap(task: StaffTask) {
-  uni.navigateTo({ url: `/pages/staff/order-detail?id=${task.id}` })
+  uni.navigateTo({ url: `/pages/staff/order-detail?id=${task.id}&group=${task.group}` })
 }
 
 async function runPrimary(task: StaffTask) {
   if (task.status === 'pending_accept') {
-    await acceptStaffTask(task.id)
-    uni.showToast({ icon: 'success', title: '已接单' })
+    if (task.group === 'grab') {
+      await claimStaffTask(task.id, task.version)
+      uni.showToast({ icon: 'success', title: '领取成功' })
+    }
+    else {
+      await acceptStaffTask(task.id)
+      uni.showToast({ icon: 'success', title: '已接单' })
+    }
   }
   else if (task.status === 'accepted') {
     await checkinStaffTask(task.id, task.version)
@@ -76,14 +82,14 @@ function onPrimary(task: StaffTask) {
 }
 
 function onSecondary(task: StaffTask) {
-  if (task.status === 'pending_accept') {
+  if (task.status === 'pending_accept' && task.group === 'dispatch') {
     uni.showModal({
       title: '拒单确认',
       content: '确定拒绝该订单吗？',
       success: async (res) => {
         if (!res.confirm)
           return
-        await rejectStaffTask(task.id)
+        await rejectStaffTask(task.id, 'staff rejected', task.version)
         uni.showToast({ icon: 'success', title: '已拒单' })
         loadTasks()
       },

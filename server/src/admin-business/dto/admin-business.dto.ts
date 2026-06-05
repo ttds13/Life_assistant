@@ -74,6 +74,11 @@ export class AdminStatusDto {
   status: string
 }
 
+export class AdminUserRoleDto {
+  @IsIn(['user', 'staff'])
+  roleType: 'user' | 'staff'
+}
+
 export class AdminAuditReviewDto {
   @IsIn(['approve', 'reject'])
   action: 'approve' | 'reject'
@@ -89,4 +94,3 @@ export class AdminTicketMessageDto {
   @Transform(({ value }) => String(value || '').trim())
   content: string
 }
-

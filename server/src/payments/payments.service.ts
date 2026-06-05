@@ -5,6 +5,8 @@ import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { ORDER_ACTION } from '../orders/constants/order-action'
 import { ORDER_STATUS } from '../orders/constants/order-status'
+import type { AutoAssignSystemResult } from '../orders/orders.service'
+import { OrdersService } from '../orders/orders.service'
 import { OrderTransitionService } from '../orders/order-transition.service'
 import { OrdersRepository } from '../orders/orders.repository'
 import { presentOrderDetail } from '../orders/order-presenter'
@@ -19,6 +21,7 @@ export class PaymentsService {
     @Inject(ConfigService) private readonly config: ConfigService,
     @Inject(PaymentsRepository) private readonly repository: PaymentsRepository,
     @Inject(OrdersRepository) private readonly ordersRepository: OrdersRepository,
+    @Inject(OrdersService) private readonly ordersService: OrdersService,
     @Inject(OrderTransitionService) private readonly transitions: OrderTransitionService,
   ) {}
 
@@ -79,10 +82,12 @@ export class PaymentsService {
 
     if (payment.status === PAYMENT_STATUS.SUCCESS) {
       await this.writeNotifyLog(payment.id, payment.paymentNo, 'duplicate_success')
+      const autoAssign = await this.tryAutoAssignAfterPayment(payment.id, payment.paymentNo, payment.orderId, requestId)
       const order = await this.ordersRepository.findOrderDetail(Number(payment.orderId))
       return {
         paymentNo: payment.paymentNo,
         status: payment.status,
+        autoAssign,
         order: order ? presentOrderDetail(order) : null,
       }
     }
@@ -146,10 +151,13 @@ export class PaymentsService {
         const latestOrder = await this.ordersRepository.findOrderDetail(Number(payment.orderId))
         if (latestPayment?.status === PAYMENT_STATUS.SUCCESS && latestOrder) {
           await this.writeNotifyLog(payment.id, payment.paymentNo, 'duplicate')
+          const autoAssign = await this.tryAutoAssignAfterPayment(payment.id, payment.paymentNo, payment.orderId, requestId)
+          const latestAssignedOrder = await this.ordersRepository.findOrderDetail(Number(payment.orderId))
           return {
             paymentNo: payment.paymentNo,
             status: PAYMENT_STATUS.SUCCESS,
-            order: presentOrderDetail(latestOrder),
+            autoAssign,
+            order: latestAssignedOrder ? presentOrderDetail(latestAssignedOrder) : presentOrderDetail(latestOrder),
           }
         }
         if (latestOrder?.status === ORDER_STATUS.CANCELLED) {
@@ -162,11 +170,37 @@ export class PaymentsService {
       throw error
     }
 
+    const autoAssign = await this.tryAutoAssignAfterPayment(payment.id, payment.paymentNo, payment.orderId, requestId)
     const order = await this.ordersRepository.findOrderDetail(Number(payment.orderId))
     return {
       paymentNo: payment.paymentNo,
       status: PAYMENT_STATUS.SUCCESS,
+      autoAssign,
       order: order ? presentOrderDetail(order) : null,
+    }
+  }
+
+  private async tryAutoAssignAfterPayment(
+    paymentId: bigint,
+    paymentNo: string,
+    orderId: bigint,
+    requestId?: string,
+  ): Promise<AutoAssignSystemResult | null> {
+    try {
+      return await this.ordersService.autoAssignOrderBySystem(Number(orderId), {
+        requestId,
+        source: 'payment_success',
+        remark: 'auto assign after payment success',
+      })
+    }
+    catch {
+      try {
+        await this.writeNotifyLog(paymentId, paymentNo, 'auto_assign_fail')
+      }
+      catch {
+        // Payment success must remain authoritative even if dispatch failure logging fails.
+      }
+      return null
     }
   }
 

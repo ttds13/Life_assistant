@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import type { StaffTask, StaffTaskStatus } from '@/api/types/staff'
-import { acceptStaffTask, checkinStaffTask, completeStaffTask, getStaffTaskDetail, rejectStaffTask, startStaffTask } from '@/api/staff'
+import { acceptStaffTask, checkinStaffTask, claimStaffTask, completeStaffTask, getStaffTaskDetail, rejectStaffTask, startStaffTask } from '@/api/staff'
 
 definePage({
   style: {
@@ -9,11 +9,16 @@ definePage({
 })
 
 const taskId = ref(0)
+const taskGroup = ref<'grab' | 'dispatch'>('dispatch')
 const task = ref<StaffTask | null>(null)
 const loading = ref(true)
 const actionLoading = ref(false)
 
 const statusInfo = computed(() => {
+  if (task.value?.group === 'grab' && task.value.status === 'pending_accept') {
+    return { title: '可接订单', desc: '请确认时间和地址后领取', next: '下一步：立即接单' }
+  }
+
   const map: Record<StaffTaskStatus, { title: string, desc: string, next: string }> = {
     pending_accept: { title: '待接单', desc: '请确认时间和地址后接单', next: '下一步：接单或拒单' },
     accepted: { title: '已接单', desc: '请按预约时间准时上门', next: '下一步：上门打卡' },
@@ -29,6 +34,9 @@ const statusInfo = computed(() => {
 
 const actionConfig = computed(() => {
   const status = task.value?.status
+  if (status === 'pending_accept' && task.value?.group === 'grab')
+    return { primary: '立即接单', secondary: '' }
+
   switch (status) {
     case 'pending_accept':
       return { primary: '接单', secondary: '拒单' }
@@ -49,7 +57,7 @@ function rowValue(value?: string) {
 
 async function loadTask() {
   loading.value = true
-  task.value = await getStaffTaskDetail(taskId.value || 901)
+  task.value = await getStaffTaskDetail(taskId.value || 901, taskGroup.value)
   loading.value = false
 }
 
@@ -71,8 +79,15 @@ async function doPrimary() {
   actionLoading.value = true
   try {
     if (task.value.status === 'pending_accept') {
-      task.value = await acceptStaffTask(task.value.id)
-      uni.showToast({ icon: 'success', title: '已接单' })
+      if (task.value.group === 'grab') {
+        task.value = await claimStaffTask(task.value.id, task.value.version)
+        taskGroup.value = 'dispatch'
+        uni.showToast({ icon: 'success', title: '领取成功' })
+      }
+      else {
+        task.value = await acceptStaffTask(task.value.id)
+        uni.showToast({ icon: 'success', title: '已接单' })
+      }
     }
     else if (task.value.status === 'accepted') {
       task.value = await checkinStaffTask(task.value.id, task.value.version)
@@ -117,14 +132,14 @@ function onPrimary() {
 function onSecondary() {
   if (!task.value)
     return
-  if (task.value.status === 'pending_accept') {
+  if (task.value.status === 'pending_accept' && task.value.group === 'dispatch') {
     uni.showModal({
       title: '拒单确认',
       content: '确定拒绝该任务吗？',
       success: async (res) => {
         if (!res.confirm)
           return
-        task.value = await rejectStaffTask(task.value!.id)
+        task.value = await rejectStaffTask(task.value!.id, 'staff rejected', task.value!.version)
         uni.showToast({ icon: 'success', title: '已拒单' })
       },
     })
@@ -137,6 +152,7 @@ function onSecondary() {
 
 onLoad((query) => {
   taskId.value = Number(query?.id || 901)
+  taskGroup.value = query?.group === 'grab' ? 'grab' : 'dispatch'
   loadTask()
 })
 

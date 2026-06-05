@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import type { StaffTask, StaffTaskGroup } from '@/api/types/staff'
-import { acceptStaffTask, getStaffDashboard, getStaffTasks, rejectStaffTask } from '@/api/staff'
+import { acceptStaffTask, claimStaffTask, getStaffDashboard, getStaffTasks, rejectStaffTask } from '@/api/staff'
 
 definePage({
   style: {
@@ -46,13 +46,19 @@ function onWriteOrder() {
 }
 
 function onTaskTap(task: StaffTask) {
-  uni.navigateTo({ url: `/pages/staff/order-detail?id=${task.id}` })
+  uni.navigateTo({ url: `/pages/staff/order-detail?id=${task.id}&group=${task.group}` })
 }
 
 async function onPrimary(task: StaffTask) {
   if (task.status === 'pending_accept') {
-    await acceptStaffTask(task.id)
-    uni.showToast({ icon: 'success', title: '已接单' })
+    if (task.group === 'grab') {
+      await claimStaffTask(task.id, task.version)
+      uni.showToast({ icon: 'success', title: '领取成功' })
+    }
+    else {
+      await acceptStaffTask(task.id)
+      uni.showToast({ icon: 'success', title: '已接单' })
+    }
     loadData()
     return
   }
@@ -60,7 +66,7 @@ async function onPrimary(task: StaffTask) {
 }
 
 function onSecondary(task: StaffTask) {
-  if (task.status !== 'pending_accept') {
+  if (task.status !== 'pending_accept' || task.group === 'grab') {
     onTaskTap(task)
     return
   }
@@ -70,7 +76,7 @@ function onSecondary(task: StaffTask) {
     success: async (res) => {
       if (!res.confirm)
         return
-      await rejectStaffTask(task.id)
+      await rejectStaffTask(task.id, 'staff rejected', task.version)
       uni.showToast({ icon: 'success', title: '已拒单' })
       loadData()
     },

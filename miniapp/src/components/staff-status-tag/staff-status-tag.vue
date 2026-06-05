@@ -28,4 +28,3 @@ const sizeClass = computed(() => props.size === 'sm' ? 'text-[22rpx] px-2 py-1' 
     {{ config.text }}
   </text>
 </template>
-

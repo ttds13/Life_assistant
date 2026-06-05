@@ -5,8 +5,10 @@ import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { ORDER_ACTION } from './constants/order-action'
 import { ORDER_STATUS } from './constants/order-status'
+import type { AutoAssignOrderDto } from './dto/auto-assign-order.dto'
 import type { AdminOrderRemarkDto } from './dto/admin-order-remark.dto'
 import type { AdminQueryOrdersDto } from './dto/admin-query-orders.dto'
+import type { AdminUpdateOrderDto } from './dto/admin-update-order.dto'
 import type { AssignOrderDto } from './dto/assign-order.dto'
 import type { CompleteServiceDto } from './dto/complete-service.dto'
 import type { CreateOrderDto } from './dto/create-order.dto'
@@ -25,6 +27,22 @@ import {
 } from './order-presenter'
 import { OrderDetailRecord, OrdersRepository } from './orders.repository'
 
+type AutoAssignSource = 'payment_success' | 'admin_retry' | 'job_retry'
+type AutoAssignSkipReason = 'order_not_pending_dispatch' | 'already_assigned' | 'no_available_staff'
+
+export interface AutoAssignSystemOptions {
+  requestId?: string
+  source?: AutoAssignSource
+  remark?: string
+}
+
+export interface AutoAssignSystemResult {
+  assigned: boolean
+  reason?: AutoAssignSkipReason
+  staffId?: number
+  orderStatus: string
+}
+
 @Injectable()
 export class OrdersService {
   constructor(
@@ -42,8 +60,8 @@ export class OrdersService {
   }
 
   async listUserOrders(userId: number, query: QueryOrdersDto) {
-    const page = query.page || 1
-    const pageSize = query.pageSize || 20
+    const page = this.normalizePositiveInt(query.page, 1)
+    const pageSize = this.normalizePositiveInt(query.pageSize, 20, 100)
     const result = await this.repository.findUserOrders({
       userId,
       status: query.status,
@@ -230,6 +248,165 @@ export class OrdersService {
     return presentAdminOrderDetail(order)
   }
 
+  async updateAdminOrder(adminId: number, orderId: number, dto: AdminUpdateOrderDto, requestId?: string, ip?: string) {
+    const current = await this.getOrderDetailOrThrow(orderId)
+    const data: Prisma.OrderUncheckedUpdateInput = {}
+    let nextAppointmentStart = current.appointmentStartTime
+    let nextAppointmentEnd = current.appointmentEndTime
+
+    if (dto.status !== undefined) data.status = dto.status
+    if (dto.staffId !== undefined) {
+      if (dto.staffId === null) {
+        data.staffId = null
+      }
+      else {
+        const staff = await this.repository.client.staff.findFirst({
+          where: { id: BigInt(dto.staffId), deletedAt: null },
+        })
+        if (!staff) {
+          throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
+        }
+        data.staffId = BigInt(dto.staffId)
+      }
+    }
+    if (dto.appointmentStartTime !== undefined) {
+      nextAppointmentStart = this.parseAdminDate(dto.appointmentStartTime, 'appointmentStartTime')
+      data.appointmentStartTime = nextAppointmentStart
+    }
+    if (dto.appointmentEndTime !== undefined) {
+      nextAppointmentEnd = this.parseAdminDate(dto.appointmentEndTime, 'appointmentEndTime')
+      data.appointmentEndTime = nextAppointmentEnd
+    }
+    if (nextAppointmentStart >= nextAppointmentEnd) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'appointment start must be before end', 400)
+    }
+    if (dto.originalAmount !== undefined) data.originalAmount = new Prisma.Decimal(dto.originalAmount)
+    if (dto.discountAmount !== undefined) data.discountAmount = new Prisma.Decimal(dto.discountAmount)
+    if (dto.payableAmount !== undefined) data.payableAmount = new Prisma.Decimal(dto.payableAmount)
+    if (dto.paidAmount !== undefined) data.paidAmount = new Prisma.Decimal(dto.paidAmount)
+    if (dto.remark !== undefined) data.remark = dto.remark
+    if (dto.adminRemark !== undefined) data.adminRemark = dto.adminRemark
+    if (dto.cityCode !== undefined) data.cityCode = dto.cityCode
+    if (dto.source !== undefined) data.source = dto.source
+    if (dto.createdAt !== undefined) data.createdAt = this.parseAdminDate(dto.createdAt, 'createdAt')
+    if (dto.paidAt !== undefined) data.paidAt = dto.paidAt === null ? null : this.parseAdminDate(dto.paidAt, 'paidAt')
+    if (dto.completedAt !== undefined) {
+      data.completedAt = dto.completedAt === null ? null : this.parseAdminDate(dto.completedAt, 'completedAt')
+    }
+    if (dto.cancelledAt !== undefined) {
+      data.cancelledAt = dto.cancelledAt === null ? null : this.parseAdminDate(dto.cancelledAt, 'cancelledAt')
+    }
+    if (dto.cancelReason !== undefined) data.cancelReason = dto.cancelReason
+
+    if (Object.keys(data).length === 0) {
+      return presentAdminOrderDetail(current)
+    }
+
+    await this.repository.client.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id: BigInt(orderId) },
+        data,
+      })
+      await this.adminAudit.writeWithClient(tx, {
+        adminId,
+        action: 'order:update',
+        module: 'order',
+        targetType: 'order',
+        targetId: current.id,
+        requestId,
+        ip,
+        detail: {
+          before: this.adminOrderAuditSnapshot(current),
+          after: dto,
+        },
+      })
+    })
+
+    return this.getAdminOrderDetail(orderId)
+  }
+
+  async deleteAdminOrder(adminId: number, orderId: number, requestId?: string, ip?: string) {
+    const current = await this.getOrderDetailOrThrow(orderId)
+    const orderBigInt = BigInt(orderId)
+
+    await this.repository.client.$transaction(async (tx) => {
+      const payments = await tx.payment.findMany({
+        where: { orderId: orderBigInt },
+        select: { id: true, paymentNo: true },
+      })
+      const paymentIds = payments.map(payment => payment.id)
+      const paymentNos = payments.map(payment => payment.paymentNo)
+      if (paymentIds.length) {
+        await tx.refund.deleteMany({ where: { paymentId: { in: paymentIds } } })
+        await tx.paymentNotifyLog.deleteMany({
+          where: {
+            OR: [
+              { paymentId: { in: paymentIds } },
+              { paymentNo: { in: paymentNos } },
+            ],
+          },
+        })
+      }
+      await tx.refund.deleteMany({ where: { orderId: orderBigInt } })
+      await tx.payment.deleteMany({ where: { orderId: orderBigInt } })
+
+      const reviews = await tx.review.findMany({
+        where: { orderId: orderBigInt },
+        select: { id: true },
+      })
+      const reviewIds = reviews.map(review => review.id)
+      if (reviewIds.length) {
+        await tx.reviewImage.deleteMany({ where: { reviewId: { in: reviewIds } } })
+      }
+      await tx.review.deleteMany({ where: { orderId: orderBigInt } })
+
+      const tickets = await tx.ticket.findMany({
+        where: { orderId: orderBigInt },
+        select: { id: true },
+      })
+      const ticketIds = tickets.map(ticket => ticket.id)
+      if (ticketIds.length) {
+        await tx.ticketMessage.deleteMany({ where: { ticketId: { in: ticketIds } } })
+      }
+      await tx.ticket.deleteMany({ where: { orderId: orderBigInt } })
+
+      await tx.memberCardRecord.deleteMany({ where: { orderId: orderBigInt } })
+      await tx.staffIncomeRecord.deleteMany({ where: { orderId: orderBigInt } })
+      await tx.servicePhoto.deleteMany({ where: { orderId: orderBigInt } })
+      await tx.serviceCheckin.deleteMany({ where: { orderId: orderBigInt } })
+      await tx.orderAssignment.deleteMany({ where: { orderId: orderBigInt } })
+      await tx.orderStatusLog.deleteMany({ where: { orderId: orderBigInt } })
+      await tx.userCoupon.updateMany({
+        where: { usedOrderId: orderBigInt },
+        data: { usedOrderId: null, usedAt: null },
+      })
+      await tx.file.deleteMany({ where: { bizType: 'order', bizId: orderBigInt } })
+      await tx.order.delete({ where: { id: orderBigInt } })
+
+      await this.adminAudit.writeWithClient(tx, {
+        adminId,
+        action: 'order:delete',
+        module: 'order',
+        targetType: 'order',
+        targetId: current.id,
+        requestId,
+        ip,
+        detail: {
+          orderNo: current.orderNo,
+          status: current.status,
+          userId: Number(current.userId),
+          staffId: current.staffId ? Number(current.staffId) : null,
+        },
+      })
+    })
+
+    return {
+      id: String(current.id),
+      orderNo: current.orderNo,
+      deleted: true,
+    }
+  }
+
   async assignOrder(adminId: number, orderId: number, dto: AssignOrderDto, requestId?: string, ip?: string) {
     const staff = await this.repository.client.staff.findFirst({
       where: { id: BigInt(dto.staffId), status: 1, deletedAt: null },
@@ -279,6 +456,132 @@ export class OrdersService {
     return this.getAdminOrderDetail(orderId)
   }
 
+  async autoAssignOrderBySystem(orderId: number, options: AutoAssignSystemOptions = {}): Promise<AutoAssignSystemResult> {
+    const current = await this.getOrderDetailOrThrow(orderId)
+    if (current.status !== ORDER_STATUS.PENDING_DISPATCH) {
+      return {
+        assigned: false,
+        reason: 'order_not_pending_dispatch',
+        staffId: current.staffId ? Number(current.staffId) : undefined,
+        orderStatus: current.status,
+      }
+    }
+    if (current.staffId) {
+      return {
+        assigned: false,
+        reason: 'already_assigned',
+        staffId: Number(current.staffId),
+        orderStatus: current.status,
+      }
+    }
+
+    const staff = await this.repository.findAutoAssignableStaff(orderId)
+    if (!staff) {
+      return {
+        assigned: false,
+        reason: 'no_available_staff',
+        orderStatus: current.status,
+      }
+    }
+
+    try {
+      await this.transitions.transition({
+        orderId: BigInt(orderId),
+        action: ORDER_ACTION.AUTO_ASSIGN,
+        operatorType: 'system',
+        operatorId: BigInt(0),
+        requestId: options.requestId,
+        remark: options.remark || 'auto assign by staff id asc',
+        detail: {
+          staffId: Number(staff.id),
+          strategy: 'staff_id_asc',
+          source: options.source || 'admin_retry',
+        },
+        orderData: { staffId: staff.id },
+        check: (order) => {
+          if (order.staffId) {
+            throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'order already assigned', 409)
+          }
+        },
+        sideEffect: async (tx, order, now) => {
+          await tx.orderAssignment.create({
+            data: {
+              orderId: order.id,
+              staffId: staff.id,
+              assignType: 'auto',
+              assignStatus: 'pending',
+              assignedBy: BigInt(0),
+              assignedAt: now,
+            },
+          })
+        },
+      })
+    }
+    catch (error) {
+      if (error instanceof BusinessException
+        && (error.code === ErrorCode.ORDER_STATUS_INVALID || error.code === ErrorCode.ORDER_ASSIGNMENT_INVALID)) {
+        const latest = await this.repository.findOrderDetail(orderId)
+        if (latest?.staffId) {
+          return {
+            assigned: false,
+            reason: 'already_assigned',
+            staffId: Number(latest.staffId),
+            orderStatus: latest.status,
+          }
+        }
+        if (latest && latest.status !== ORDER_STATUS.PENDING_DISPATCH) {
+          return {
+            assigned: false,
+            reason: 'order_not_pending_dispatch',
+            orderStatus: latest.status,
+          }
+        }
+      }
+      throw error
+    }
+
+    return {
+      assigned: true,
+      staffId: Number(staff.id),
+      orderStatus: ORDER_STATUS.DISPATCHED,
+    }
+  }
+
+  async autoAssignOrder(adminId: number, orderId: number, dto: AutoAssignOrderDto, requestId?: string, ip?: string) {
+    const result = await this.autoAssignOrderBySystem(orderId, {
+      requestId,
+      source: 'admin_retry',
+      remark: dto.remark || 'admin retry auto assign by staff id asc',
+    })
+
+    if (!result.assigned) {
+      if (result.reason === 'no_available_staff') {
+        throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'no available staff', 409)
+      }
+      throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order is not pending dispatch', 409, result)
+    }
+
+    await this.adminAudit.write({
+      adminId,
+      action: 'order:auto-assign',
+      module: 'order',
+      targetType: 'order',
+      targetId: orderId,
+      requestId,
+      ip,
+      detail: {
+        staffId: result.staffId,
+        strategy: 'staff_id_asc',
+        remark: dto.remark || '',
+        source: 'admin_retry',
+        fromStatus: ORDER_STATUS.PENDING_DISPATCH,
+        toStatus: ORDER_STATUS.DISPATCHED,
+      },
+    })
+
+    return this.getAdminOrderDetail(orderId)
+  }
+
   async updateAdminOrderRemark(adminId: number, orderId: number, dto: AdminOrderRemarkDto, requestId?: string, ip?: string) {
     const current = await this.getOrderDetailOrThrow(orderId)
     const nextRemark = dto.remark.trim()
@@ -312,8 +615,8 @@ export class OrdersService {
   }
 
   async listStaffOrders(staffId: number, query: QueryOrdersDto) {
-    const page = query.page || 1
-    const pageSize = query.pageSize || 20
+    const page = this.normalizePositiveInt(query.page, 1)
+    const pageSize = this.normalizePositiveInt(query.pageSize, 20, 100)
     const result = await this.repository.findStaffOrders({
       staffId,
       status: query.status,
@@ -326,6 +629,44 @@ export class OrdersService {
       pageSize,
       total: result.total,
     }
+  }
+
+  async listAvailableStaffOrders(staffId: number, query: QueryOrdersDto) {
+    await this.assertStaffAvailable(staffId)
+    const busyCount = await this.repository.countStaffBusyOrders(staffId)
+
+    const page = this.normalizePositiveInt(query.page, 1)
+    const pageSize = this.normalizePositiveInt(query.pageSize, 20, 100)
+    if (busyCount > 0) {
+      return {
+        items: [],
+        page,
+        pageSize,
+        total: 0,
+      }
+    }
+
+    const result = await this.repository.findAvailableStaffOrders({
+      page,
+      pageSize,
+    })
+    return {
+      items: result.items.map(order => presentUserOrder(order)),
+      page,
+      pageSize,
+      total: result.total,
+    }
+  }
+
+  async getAvailableStaffOrderDetail(staffId: number, orderId: number) {
+    await this.assertStaffCanTakeOrder(staffId)
+
+    const order = await this.getOrderDetailOrThrow(orderId)
+    if (order.status !== ORDER_STATUS.PENDING_DISPATCH || order.staffId) {
+      throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'order is not available', 409)
+    }
+
+    return presentOrderDetail(order)
   }
 
   async getStaffProfile(staffId: number, _period?: string) {
@@ -420,6 +761,42 @@ export class OrdersService {
         if (result.count !== 1) {
           throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'assignment is not pending', 409)
         }
+      },
+    })
+
+    return this.getStaffOrderDetail(staffId, orderId)
+  }
+
+  async staffClaim(staffId: number, orderId: number, dto: TransitionVersionDto, requestId?: string) {
+    await this.assertStaffCanTakeOrder(staffId)
+
+    await this.transitions.transition({
+      orderId: BigInt(orderId),
+      action: ORDER_ACTION.STAFF_CLAIM,
+      operatorType: 'staff',
+      operatorId: BigInt(staffId),
+      requestId,
+      version: dto.version,
+      remark: dto.reason || 'staff claimed order',
+      detail: { staffId },
+      orderData: { staffId: BigInt(staffId) },
+      check: (order) => {
+        if (order.staffId) {
+          throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'order already assigned', 409)
+        }
+      },
+      sideEffect: async (tx, order, now) => {
+        await tx.orderAssignment.create({
+          data: {
+            orderId: order.id,
+            staffId: BigInt(staffId),
+            assignType: 'claim',
+            assignStatus: 'accepted',
+            assignedBy: BigInt(staffId),
+            assignedAt: now,
+            acceptedAt: now,
+          },
+        })
       },
     })
 
@@ -600,6 +977,22 @@ export class OrdersService {
     }
   }
 
+  private async assertStaffCanTakeOrder(staffId: number) {
+    await this.assertStaffAvailable(staffId)
+
+    const busyCount = await this.repository.countStaffBusyOrders(staffId)
+    if (busyCount > 0) {
+      throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'staff has unfinished order', 409)
+    }
+  }
+
+  private async assertStaffAvailable(staffId: number) {
+    const staff = await this.repository.findWorkingStaff(staffId)
+    if (!staff) {
+      throw new BusinessException(ErrorCode.STAFF_FORBIDDEN, 'staff is not available', 403)
+    }
+  }
+
   private parseAppointment(dateText: string, slotText: string) {
     const [startTime, endTime] = slotText.split('-')
     const start = new Date(`${dateText}T${startTime}:00`)
@@ -626,6 +1019,37 @@ export class OrdersService {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid dateEnd', 400)
     }
     return date
+  }
+
+  private parseAdminDate(value: string, field: string) {
+    const normalized = value.includes('T') ? value : value.replace(' ', 'T')
+    const date = new Date(normalized)
+    if (Number.isNaN(date.getTime())) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, `invalid ${field}`, 400)
+    }
+    return date
+  }
+
+  private adminOrderAuditSnapshot(order: OrderDetailRecord) {
+    return {
+      status: order.status,
+      staffId: order.staffId ? Number(order.staffId) : null,
+      appointmentStartTime: order.appointmentStartTime.toISOString(),
+      appointmentEndTime: order.appointmentEndTime.toISOString(),
+      originalAmount: order.originalAmount.toNumber(),
+      discountAmount: order.discountAmount.toNumber(),
+      payableAmount: order.payableAmount.toNumber(),
+      paidAmount: order.paidAmount.toNumber(),
+      remark: order.remark || null,
+      adminRemark: order.adminRemark || null,
+      cityCode: order.cityCode || null,
+      source: order.source,
+      createdAt: order.createdAt.toISOString(),
+      paidAt: order.paidAt?.toISOString() || null,
+      completedAt: order.completedAt?.toISOString() || null,
+      cancelledAt: order.cancelledAt?.toISOString() || null,
+      cancelReason: order.cancelReason || null,
+    }
   }
 
   private normalizePositiveInt(value: unknown, fallback: number, max?: number) {

@@ -14,6 +14,7 @@ import type {
   OrderDetail,
   OrderListItem,
   StaffOption,
+  UpdateOrderPayload,
 } from "./types";
 
 const ADMIN_BASE_URL = "/api/admin";
@@ -116,6 +117,10 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
     columns: [
       { prop: "nickname", label: "用户昵称", minWidth: 140 },
       { prop: "phone", label: "手机号", width: 130 },
+      { prop: "roleType", label: "角色", width: 100, type: "tag" },
+      { prop: "staffId", label: "师傅ID", width: 90 },
+      { prop: "staffStatus", label: "师傅状态", width: 100, type: "tag" },
+      { prop: "staffWorkStatus", label: "工作状态", width: 100, type: "tag" },
       { prop: "city", label: "城市", width: 110 },
       { prop: "orderCount", label: "订单数", width: 90 },
       { prop: "totalPaid", label: "累计消费", width: 120, type: "money" },
@@ -245,6 +250,9 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
     rowActions: [{ key: "addresses", label: "地址", type: "success" }],
     statusOptions: statusOptions.staff,
     columns: [
+      { prop: "userId", label: "用户ID", width: 90 },
+      { prop: "userName", label: "绑定用户", width: 120 },
+      { prop: "userStatus", label: "用户状态", width: 100, type: "tag" },
       { prop: "name", label: "师傅姓名", minWidth: 120 },
       { prop: "phone", label: "手机号", width: 130 },
       { prop: "skills", label: "技能", minWidth: 180 },
@@ -254,6 +262,7 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "status", label: "状态", width: 90, type: "tag" },
     ],
     formItems: [
+      { prop: "userId", label: "绑定用户ID", type: "number" },
       { prop: "name", label: "师傅姓名", type: "text", required: true },
       { prop: "phone", label: "手机号", type: "text", required: true },
       { prop: "password", label: "初始密码", type: "text" },
@@ -435,6 +444,14 @@ const LifeAPI = {
     });
   },
 
+  updateUserRole(id: string, roleType: "user" | "staff") {
+    return request({
+      url: `${ADMIN_BASE_URL}/users/${id}/role`,
+      method: "put",
+      data: { roleType },
+    });
+  },
+
   createResource(module: LifeModuleKey, data: ResourcePayload) {
     assertEditable(module);
     return request({
@@ -477,11 +494,34 @@ const LifeAPI = {
     });
   },
 
+  updateOrder(id: string, data: UpdateOrderPayload) {
+    return request<unknown, OrderDetail>({
+      url: `${ADMIN_BASE_URL}/orders/${id}`,
+      method: "put",
+      data,
+    });
+  },
+
+  deleteOrder(id: string) {
+    return request<unknown, { id: string; orderNo: string; deleted: boolean }>({
+      url: `${ADMIN_BASE_URL}/orders/${id}`,
+      method: "delete",
+    });
+  },
+
   assignOrder(id: string, data: { staffId: string; remark?: string }) {
     return request({
       url: `${ADMIN_BASE_URL}/orders/${id}/assign`,
       method: "post",
       data: { ...data, staffId: Number(data.staffId) },
+    });
+  },
+
+  autoAssignOrder(id: string, data?: { remark?: string }) {
+    return request<unknown, OrderDetail>({
+      url: `${ADMIN_BASE_URL}/orders/${id}/auto-assign`,
+      method: "post",
+      data: data || {},
     });
   },
 

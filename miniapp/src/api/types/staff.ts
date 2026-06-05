@@ -29,6 +29,7 @@ export interface StaffTask {
   rawStatus?: string
   version?: number
   group: StaffTaskGroup
+  canReject?: boolean
   serviceName: string
   serviceSpec?: string
   serviceRequirement?: string

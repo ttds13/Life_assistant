@@ -14,6 +14,7 @@ const period = ref<StaffStatsPeriod>('today')
 const staffName = ref('黄岛爱干净')
 const avatar = ref('/static/images/default-avatar.png')
 const verified = ref(true)
+const staffId = ref(0)
 const staffPhone = ref('')
 const statsMap = ref<Record<StaffStatsPeriod, StaffProfileStats> | null>(null)
 
@@ -55,6 +56,7 @@ function formatMoney(value?: number) {
 
 async function loadProfile() {
   const profile = await getStaffProfile(period.value)
+  staffId.value = profile.staffId || 0
   staffName.value = profile.staffName
   avatar.value = profile.avatar || '/static/images/default-avatar.png'
   verified.value = profile.verified
@@ -110,6 +112,12 @@ onShow(() => {
           <view class="mt-[18rpx] flex items-center">
             <text class="i-carbon-phone text-[30rpx] text-white mr-[10rpx]" />
             <text class="truncate text-[28rpx] text-white opacity-90">{{ staffPhone || '手机号未设置' }}</text>
+          </view>
+          <view class="mt-[10rpx] flex items-center">
+            <text class="i-carbon-identification text-[30rpx] text-white mr-[10rpx]" />
+            <text class="truncate text-[26rpx] text-white opacity-80">
+              师傅ID {{ staffId || '--' }}
+            </text>
           </view>
         </view>
       </view>

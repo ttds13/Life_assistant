@@ -6,9 +6,10 @@ import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { ORDER_STATUS } from '../orders/constants/order-status'
 import { PrismaService } from '../prisma/prisma.service'
-import type { AdminAuditReviewDto, AdminPageQueryDto, AdminStatusDto } from './dto/admin-business.dto'
+import type { AdminAuditReviewDto, AdminPageQueryDto, AdminStatusDto, AdminUserRoleDto } from './dto/admin-business.dto'
 
 type JsonRecord = Record<string, unknown>
+type StaffBindingClient = PrismaService | Prisma.TransactionClient
 
 interface AdminWriteContext {
   adminId: number
@@ -171,18 +172,51 @@ export class AdminBusinessService {
       }),
     ])
 
-    return this.pageResult(users.map(user => ({
-      id: String(user.id),
-      nickname: user.nickname || `用户${Number(user.id)}`,
-      phone: user.phone || '',
-      gender: user.gender,
-      cityCode: user.cityCode || '',
-      city: user.cityCode || '',
-      orderCount: user._count.orders,
-      totalPaid: user.orders.reduce((sum, order) => sum + this.decimalToNumber(order.paidAmount), 0),
-      status: this.activeStatus(user.status),
-      createdAt: this.formatDateTime(user.createdAt),
-    })), page, total)
+    const userIds = users.map(user => user.id)
+    const staffUuids = users.map(user => this.devStaffUuid(user.id))
+    const staffRoles = users.length
+      ? await this.prisma.staff.findMany({
+        where: {
+          deletedAt: null,
+          OR: [
+            { userId: { in: this.uniqueBigInts(userIds) } },
+            { uuid: { in: staffUuids } },
+          ],
+        },
+        select: { id: true, userId: true, uuid: true, status: true, workStatus: true },
+      })
+      : []
+    const legacyUserIdByUuid = new Map(users.map(user => [this.devStaffUuid(user.id), String(user.id)]))
+    const staffByUserId = new Map<string, (typeof staffRoles)[number]>()
+    for (const staff of staffRoles) {
+      if (staff.userId) staffByUserId.set(String(staff.userId), staff)
+    }
+    for (const staff of staffRoles) {
+      const legacyUserId = legacyUserIdByUuid.get(staff.uuid)
+      if (legacyUserId && !staffByUserId.has(legacyUserId)) {
+        staffByUserId.set(legacyUserId, staff)
+      }
+    }
+
+    return this.pageResult(users.map((user) => {
+      const staff = staffByUserId.get(String(user.id))
+      return {
+        id: String(user.id),
+        nickname: user.nickname || `用户${Number(user.id)}`,
+        phone: user.phone || '',
+        roleType: staff ? 'staff' : 'user',
+        staffId: staff ? String(staff.id) : '',
+        staffStatus: staff ? this.staffStatus(staff.status) : '',
+        staffWorkStatus: staff ? this.workStatus(staff.workStatus) : '',
+        gender: user.gender,
+        cityCode: user.cityCode || '',
+        city: user.cityCode || '',
+        orderCount: user._count.orders,
+        totalPaid: user.orders.reduce((sum, order) => sum + this.decimalToNumber(order.paidAmount), 0),
+        status: this.activeStatus(user.status),
+        createdAt: this.formatDateTime(user.createdAt),
+      }
+    }), page, total)
   }
 
   async getUser(id: number) {
@@ -218,6 +252,20 @@ export class AdminBusinessService {
 
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({ where: { id: BigInt(id) }, data })
+      const staff = await this.findStaffForUser(tx, id)
+      if (staff) {
+        const staffData: Prisma.StaffUpdateInput = {
+          name: updated.nickname || staff.name,
+          phone: updated.phone || staff.phone || this.devStaffPhone(updated.id),
+          avatarUrl: updated.avatarUrl || '',
+          cityCode: updated.cityCode || staff.cityCode,
+        }
+        if (Object.prototype.hasOwnProperty.call(body, 'status') && updated.status !== 1) {
+          staffData.status = 0
+          staffData.workStatus = 0
+        }
+        await tx.staff.update({ where: { id: staff.id }, data: staffData })
+      }
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
         action: 'user:update',
@@ -243,6 +291,15 @@ export class AdminBusinessService {
 
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: BigInt(id) }, data: { status } })
+      if (status !== 1) {
+        const staff = await this.findStaffForUser(tx, id)
+        if (staff) {
+          await tx.staff.update({
+            where: { id: staff.id },
+            data: { status: 0, workStatus: 0 },
+          })
+        }
+      }
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
         action: 'user:status:update',
@@ -258,6 +315,97 @@ export class AdminBusinessService {
     return this.getUser(id)
   }
 
+  async updateUserRole(id: number, dto: AdminUserRoleDto, context: AdminWriteContext) {
+    const current = await this.prisma.user.findFirst({ where: { id: BigInt(id), deletedAt: null } })
+    if (!current) throw this.notFound('user not found')
+
+    const existing = await this.findStaffForUser(this.prisma, current.id, true)
+
+    if (dto.roleType === 'staff') {
+      const staff = await this.prisma.$transaction(async (tx) => {
+        const staffData = {
+          userId: current.id,
+          name: current.nickname || existing?.name || `Dev Staff ${Number(current.id)}`,
+          phone: current.phone || existing?.phone || this.devStaffPhone(current.id),
+          avatarUrl: current.avatarUrl || '',
+          status: 1,
+          workStatus: existing?.workStatus && existing.workStatus !== 0 ? existing.workStatus : 1,
+          deletedAt: null,
+          cityCode: current.cityCode || existing?.cityCode || 'dev',
+        }
+        const updated = existing
+          ? await tx.staff.update({
+            where: { id: existing.id },
+            data: staffData,
+          })
+          : await tx.staff.create({
+            data: {
+              ...staffData,
+              uuid: this.devStaffUuid(current.id),
+              passwordHash: 'dev',
+            },
+          })
+        await this.audit.writeWithClient(tx, {
+          adminId: context.adminId,
+          action: 'user:role:update',
+          module: 'user',
+          targetType: 'user',
+          targetId: id,
+          requestId: context.requestId,
+          ip: context.ip,
+          detail: { before: existing?.deletedAt ? 'user' : existing ? 'staff' : 'user', after: 'staff', staffId: Number(updated.id) },
+        })
+        return updated
+      })
+
+      return {
+        id: String(current.id),
+        roleType: 'staff',
+        staffId: String(staff.id),
+        staffStatus: this.staffStatus(staff.status),
+        staffWorkStatus: this.workStatus(staff.workStatus),
+      }
+    }
+
+    if (existing && !existing.deletedAt) {
+      const activeOrderCount = await this.prisma.order.count({
+        where: {
+          staffId: existing.id,
+          status: { notIn: [ORDER_STATUS.COMPLETED, ORDER_STATUS.CANCELLED, ORDER_STATUS.REFUNDED] },
+        },
+      })
+      if (activeOrderCount > 0) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'staff has active orders', 409, { activeOrderCount })
+      }
+
+      const deletedAt = new Date()
+      await this.prisma.$transaction(async (tx) => {
+        await tx.staff.update({
+          where: { id: existing.id },
+          data: { status: 0, workStatus: 0, deletedAt },
+        })
+        await this.audit.writeWithClient(tx, {
+          adminId: context.adminId,
+          action: 'user:role:update',
+          module: 'user',
+          targetType: 'user',
+          targetId: id,
+          requestId: context.requestId,
+          ip: context.ip,
+          detail: { before: 'staff', after: 'user', staffId: Number(existing.id), deletedAt: deletedAt.toISOString() },
+        })
+      })
+    }
+
+    return {
+      id: String(current.id),
+      roleType: 'user',
+      staffId: '',
+      staffStatus: '',
+      staffWorkStatus: '',
+    }
+  }
+
   async deleteUser(id: number, context: AdminWriteContext) {
     const current = await this.prisma.user.findFirst({ where: { id: BigInt(id), deletedAt: null } })
     if (!current) throw this.notFound('user not found')
@@ -268,6 +416,13 @@ export class AdminBusinessService {
         where: { id: BigInt(id) },
         data: { status: 0, deletedAt },
       })
+      const staff = await this.findStaffForUser(tx, id)
+      if (staff) {
+        await tx.staff.update({
+          where: { id: staff.id },
+          data: { status: 0, workStatus: 0, deletedAt },
+        })
+      }
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
         action: 'user:delete',
@@ -693,6 +848,9 @@ export class AdminBusinessService {
       this.prisma.staff.count({ where }),
       this.prisma.staff.findMany({
         where,
+        include: {
+          user: { select: { id: true, nickname: true, phone: true, status: true } },
+        },
         orderBy: [{ status: 'desc' }, { rating: 'desc' }, { id: 'desc' }],
         skip: this.skip(page),
         take: page.pageSize,
@@ -745,47 +903,79 @@ export class AdminBusinessService {
   async createStaff(body: JsonRecord, context: AdminWriteContext) {
     const plainPassword = this.optionalString(body.password) || '123456'
     const passwordHash = await hashAdminPassword(plainPassword)
+    const name = this.requiredString(body.name, 'name required')
+    const phone = this.requiredString(body.phone, 'phone required')
+    const avatarUrl = this.optionalString(body.avatarUrl)
+    const cityCode = this.optionalString(body.cityCode)
+    const userId = this.optionalPositiveInt(body.userId)
+    const status = this.staffStatusToNumber(this.optionalString(body.status) || 'active')
     const created = await this.prisma.$transaction(async (tx) => {
-      const staff = await tx.staff.create({
-        data: {
-          name: this.requiredString(body.name, 'name required'),
-          phone: this.requiredString(body.phone, 'phone required'),
-          passwordHash,
-          avatarUrl: this.optionalString(body.avatarUrl),
-          idCard: this.optionalString(body.idCard),
-          skills: this.parseJsonArray(body.skills),
-          cityCode: this.optionalString(body.cityCode),
-          status: this.staffStatusToNumber(this.optionalString(body.status) || 'active'),
-        },
-      })
+      const user = await this.ensureUserForStaff(tx, { userId, name, phone, avatarUrl, cityCode })
+      const existing = await this.findStaffForUser(tx, Number(user.id), true)
+      const staffData = {
+        userId: user.id,
+        name,
+        phone,
+        avatarUrl,
+        idCard: this.optionalString(body.idCard),
+        skills: this.parseJsonArray(body.skills),
+        cityCode,
+        status,
+        workStatus: status === 1 ? 1 : 0,
+        deletedAt: null,
+      }
+      const staff = existing
+        ? await tx.staff.update({
+          where: { id: existing.id },
+          data: staffData,
+        })
+        : await tx.staff.create({
+          data: {
+            ...staffData,
+            uuid: this.devStaffUuid(user.id),
+            passwordHash,
+          },
+        })
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
-        action: 'staff:create',
+        action: existing ? 'staff:restore' : 'staff:create',
         module: 'staff',
         targetType: 'staff',
         targetId: staff.id,
         requestId: context.requestId,
         ip: context.ip,
-        detail: { name: staff.name, phone: staff.phone },
+        detail: { name: staff.name, phone: staff.phone, userId: Number(user.id) },
       })
       return staff
     })
-    return created
+    return this.presentStaff(created)
   }
 
   async updateStaff(id: number, body: JsonRecord, context: AdminWriteContext) {
     const current = await this.prisma.staff.findFirst({ where: { id: BigInt(id), deletedAt: null } })
     if (!current) throw this.notFound('staff not found')
+    const name = this.optionalString(body.name) ?? current.name
+    const phone = this.optionalString(body.phone) ?? current.phone
+    const avatarUrl = this.optionalString(body.avatarUrl)
+    const cityCode = this.optionalString(body.cityCode)
     const updated = await this.prisma.$transaction(async (tx) => {
+      const user = await this.ensureUserForStaff(tx, {
+        userId: this.optionalPositiveInt(body.userId) || this.boundUserIdFromStaff(current),
+        name,
+        phone,
+        avatarUrl,
+        cityCode,
+      })
       const staff = await tx.staff.update({
         where: { id: BigInt(id) },
         data: {
-          name: this.optionalString(body.name) ?? current.name,
-          phone: this.optionalString(body.phone) ?? current.phone,
-          avatarUrl: this.optionalString(body.avatarUrl),
+          userId: user.id,
+          name,
+          phone,
+          avatarUrl,
           idCard: this.optionalString(body.idCard),
           skills: body.skills === undefined ? current.skills as Prisma.InputJsonValue : this.parseJsonArray(body.skills),
-          cityCode: this.optionalString(body.cityCode),
+          cityCode,
           status: body.status ? this.staffStatusToNumber(String(body.status)) : current.status,
           workStatus: body.workStatus ? this.workStatusToNumber(String(body.workStatus)) : current.workStatus,
         },
@@ -798,11 +988,11 @@ export class AdminBusinessService {
         targetId: id,
         requestId: context.requestId,
         ip: context.ip,
-        detail: { before: { name: current.name }, after: { name: staff.name } },
+        detail: { before: { name: current.name, userId: current.userId ? Number(current.userId) : null }, after: { name: staff.name, userId: Number(user.id) } },
       })
       return staff
     })
-    return updated
+    return this.presentStaff(updated)
   }
 
   async updateStaffStatus(id: number, dto: AdminStatusDto, context: AdminWriteContext) {
@@ -1496,6 +1686,8 @@ export class AdminBusinessService {
 
   private presentStaff(item: {
     id: bigint
+    uuid?: string
+    userId?: bigint | null
     name: string
     phone: string
     skills: Prisma.JsonValue | null
@@ -1505,9 +1697,14 @@ export class AdminBusinessService {
     status: number
     workStatus: number
     createdAt: Date
+    user?: { id: bigint, nickname: string | null, phone: string | null, status: number } | null
   }) {
     return {
       id: String(item.id),
+      userId: item.userId ? String(item.userId) : '',
+      userName: item.user?.nickname || item.name,
+      userPhone: item.user?.phone || item.phone,
+      userStatus: item.user ? this.activeStatus(item.user.status) : '',
       name: item.name,
       phone: item.phone,
       skills: this.formatSkills(item.skills),
@@ -1519,6 +1716,84 @@ export class AdminBusinessService {
       workStatus: this.workStatus(item.workStatus),
       createdAt: this.formatDateTime(item.createdAt),
     }
+  }
+
+  private async findStaffForUser(client: StaffBindingClient, userId: bigint | number, includeDeleted = false) {
+    const id = BigInt(userId)
+    return client.staff.findFirst({
+      where: {
+        ...(includeDeleted ? {} : { deletedAt: null }),
+        OR: [
+          { userId: id },
+          { uuid: this.devStaffUuid(id) },
+        ],
+      },
+      orderBy: [{ deletedAt: 'asc' }, { id: 'desc' }],
+    })
+  }
+
+  private async ensureUserForStaff(
+    client: StaffBindingClient,
+    params: {
+      userId?: number
+      name: string
+      phone: string
+      avatarUrl?: string
+      cityCode?: string
+    },
+  ) {
+    const data: Prisma.UserUpdateInput = {
+      nickname: params.name,
+      phone: params.phone,
+      avatarUrl: params.avatarUrl || '',
+      cityCode: params.cityCode || null,
+      status: 1,
+      deletedAt: null,
+    }
+
+    if (params.userId) {
+      const user = await client.user.findUnique({ where: { id: BigInt(params.userId) } })
+      if (!user || user.deletedAt) throw this.notFound('user not found')
+      return client.user.update({
+        where: { id: user.id },
+        data,
+      })
+    }
+
+    const matchedUsers = await client.user.findMany({
+      where: { phone: params.phone, deletedAt: null },
+      orderBy: { id: 'asc' },
+      take: 2,
+    })
+    if (matchedUsers.length > 1) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'multiple users match staff phone; specify userId', 409)
+    }
+    if (matchedUsers[0]) {
+      return client.user.update({
+        where: { id: matchedUsers[0].id },
+        data,
+      })
+    }
+
+    return client.user.create({
+      data: {
+        nickname: params.name,
+        phone: params.phone,
+        avatarUrl: params.avatarUrl || '',
+        cityCode: params.cityCode || null,
+        status: 1,
+      },
+    })
+  }
+
+  private boundUserIdFromStaff(staff: { userId?: bigint | null, uuid: string }) {
+    if (staff.userId) return Number(staff.userId)
+    const legacyPrefix = 'dev-staff-user-'
+    if (staff.uuid.startsWith(legacyPrefix)) {
+      const userId = Number(staff.uuid.slice(legacyPrefix.length))
+      if (Number.isInteger(userId) && userId > 0) return userId
+    }
+    return undefined
   }
 
   private userAuditSnapshot(user: {
@@ -1747,6 +2022,14 @@ export class AdminBusinessService {
     throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid work status', 400)
   }
 
+  private devStaffUuid(userId: bigint | number | string) {
+    return `dev-staff-user-${String(userId)}`
+  }
+
+  private devStaffPhone(userId: bigint | number | string) {
+    return `dev${String(userId)}`.padEnd(11, '0').slice(0, 11)
+  }
+
   private reviewStatus(value: number) {
     if (value === 2) return 'pending'
     return value === 1 ? 'published' : 'rejected'
@@ -1862,6 +2145,12 @@ export class AdminBusinessService {
     if (value === undefined || value === null || value === '') return fallback
     const number = Number(value)
     return Number.isFinite(number) ? number : fallback
+  }
+
+  private optionalPositiveInt(value: unknown) {
+    if (value === undefined || value === null || value === '') return undefined
+    const number = Number(value)
+    return Number.isInteger(number) && number > 0 ? number : undefined
   }
 
   private requiredDecimal(value: unknown, message: string) {

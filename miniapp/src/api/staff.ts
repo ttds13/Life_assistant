@@ -15,8 +15,10 @@ import type {
 } from './types/staff'
 import { http } from '@/http/http'
 import { getCurrentDevStaffId, getStoredDevStaffSession } from '@/utils/devStaffStorage'
+import { ensureDevStaffSession } from '@/utils/devStaffSession'
 
-const staffHeaders = () => {
+async function staffHeaders() {
+  await ensureDevStaffSession()
   const staffId = getCurrentDevStaffId()
   return staffId ? { 'X-Staff-Id': staffId } : undefined
 }
@@ -62,10 +64,12 @@ function photoType(index: number): StaffServicePhoto['type'] {
   return 'other'
 }
 
-function toStaffTask(order: UserOrder | OrderDetail): StaffTask {
+function toStaffTask(order: UserOrder | OrderDetail, group: StaffTaskGroup = 'dispatch'): StaffTask {
   const detail = order as OrderDetail
   const address = detail.address
-  const status = mapStaffStatus(order.status)
+  const status = group === 'grab' && order.status === 'pending_dispatch'
+    ? 'pending_accept'
+    : mapStaffStatus(order.status)
   const photos = detail.servicePhotos?.map((url, index) => ({
     id: `${order.id}-${index}`,
     url,
@@ -80,7 +84,8 @@ function toStaffTask(order: UserOrder | OrderDetail): StaffTask {
     status,
     rawStatus: order.status,
     version: detail.version,
-    group: 'dispatch',
+    group,
+    canReject: group === 'dispatch' && status === 'pending_accept',
     serviceName: order.serviceName,
     serviceSpec: detail.service?.priceUnit,
     serviceRequirement: order.remark || '',
@@ -88,7 +93,7 @@ function toStaffTask(order: UserOrder | OrderDetail): StaffTask {
     customerName: address?.contactName || '',
     customerPhone: address?.contactPhone || '',
     addressText: order.addressText,
-    distanceText: '已派单',
+    distanceText: group === 'grab' ? '可接订单' : '已派单',
     remark: order.remark,
     incomeAmount: order.payableAmount,
     createdAt: order.createdAt,
@@ -114,17 +119,29 @@ async function getStaffOrders(params?: { status?: OrderStatus | 'all', page?: nu
     status: params?.status || 'all',
     page: params?.page || 1,
     pageSize: params?.pageSize || 100,
-  }, staffHeaders())
+  }, await staffHeaders())
+}
+
+async function getAvailableStaffOrders(params?: { page?: number, pageSize?: number }) {
+  return http.get<PageData<UserOrder>>('/staff/available-orders', {
+    page: params?.page || 1,
+    pageSize: params?.pageSize || 100,
+  }, await staffHeaders())
 }
 
 async function transitionStaffOrder(id: number, path: string, data?: Record<string, any>) {
-  const order = await http.post<OrderDetail>(`/staff/orders/${id}/${path}`, data, undefined, staffHeaders())
+  const order = await http.post<OrderDetail>(`/staff/orders/${id}/${path}`, data, undefined, await staffHeaders())
   return toStaffTask(order)
 }
 
 export async function getStaffDashboard() {
-  const result = await getStaffOrders({ status: 'all', page: 1, pageSize: 100 })
-  const tasks = result.items.map(toStaffTask)
+  const [assignedResult, availableResult] = await Promise.all([
+    getStaffOrders({ status: 'all', page: 1, pageSize: 100 }),
+    getAvailableStaffOrders({ page: 1, pageSize: 100 }),
+  ])
+  const dispatchTasks = assignedResult.items.map(order => toStaffTask(order, 'dispatch'))
+  const grabTasks = availableResult.items.map(order => toStaffTask(order, 'grab'))
+  const tasks = [...grabTasks, ...dispatchTasks]
   return {
     pendingTaskCount: tasks.filter(item => item.status === 'pending_accept').length,
     dispatchTaskCount: tasks.filter(item => item.group === 'dispatch' && item.status === 'pending_accept').length,
@@ -139,22 +156,44 @@ export async function getStaffDashboard() {
 
 export async function getStaffTasks(params?: { group?: StaffTaskGroup, status?: StaffOrderFilter }) {
   const status = mapFilterStatus(params?.status)
-  const result = await getStaffOrders({ status, page: 1, pageSize: 100 })
-  const tasks = result.items.map(toStaffTask)
+  const [assignedResult, availableResult] = await Promise.all([
+    params?.group === 'grab'
+      ? Promise.resolve({ items: [] as UserOrder[] })
+      : getStaffOrders({ status, page: 1, pageSize: 100 }),
+    params?.status && params.status !== 'pending'
+      ? Promise.resolve({ items: [] as UserOrder[] })
+      : params?.group === 'dispatch'
+        ? Promise.resolve({ items: [] as UserOrder[] })
+        : getAvailableStaffOrders({ page: 1, pageSize: 100 }),
+  ])
+  const tasks = [
+    ...availableResult.items.map(order => toStaffTask(order, 'grab')),
+    ...assignedResult.items.map(order => toStaffTask(order, 'dispatch')),
+  ]
   return filterTasks(tasks, params)
 }
 
-export async function getStaffTaskDetail(id: number) {
-  const order = await http.get<OrderDetail>(`/staff/orders/${id}`, undefined, staffHeaders())
-  return toStaffTask(order)
+export async function getStaffTaskDetail(id: number, group: StaffTaskGroup = 'dispatch') {
+  const path = group === 'grab' ? `/staff/available-orders/${id}` : `/staff/orders/${id}`
+  const order = await http.get<OrderDetail>(path, undefined, await staffHeaders())
+  return toStaffTask(order, group)
 }
 
 export function acceptStaffTask(id: number) {
   return transitionStaffOrder(id, 'accept')
 }
 
-export function rejectStaffTask(id: number, reason = 'staff rejected') {
-  return transitionStaffOrder(id, 'reject', { reason })
+export function claimStaffTask(id: number, version?: number) {
+  return transitionStaffOrder(id, 'claim', { version })
+}
+
+export async function rejectStaffTask(id: number, reason = 'staff rejected', version?: number) {
+  const task = await transitionStaffOrder(id, 'reject', { reason, version })
+  return {
+    ...task,
+    status: 'rejected' as const,
+    canReject: false,
+  }
 }
 
 export function checkinStaffTask(id: number, version?: number) {
@@ -190,7 +229,8 @@ export function createStaffOrder(_payload: CreateStaffOrderPayload) {
 }
 
 export function getStaffProfile(period?: StaffStatsPeriod) {
-  return http.get<StaffProfile>('/staff/profile', { period: period || 'today' }, staffHeaders())
+  return staffHeaders()
+    .then(headers => http.get<StaffProfile>('/staff/profile', { period: period || 'today' }, headers))
     .then((profile) => {
       const session = getStoredDevStaffSession() as DevStaffSession | null
       if (!profile.staffName && session) {
@@ -204,6 +244,6 @@ export function getStaffProfile(period?: StaffStatsPeriod) {
     })
 }
 
-export function updateStaffProfile(params: UpdateStaffProfileParams) {
-  return http.put<StaffProfile>('/staff/profile', params, undefined, staffHeaders())
+export async function updateStaffProfile(params: UpdateStaffProfileParams) {
+  return http.put<StaffProfile>('/staff/profile', params, undefined, await staffHeaders())
 }

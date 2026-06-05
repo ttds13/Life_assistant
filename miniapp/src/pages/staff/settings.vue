@@ -263,7 +263,7 @@ onShow(() => {
           class="w-full h-[88rpx] px-4 bg-[#F5F7FA] rounded-[16rpx] text-[30rpx] text-[#1F2937]"
           placeholder="请输入姓名"
           placeholder-class="text-[#C4C8D0]"
-          maxlength="20"
+          :maxlength="20"
           focus
         />
         <view class="mt-1 text-right">

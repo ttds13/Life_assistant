@@ -152,21 +152,33 @@ export interface OrderListItem {
   id: string;
   orderNo: string;
   status: string;
+  staffId?: number | null;
   serviceName: string;
   userName: string;
   userPhone: string;
   staffName?: string;
+  appointmentStartTime: string;
+  appointmentEndTime: string;
   appointmentTime: string;
   addressText: string;
+  totalAmount?: number;
   payableAmount: number;
   paidAmount: number;
+  originalAmount?: number;
+  discountAmount?: number;
   source: string;
+  remark?: string;
+  adminRemark?: string;
+  paidAt?: string | null;
+  completedAt?: string | null;
+  cancelledAt?: string | null;
+  cancelReason?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface OrderDetail extends OrderListItem {
-  remark?: string;
-  adminRemark?: string;
+  version?: number;
   serviceSpec: string;
   statusLogs: Array<{
     title: string;
@@ -181,11 +193,36 @@ export interface OrderDetail extends OrderListItem {
   photos: string[];
 }
 
+export interface UpdateOrderPayload {
+  status?: string;
+  staffId?: number | null;
+  appointmentStartTime?: string;
+  appointmentEndTime?: string;
+  originalAmount?: number;
+  discountAmount?: number;
+  payableAmount?: number;
+  paidAmount?: number;
+  remark?: string | null;
+  adminRemark?: string | null;
+  cityCode?: string | null;
+  source?: string;
+  createdAt?: string;
+  paidAt?: string | null;
+  completedAt?: string | null;
+  cancelledAt?: string | null;
+  cancelReason?: string | null;
+}
+
 export interface StaffOption {
   value: string;
+  id?: number;
   label: string;
+  name?: string;
   phone: string;
   workStatus: string;
+  workStatusValue?: number;
+  rating?: number;
+  cityCode?: string;
 }
 
 export interface AuditItem {

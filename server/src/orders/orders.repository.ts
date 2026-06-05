@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
+import { ORDER_STATUS } from './constants/order-status'
 
 export const ORDER_DETAIL_INCLUDE = Prisma.validator<Prisma.OrderInclude>()({
   service: {
@@ -48,6 +49,14 @@ export const ORDER_DETAIL_INCLUDE = Prisma.validator<Prisma.OrderInclude>()({
 })
 
 export type OrderDetailRecord = Prisma.OrderGetPayload<{ include: typeof ORDER_DETAIL_INCLUDE }>
+
+const STAFF_BUSY_ORDER_STATUSES = [
+  ORDER_STATUS.DISPATCHED,
+  ORDER_STATUS.ACCEPTED,
+  ORDER_STATUS.ON_THE_WAY,
+  ORDER_STATUS.IN_SERVICE,
+  ORDER_STATUS.PENDING_CONFIRM,
+]
 
 @Injectable()
 export class OrdersRepository {
@@ -171,6 +180,73 @@ export class OrdersRepository {
     ])
 
     return { total, items }
+  }
+
+  async findAvailableStaffOrders(params: {
+    page: number
+    pageSize: number
+  }) {
+    const where: Prisma.OrderWhereInput = {
+      status: ORDER_STATUS.PENDING_DISPATCH,
+      staffId: null,
+      cancelledAt: null,
+    }
+
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.order.count({ where }),
+      this.prisma.order.findMany({
+        where,
+        include: ORDER_DETAIL_INCLUDE,
+        orderBy: [{ appointmentStartTime: 'asc' }, { id: 'asc' }],
+        skip: (params.page - 1) * params.pageSize,
+        take: params.pageSize,
+      }),
+    ])
+
+    return { total, items }
+  }
+
+  findWorkingStaff(staffId: number) {
+    return this.prisma.staff.findFirst({
+      where: {
+        id: BigInt(staffId),
+        status: 1,
+        workStatus: 1,
+        deletedAt: null,
+      },
+    })
+  }
+
+  countStaffBusyOrders(staffId: number, excludeOrderId?: number) {
+    return this.prisma.order.count({
+      where: {
+        staffId: BigInt(staffId),
+        status: { in: STAFF_BUSY_ORDER_STATUSES },
+        ...(excludeOrderId ? { id: { not: BigInt(excludeOrderId) } } : {}),
+      },
+    })
+  }
+
+  findAutoAssignableStaff(orderId: number) {
+    return this.prisma.staff.findFirst({
+      where: {
+        status: 1,
+        workStatus: 1,
+        deletedAt: null,
+        orders: {
+          none: {
+            status: { in: STAFF_BUSY_ORDER_STATUSES },
+          },
+        },
+        assignments: {
+          none: {
+            orderId: BigInt(orderId),
+            assignStatus: 'rejected',
+          },
+        },
+      },
+      orderBy: [{ id: 'asc' }],
+    })
   }
 
   findOrderDetail(orderId: number) {
