@@ -33,7 +33,7 @@ export class ServicesRepository {
         where,
         skip: (page - 1) * pageSize,
         take: pageSize,
-        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+        orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
         select: {
           id: true,
           categoryId: true,
@@ -74,10 +74,18 @@ export class ServicesRepository {
     const where: Prisma.ServiceWhereInput = {
       status: query.status ?? SERVICE_STATUS_ONLINE,
       deletedAt: null,
+      category: { status: SERVICE_STATUS_ONLINE },
     }
 
     if (query.categoryId !== undefined) where.categoryId = BigInt(query.categoryId)
-    if (query.keyword) where.name = { contains: query.keyword }
+    if (query.keyword) {
+      where.OR = [
+        { name: { contains: query.keyword } },
+        { description: { contains: query.keyword } },
+        { detail: { contains: query.keyword } },
+        { category: { name: { contains: query.keyword } } },
+      ]
+    }
 
     return where
   }

@@ -198,7 +198,7 @@ async function syncSelectedAddress() {
 }
 
 function onSearchTap() {
-  showTodo('搜索功能建设中')
+  uni.navigateTo({ url: '/pages/service/search' })
 }
 
 function onCartTap() {
