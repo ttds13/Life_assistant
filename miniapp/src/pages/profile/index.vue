@@ -1,8 +1,11 @@
 <script lang="ts" setup>
 import { createDevStaffSession } from '@/api/auth'
+import { getOrders } from '@/api/orders'
+import type { OrderStatus } from '@/api/types/orders'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
-import { clearDevStaffSession, getStoredDevStaffSession, saveDevStaffSession } from '@/utils/devStaffStorage'
+import { saveOrderListFilter } from '@/utils/orderListFilter'
+import { getStoredDevStaffSession, saveDevStaffSession } from '@/utils/devStaffStorage'
 
 definePage({
   style: {
@@ -49,15 +52,18 @@ const mockProfileStats = {
   couponCount: 0,
 }
 
-const mockOrderStats = {
-  pendingPayment: 1,
-  pendingDispatch: 1,
-  pendingConfirm: 1,
-  pendingReview: 1,
+type OrderStats = Record<Exclude<OrderAction, 'all'>, number>
+
+const emptyOrderStats: OrderStats = {
+  pendingPayment: 0,
+  pendingDispatch: 0,
+  pendingConfirm: 0,
+  pendingReview: 0,
   afterSales: 0,
 }
 
 const profileStats = computed(() => mockProfileStats)
+const orderStats = ref<OrderStats>({ ...emptyOrderStats })
 
 const displayName = computed(() => {
   if (!tokenStore.hasLogin)
@@ -90,11 +96,11 @@ const statEntries = computed<StatEntry[]>(() => [
 ])
 
 const orderEntries = computed<OrderEntry[]>(() => [
-  { label: '待付款', action: 'pendingPayment', icon: 'i-carbon-wallet', count: mockOrderStats.pendingPayment },
-  { label: '待接单', action: 'pendingDispatch', icon: 'i-carbon-time', count: mockOrderStats.pendingDispatch },
-  { label: '待验收', action: 'pendingConfirm', icon: 'i-carbon-document-tasks', count: mockOrderStats.pendingConfirm },
-  { label: '待评价', action: 'pendingReview', icon: 'i-carbon-chat', count: mockOrderStats.pendingReview },
-  { label: '售后', action: 'afterSales', icon: 'i-carbon-shopping-bag', count: mockOrderStats.afterSales },
+  { label: '待付款', action: 'pendingPayment', icon: 'i-carbon-wallet', count: orderStats.value.pendingPayment },
+  { label: '待接单', action: 'pendingDispatch', icon: 'i-carbon-time', count: orderStats.value.pendingDispatch },
+  { label: '待验收', action: 'pendingConfirm', icon: 'i-carbon-document-tasks', count: orderStats.value.pendingConfirm },
+  { label: '待评价', action: 'pendingReview', icon: 'i-carbon-chat', count: orderStats.value.pendingReview },
+  { label: '售后', action: 'afterSales', icon: 'i-carbon-shopping-bag', count: orderStats.value.afterSales },
 ])
 
 const isDevApi = import.meta.env.VITE_SERVER_BASEURL?.includes('192.168.')
@@ -144,21 +150,12 @@ function requireLogin(next: () => void) {
   next()
 }
 
-function onLogout() {
-  uni.showModal({
-    title: '提示',
-    content: '确定退出登录？',
-    success: (res) => {
-      if (res.confirm) {
-        tokenStore.logout()
-        uni.removeStorageSync(mockLoginFlagKey)
-        clearDevStaffSession()
-        isMockLoginSession.value = false
-        uni.showToast({ icon: 'success', title: '已退出' })
-      }
-    },
+function goSettings() {
+  requireLogin(() => {
+    uni.navigateTo({ url: '/pages/settings/index' })
   })
 }
+
 
 function formatMoney(value: number) {
   const amount = Number(value)
@@ -181,39 +178,97 @@ function syncMockLoginSession() {
   isMockLoginSession.value = uni.getStorageSync(mockLoginFlagKey) === '1'
 }
 
-function onProfileTap() {
-  if (!tokenStore.hasLogin)
-    onLogin()
+async function loadOrderStats() {
+  if (!tokenStore.hasLogin) {
+    orderStats.value = { ...emptyOrderStats }
+    return
+  }
+
+  try {
+    const result = await getOrders({ page: 1, pageSize: 100 })
+    const count = (statuses: OrderStatus[]) => result.items.filter(item => statuses.includes(item.status)).length
+    orderStats.value = {
+      pendingPayment: count(['pending_payment']),
+      pendingDispatch: count(['pending_dispatch']),
+      pendingConfirm: count(['pending_confirm']),
+      pendingReview: count(['completed']),
+      afterSales: count(['after_sales', 'refund_pending', 'refunded']),
+    }
+  }
+  catch {
+    orderStats.value = { ...emptyOrderStats }
+  }
 }
 
-function onStatTap(action: StatAction) {
+function onProfileTap() {
+  goSettings()
+}
+
+function goWalletPage() {
   requireLogin(() => {
-    const titleMap: Record<StatAction, string> = {
-      wallet: '钱包功能待完善',
-      card: '卡包功能待完善',
-      coupon: '优惠券功能待完善',
-    }
-    showPendingToast(titleMap[action])
+    uni.navigateTo({
+      url: '/pages/wallet/index',
+      fail: (err) => {
+        console.error('跳转钱包页失败:', err)
+        uni.showToast({ icon: 'none', title: '钱包页跳转失败' })
+      },
+    })
   })
+}
+
+function goCardPage() {
+  requireLogin(() => {
+    uni.navigateTo({
+      url: '/pages/card/index',
+      fail: (err) => {
+        console.error('跳转卡包页失败:', err)
+        uni.showToast({ icon: 'none', title: '卡包页跳转失败' })
+      },
+    })
+  })
+}
+
+function goCouponPage() {
+  requireLogin(() => {
+    uni.navigateTo({
+      url: '/pages/coupon/index',
+      fail: (err) => {
+        console.error('跳转优惠券页失败:', err)
+        uni.showToast({ icon: 'none', title: '优惠券页跳转失败' })
+      },
+    })
+  })
+}
+
+function onStatEntryTap(action: StatAction) {
+  if (action === 'wallet') {
+    goWalletPage()
+    return
+  }
+  if (action === 'card') {
+    goCardPage()
+    return
+  }
+  goCouponPage()
 }
 
 function goOrderList(action: OrderAction = 'all') {
   requireLogin(() => {
-    const statusMap: Partial<Record<OrderAction, string>> = {
+    const statusMap: Partial<Record<OrderAction, OrderStatus>> = {
       pendingPayment: 'pending_payment',
       pendingDispatch: 'pending_dispatch',
       pendingConfirm: 'pending_confirm',
       pendingReview: 'completed',
+      afterSales: 'after_sales',
     }
 
-    if (action === 'afterSales') {
-      showPendingToast('售后功能待完善')
-      return
-    }
-
-    const status = statusMap[action]
-    uni.navigateTo({
-      url: status ? `/pages/order/list?status=${status}` : '/pages/order/list',
+    saveOrderListFilter(statusMap[action] || 'all')
+    uni.switchTab({
+      url: '/pages/order/list',
+      fail: (err) => {
+        console.error('跳转订单页失败:', err)
+        uni.showToast({ icon: 'none', title: '订单页跳转失败' })
+      },
     })
   })
 }
@@ -252,19 +307,24 @@ function onAppTap(item: AppEntry) {
     return
   }
 
-  const titleMap: Record<Exclude<AppAction, 'address' | 'staffWorkbench'>, string> = {
+  if (item.action === 'settings') {
+    uni.navigateTo({ url: '/pages/settings/index' })
+    return
+  }
+
+  const titleMap: Record<Exclude<AppAction, 'address' | 'staffWorkbench' | 'settings'>, string> = {
     applyStaff: '申请师傅功能待完善',
     applyPartner: '申请合作商功能待完善',
     faq: '常见问题待配置',
     customerService: '客服信息待配置',
     feedback: '问题反馈功能待完善',
-    settings: '设置功能待完善',
   }
   showPendingToast(titleMap[item.action])
 }
 
 onShow(() => {
   syncMockLoginSession()
+  loadOrderStats()
 })
 </script>
 
@@ -272,8 +332,8 @@ onShow(() => {
   <view class="min-h-screen bg-[#F5F7FA] pb-[150rpx]">
     <view class="pt-safe px-4 pt-4">
       <view class="bg-white rounded-[28rpx] px-4 pt-5 pb-4 shadow-sm">
-        <view class="flex items-center" @tap="onProfileTap">
-          <view class="w-[128rpx] h-[128rpx] rounded-full bg-[#EAF3FF] center overflow-hidden shrink-0">
+        <view class="flex items-center">
+          <view class="w-[128rpx] h-[128rpx] rounded-full bg-[#EAF3FF] center overflow-hidden shrink-0" @tap="onProfileTap">
             <image
               v-if="tokenStore.hasLogin && userStore.userInfo.avatar"
               :src="userStore.userInfo.avatar"
@@ -286,9 +346,12 @@ onShow(() => {
           </view>
 
           <view class="ml-4 min-w-0 flex-1">
-            <text class="block truncate text-[42rpx] leading-[52rpx] text-[#1F2937] font-700">
-              {{ displayName }}
-            </text>
+            <view class="flex items-center gap-2" @tap="goSettings">
+              <text class="block truncate text-[42rpx] leading-[52rpx] text-[#1F2937] font-700">
+                {{ displayName }}
+              </text>
+              <text v-if="tokenStore.hasLogin" class="i-carbon-chevron-right text-[32rpx] text-[#9CA3AF] shrink-0" />
+            </view>
             <view class="mt-2 flex items-center min-w-0">
               <text class="i-carbon-phone text-[28rpx] text-[#9CA3AF] mr-2 shrink-0" />
               <text class="truncate text-[28rpx] leading-[36rpx] text-[#6B7280]">
@@ -303,7 +366,7 @@ onShow(() => {
             v-for="(item, index) in statEntries"
             :key="item.action"
             class="relative flex-1 center flex-col min-w-0"
-            @tap="onStatTap(item.action)"
+            @tap="onStatEntryTap(item.action)"
           >
             <view v-if="index > 0" class="absolute left-0 top-[24rpx] w-[1rpx] h-[56rpx] bg-[#E5E7EB]" />
             <text class="max-w-full truncate text-[40rpx] leading-[50rpx] text-[#1677FF] font-700">
@@ -372,15 +435,6 @@ onShow(() => {
           </view>
         </view>
       </view>
-    </view>
-
-    <view v-if="tokenStore.hasLogin" class="mx-4 mt-6">
-      <button
-        class="w-full h-[84rpx] bg-white text-[28rpx] text-[#6B7280] rounded-[24rpx] center shadow-sm"
-        @tap="onLogout"
-      >
-        退出登录
-      </button>
     </view>
   </view>
 </template>

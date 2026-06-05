@@ -21,6 +21,18 @@ function handleClickBulge() {
   })
 }
 
+function switchTabbar(url: string) {
+  const previousIndex = tabbarStore.curIdx
+  tabbarStore.setAutoCurIdx(url)
+  uni.switchTab({
+    url,
+    fail(err) {
+      tabbarStore.setCurIdx(previousIndex)
+      console.error('switchTab fail:', err)
+    },
+  })
+}
+
 function handleClick(index: number) {
   // 点击原来的不做操作
   if (index === tabbarStore.curIdx) {
@@ -35,11 +47,11 @@ function handleClick(index: number) {
     return
   }
   const url = list[index].pagePath
-  tabbarStore.setCurIdx(index)
   if (tabbarCacheEnable) {
-    uni.switchTab({ url })
+    switchTabbar(url)
   }
   else {
+    tabbarStore.setCurIdx(index)
     uni.navigateTo({ url })
   }
 }

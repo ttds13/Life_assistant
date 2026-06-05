@@ -77,6 +77,11 @@ export interface StaffProfile {
   stats: Record<StaffStatsPeriod, StaffProfileStats>
 }
 
+export interface UpdateStaffProfileParams {
+  staffName?: string
+  avatar?: string
+}
+
 export interface CreateStaffOrderPayload {
   serviceAddress: string
   customServiceEnabled: boolean

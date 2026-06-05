@@ -1,6 +1,8 @@
 <script lang="ts" setup>
 import { cancelOrder, getOrders } from '@/api/orders'
-import type { OrderStatus, UserOrder } from '@/api/types/orders'
+import type { UserOrder } from '@/api/types/orders'
+import { consumeOrderListFilter } from '@/utils/orderListFilter'
+import type { OrderListFilter } from '@/utils/orderListFilter'
 
 definePage({
   style: {
@@ -8,7 +10,7 @@ definePage({
   },
 })
 
-type StatusFilter = 'all' | OrderStatus
+type StatusFilter = 'all' | 'pending_payment' | 'pending_dispatch' | 'in_service' | 'pending_confirm' | 'completed' | 'after_sales'
 
 const currentStatus = ref<StatusFilter>('all')
 const loading = ref(false)
@@ -17,14 +19,32 @@ const orders = ref<UserOrder[]>([])
 const tabs: { label: string, value: StatusFilter }[] = [
   { label: '全部', value: 'all' },
   { label: '待支付', value: 'pending_payment' },
-  { label: '待派单', value: 'pending_dispatch' },
+  { label: '待接单', value: 'pending_dispatch' },
   { label: '服务中', value: 'in_service' },
   { label: '待确认', value: 'pending_confirm' },
   { label: '已完成', value: 'completed' },
+  { label: '售后', value: 'after_sales' },
 ]
 
-function isStatusFilter(value: string): value is StatusFilter {
-  return tabs.some(tab => tab.value === value)
+function normalizeStatusFilter(value: string): StatusFilter | null {
+  if (tabs.some(tab => tab.value === value))
+    return value as StatusFilter
+
+  if (['dispatched', 'accepted', 'on_the_way'].includes(value))
+    return 'in_service'
+
+  if (['refund_pending', 'refunded'].includes(value))
+    return 'after_sales'
+
+  return null
+}
+
+function applyStatusFilter(value?: string | OrderListFilter | null) {
+  if (!value)
+    return
+  const status = normalizeStatusFilter(value)
+  if (status)
+    currentStatus.value = status
 }
 
 const filteredOrders = computed(() => {
@@ -32,6 +52,9 @@ const filteredOrders = computed(() => {
     return orders.value
   if (currentStatus.value === 'in_service') {
     return orders.value.filter(item => ['dispatched', 'accepted', 'on_the_way', 'in_service'].includes(item.status))
+  }
+  if (currentStatus.value === 'after_sales') {
+    return orders.value.filter(item => ['after_sales', 'refund_pending', 'refunded'].includes(item.status))
   }
   return orders.value.filter(item => item.status === currentStatus.value)
 })
@@ -82,12 +105,11 @@ function onSecondary(order: UserOrder) {
 }
 
 onLoad((query) => {
-  const status = String(query?.status || 'all')
-  if (isStatusFilter(status))
-    currentStatus.value = status
+  applyStatusFilter(String(query?.status || 'all'))
 })
 
 onShow(() => {
+  applyStatusFilter(consumeOrderListFilter())
   loadOrders()
 })
 </script>

@@ -24,12 +24,46 @@ import dayjs from 'dayjs'
 import { visualizer } from 'rollup-plugin-visualizer'
 import UnoCSS from 'unocss/vite'
 import AutoImport from 'unplugin-auto-import/vite'
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import ViteRestart from 'vite-plugin-restart'
 import openDevTools from './scripts/open-dev-tools'
 import vitePluginEruda from './scripts/vite-plugin-eruda'
 import { createCopyNativeResourcesPlugin } from './vite-plugins/copy-native-resources'
 import syncManifestPlugin from './vite-plugins/sync-manifest-plugins'
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function createMpWeixinShadowImagePath(uniAppId = '', wxAppId = '') {
+  const appId = uniAppId.replace(/^__UNI__/, '')
+  if (!appId)
+    return ''
+
+  const ident = wxAppId ? `${appId}%%${wxAppId}` : appId
+  const encodedIdent = Buffer.from(Buffer.from(ident).toString('base64')).toString('hex')
+  return `/${encodedIdent}/img/shadow-grey.png`
+}
+
+function fixMpWeixinShadowPreloadPlugin(enabled: boolean, shadowImagePath: string): Plugin {
+  const fullShadowImageUrl = `https://cdn.dcloud.net.cn${shadowImagePath}`
+
+  return {
+    name: 'fix-mp-weixin-shadow-preload-url',
+    generateBundle(_options, bundle) {
+      if (!enabled || !shadowImagePath)
+        return
+
+      const pattern = new RegExp(`src:\\s*([A-Za-z_$][\\w$]*)\\s*\\+\\s*["']${escapeRegExp(shadowImagePath)}["']`, 'g')
+      for (const file of Object.values(bundle)) {
+        if (file.type !== 'chunk')
+          continue
+
+        file.code = file.code.replace(pattern, `src:${JSON.stringify(fullShadowImageUrl)}`)
+      }
+    },
+  }
+}
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command, mode }) => {
@@ -60,8 +94,12 @@ export default defineConfig(({ command, mode }) => {
     VITE_APP_PROXY_ENABLE,
     VITE_APP_PROXY_PREFIX,
     VITE_COPY_NATIVE_RES_ENABLE,
+    VITE_UNI_APPID,
+    VITE_WX_APPID,
   } = env
   console.log('环境变量 env -> ', env)
+
+  const mpWeixinShadowImagePath = createMpWeixinShadowImagePath(VITE_UNI_APPID, VITE_WX_APPID)
 
   return defineConfig({
     envDir: './env', // 自定义env目录
@@ -150,6 +188,7 @@ export default defineConfig(({ command, mode }) => {
       vitePluginEruda({
         open: UNI_PLATFORM === 'h5' && mode === 'development',
       }),
+      fixMpWeixinShadowPreloadPlugin(UNI_PLATFORM === 'mp-weixin', mpWeixinShadowImagePath),
       // 自动打开开发者工具插件，生产构建只输出产物，不自动拉起工具
       SKIP_OPEN_DEVTOOLS !== 'true' && mode === 'development' && openDevTools({ mode }),
     ],

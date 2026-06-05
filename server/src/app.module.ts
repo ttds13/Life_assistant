@@ -9,6 +9,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware'
 import { DevModule } from './dev/dev.module'
 import { HealthModule } from './health/health.module'
 import { MapsModule } from './maps/maps.module'
+import { UploadModule } from './upload/upload.module'
 import { OrdersModule } from './orders/orders.module'
 import { PaymentsModule } from './payments/payments.module'
 import { PrismaModule } from './prisma/prisma.module'
@@ -30,6 +31,7 @@ import { UsersModule } from './users/users.module'
     OrdersModule,
     PaymentsModule,
     DevModule,
+    UploadModule,
   ],
   providers: [AppLoggerService],
 })

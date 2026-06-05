@@ -11,6 +11,7 @@ import type {
   StaffTask,
   StaffTaskGroup,
   StaffTaskStatus,
+  UpdateStaffProfileParams,
 } from './types/staff'
 import { http } from '@/http/http'
 import { getCurrentDevStaffId, getStoredDevStaffSession } from '@/utils/devStaffStorage'
@@ -201,4 +202,8 @@ export function getStaffProfile(period?: StaffStatsPeriod) {
       }
       return profile
     })
+}
+
+export function updateStaffProfile(params: UpdateStaffProfileParams) {
+  return http.put<StaffProfile>('/staff/profile', params, undefined, staffHeaders())
 }

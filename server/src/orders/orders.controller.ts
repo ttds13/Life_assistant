@@ -15,6 +15,7 @@ import { PricePreviewDto } from './dto/price-preview.dto'
 import { QueryOrdersDto } from './dto/query-orders.dto'
 import { RejectOrderDto } from './dto/reject-order.dto'
 import { TransitionVersionDto } from './dto/transition-version.dto'
+import { UpdateStaffProfileDto } from './dto/update-staff-profile.dto'
 import { OrdersService } from './orders.service'
 
 @Controller()
@@ -114,6 +115,11 @@ export class OrdersController {
   @Get('staff/profile')
   async getStaffProfile(@Req() request: RequestWithContext, @Query('period') period?: string) {
     return this.ordersService.getStaffProfile(await this.parseStaffId(request), period)
+  }
+
+  @Put('staff/profile')
+  async updateStaffProfile(@Req() request: RequestWithContext, @Body() dto: UpdateStaffProfileDto) {
+    return this.ordersService.updateStaffProfile(await this.parseStaffId(request), dto)
   }
 
   @Get('staff/orders/:id')

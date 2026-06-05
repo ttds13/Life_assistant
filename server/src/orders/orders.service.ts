@@ -13,6 +13,7 @@ import type { CreateOrderDto } from './dto/create-order.dto'
 import type { QueryOrdersDto } from './dto/query-orders.dto'
 import type { RejectOrderDto } from './dto/reject-order.dto'
 import type { TransitionVersionDto } from './dto/transition-version.dto'
+import type { UpdateStaffProfileDto } from './dto/update-staff-profile.dto'
 import { OrderTransitionService } from './order-transition.service'
 import {
   presentAdminOrderDetail,
@@ -360,6 +361,34 @@ export class OrdersService {
       rating: staff.rating.toNumber(),
       stats: { today, week, month, total },
     }
+  }
+
+  async updateStaffProfile(staffId: number, dto: UpdateStaffProfileDto) {
+    const data: Prisma.StaffUpdateManyMutationInput = {}
+
+    if (dto.staffName !== undefined) {
+      const staffName = dto.staffName.trim()
+      if (!staffName) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'staffName is required', 400)
+      }
+      data.name = staffName
+    }
+
+    if (dto.avatar !== undefined) {
+      data.avatarUrl = dto.avatar.trim()
+    }
+
+    if (Object.keys(data).length) {
+      const result = await this.repository.client.staff.updateMany({
+        where: { id: BigInt(staffId), status: 1, deletedAt: null },
+        data,
+      })
+      if (result.count !== 1) {
+        throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
+      }
+    }
+
+    return this.getStaffProfile(staffId)
   }
 
   async getStaffOrderDetail(staffId: number, orderId: number) {

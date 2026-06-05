@@ -62,9 +62,17 @@ async function loadProfile() {
   statsMap.value = profile.stats
 }
 
+function goStaffSettings() {
+  uni.navigateTo({ url: '/pages/staff/settings' })
+}
+
 function onTodo(title: string) {
   if (title === '地址管理') {
     uni.navigateTo({ url: '/pages/staff/address-list' })
+    return
+  }
+  if (title === '设置') {
+    goStaffSettings()
     return
   }
   uni.showToast({ icon: 'none', title: `${title}待接入` })
@@ -90,13 +98,14 @@ onShow(() => {
       <text class="block text-center text-[44rpx] leading-[54rpx] text-white font-800">个人中心</text>
 
       <view class="mt-[54rpx] flex items-center">
-        <view class="w-[132rpx] h-[132rpx] rounded-full bg-white overflow-hidden flex items-center justify-center">
+        <view class="w-[132rpx] h-[132rpx] rounded-full bg-white overflow-hidden flex items-center justify-center" @tap="goStaffSettings">
           <image :src="avatar" class="w-full h-full" mode="aspectFill" />
         </view>
         <view class="ml-[28rpx] flex-1 min-w-0">
-          <view class="flex items-center min-w-0">
+          <view class="flex items-center min-w-0 gap-2" @tap="goStaffSettings">
             <text class="truncate text-[42rpx] text-white font-800">{{ staffName }}</text>
-            <text v-if="verified" class="ml-[16rpx] rounded-[10rpx] border border-white/80 px-[14rpx] py-[4rpx] text-[24rpx] text-white">已认证</text>
+            <text class="i-carbon-chevron-right text-[32rpx] text-white opacity-80 shrink-0" />
+            <text v-if="verified" class="ml-[4rpx] rounded-[10rpx] border border-white/80 px-[14rpx] py-[4rpx] text-[24rpx] text-white shrink-0">已认证</text>
           </view>
           <view class="mt-[18rpx] flex items-center">
             <text class="i-carbon-phone text-[30rpx] text-white mr-[10rpx]" />
@@ -188,7 +197,6 @@ onShow(() => {
         </view>
       </view>
     </view>
-
     <staff-tabbar active="profile" />
   </view>
 </template>
