@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import { logoutSession } from '@/api/auth'
 import { getOrders } from '@/api/orders'
 import type { OrderStatus } from '@/api/types/orders'
 import { useTokenStore } from '@/store/token'
@@ -130,6 +131,24 @@ function goSettings() {
   })
 }
 
+function onLogout() {
+  uni.showModal({
+    title: '提示',
+    content: '确定退出登录？',
+    success: async (res) => {
+      if (!res.confirm)
+        return
+
+      const refreshToken = tokenStore.tokenInfo.refreshToken
+      if (refreshToken)
+        logoutSession(refreshToken).catch(() => {})
+
+      tokenStore.logout()
+      orderStats.value = { ...emptyOrderStats }
+      uni.showToast({ icon: 'success', title: '已退出' })
+    },
+  })
+}
 
 function formatBadge(count: number) {
   if (count > 99)
@@ -164,9 +183,8 @@ async function loadOrderStats() {
 }
 
 async function refreshUserProfile() {
-  if (!tokenStore.hasLogin) {
+  if (!tokenStore.hasLogin)
     return
-  }
 
   try {
     await userStore.fetchUserInfo()
@@ -181,25 +199,13 @@ function onProfileTap() {
 
 function goCardPage() {
   requireLogin(() => {
-    uni.navigateTo({
-      url: '/pages/card/index',
-      fail: (err) => {
-        console.error('跳转卡包页失败:', err)
-        uni.showToast({ icon: 'none', title: '卡包页跳转失败' })
-      },
-    })
+    uni.showToast({ icon: 'none', title: '卡包功能待完善' })
   })
 }
 
 function goCouponPage() {
   requireLogin(() => {
-    uni.navigateTo({
-      url: '/pages/coupon/index',
-      fail: (err) => {
-        console.error('跳转优惠券页失败:', err)
-        uni.showToast({ icon: 'none', title: '优惠券页跳转失败' })
-      },
-    })
+    uni.showToast({ icon: 'none', title: '优惠券功能待完善' })
   })
 }
 
@@ -392,6 +398,15 @@ onShow(() => {
           </view>
         </view>
       </view>
+    </view>
+
+    <view v-if="tokenStore.hasLogin" class="mx-4 mt-6">
+      <button
+        class="w-full h-[84rpx] bg-white text-[28rpx] text-[#6B7280] rounded-[24rpx] center shadow-sm"
+        @tap="onLogout"
+      >
+        退出登录
+      </button>
     </view>
   </view>
 </template>

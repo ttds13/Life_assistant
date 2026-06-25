@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import { cancelOrder, confirmOrder, getOrderDetail, payOrder } from '@/api/orders'
 import type { OrderDetail } from '@/api/types/orders'
+import { ensureChineseStatusLabel, getOrderStatusText } from '@/utils/orderStatus'
 import { getWechatPaymentParams, requestWechatPayment } from '@/utils/wechatPayment'
 
 definePage({
@@ -36,7 +37,7 @@ const statusInfo = computed(() => {
     case 'cancelled':
       return { title: '已取消', desc: '该订单已取消', next: '可再次预约服务' }
     default:
-      return { title: '订单处理中', desc: '订单状态待刷新', next: '请稍后查看' }
+      return { title: getOrderStatusText(status), desc: '订单状态待刷新', next: '请稍后查看' }
   }
 })
 
@@ -190,9 +191,11 @@ onShow(() => {
 
         <form-section title="状态进度">
           <view class="flex justify-between">
-            <view v-for="item in order.statusLogs" :key="item.label" class="flex-1 flex flex-col items-center">
+            <view v-for="(item, index) in order.statusLogs" :key="`${item.label}-${index}`" class="flex-1 flex flex-col items-center">
               <view class="w-[24rpx] h-[24rpx] rounded-full" :class="item.active ? 'bg-[#1677FF]' : 'bg-[#E5E7EB]'" />
-              <text class="text-[22rpx] mt-2" :class="item.active ? 'text-[#1677FF]' : 'text-gray-400'">{{ item.label }}</text>
+              <text class="text-[22rpx] mt-2" :class="item.active ? 'text-[#1677FF]' : 'text-gray-400'">
+                {{ ensureChineseStatusLabel(item.label, item.status) }}
+              </text>
             </view>
           </view>
         </form-section>
@@ -201,7 +204,7 @@ onShow(() => {
           <view class="flex">
             <view class="w-[120rpx] h-[120rpx] rounded-[12rpx] bg-[#EAF3FF] flex items-center justify-center overflow-hidden mr-3">
               <image v-if="order.serviceImage" :src="order.serviceImage" class="w-full h-full" mode="aspectFill" />
-              <text v-else class="text-[42rpx]">🧹</text>
+              <text v-else class="text-[42rpx]">家</text>
             </view>
             <view class="flex-1">
               <text class="text-[30rpx] font-600 text-gray-800 block">{{ order.serviceName }}</text>

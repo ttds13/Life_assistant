@@ -22,7 +22,7 @@ async function onLocalDebugLogin() {
   loading.value = true
   try {
     const result = await mockLogin({ phone: import.meta.env.VITE_LOCAL_DEBUG_LOGIN_PHONE || undefined })
-    tokenStore.setTokenInfo({ token: result.accessToken, expiresIn: result.expiresIn })
+    tokenStore.setTokenInfo(result)
     userStore.setFromProfile(result.user)
     uni.showToast({ icon: 'success', title: '登录成功' })
     setTimeout(() => navigateBack(), 500)
@@ -55,7 +55,7 @@ async function onGetPhoneNumber(e: any) {
     })
 
     const result = await wechatLogin({ loginCode, phoneCode })
-    tokenStore.setTokenInfo({ token: result.accessToken, expiresIn: result.expiresIn })
+    tokenStore.setTokenInfo(result)
     userStore.setFromProfile(result.user)
     uni.showToast({ icon: 'success', title: '登录成功' })
     setTimeout(() => navigateBack(), 500)
@@ -128,7 +128,6 @@ function navigateBack() {
         微信小程序登录
       </button>
       <!-- #endif -->
-
     </view>
 
     <view class="flex items-center mt-8" @tap="agreed = !agreed">

@@ -7,6 +7,10 @@ export type CustomRequestOptions = UniApp.RequestOptions & {
   query?: Record<string, any>
   /** 出错时是否隐藏错误提示 */
   hideErrorToast?: boolean
+  /** 是否跳过 401 自动刷新，refresh/logout 接口必须开启 */
+  skipAuthRefresh?: boolean
+  /** 内部重试标记，防止 401 死循环 */
+  _retry?: boolean
 } & IUniUploadFileOptions
 
 export type CustomRequestOptions_ = Omit<CustomRequestOptions, 'url'>
