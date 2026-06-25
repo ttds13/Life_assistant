@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+logs
+uploads
+*.log
+.env
+.env.*
+certs
+.git
+.gitignore
+release

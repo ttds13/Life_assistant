@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Inject, Put, Post, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, Inject, Post, Put, Req, UseGuards } from '@nestjs/common'
 import type { RequestWithContext } from '../common/utils/request-context'
 import { AuthService } from './auth.service'
 import { MockLoginDto } from './dto/mock-login.dto'
@@ -34,10 +34,4 @@ export class AuthController {
     return this.authService.updateProfile(request.user!.userId, dto)
   }
 
-  @Post('dev-staff-session')
-  @UseGuards(JwtAuthGuard)
-  @HttpCode(200)
-  createDevStaffSession(@Req() request: RequestWithContext) {
-    return this.authService.createDevStaffSession(request.user!.userId)
-  }
 }

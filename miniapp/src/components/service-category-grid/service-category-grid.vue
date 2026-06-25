@@ -6,7 +6,7 @@ defineProps<{
 }>()
 
 function onCategoryTap(category: ServiceCategory) {
-  uni.navigateTo({ url: `/pages/service/detail?id=${category.id}` })
+  uni.navigateTo({ url: `/pages/service/search?keyword=${encodeURIComponent(category.name)}` })
 }
 </script>
 

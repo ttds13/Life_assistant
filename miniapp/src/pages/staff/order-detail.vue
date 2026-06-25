@@ -70,7 +70,7 @@ function onCallCustomer() {
 }
 
 function onNavigate() {
-  uni.showToast({ icon: 'none', title: '导航功能待接入' })
+  uni.showToast({ icon: 'none', title: '请按地址信息前往' })
 }
 
 async function doPrimary() {
@@ -110,7 +110,7 @@ async function doPrimary() {
             return
           task.value = await completeStaffTask(task.value!.id, {
             version: task.value!.version,
-            photoUrls: task.value!.photos?.map(photo => photo.url) || [],
+            photoUrls: task.value!.photos?.map(photo => photo.ossUrl || photo.url) || [],
           })
           uni.showToast({ icon: 'success', title: '已提交' })
         },
@@ -242,7 +242,7 @@ onShow(() => {
 
         <form-section title="服务照片">
           <upload-image-grid
-            :model-value="(task.photos || []).map(item => ({ id: item.id, url: item.url, status: 'done' }))"
+            :model-value="(task.photos || []).map(item => ({ id: item.id, url: item.ossUrl || item.url, displayUrl: item.displayUrl || item.url, status: 'done' }))"
             readonly
           />
           <view v-if="!task.photos?.length" class="rounded-[16rpx] bg-[#F9FAFB] p-[20rpx]">

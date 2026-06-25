@@ -14,21 +14,7 @@ interface ServiceCard {
   remainingTimes: number
 }
 
-const serviceCards: ServiceCard[] = [
-  { id: 1, name: '家庭保洁Plus', expireAt: '2026-03-30 18:21:15', remainingTimes: 20 },
-  { id: 2, name: '测试卡', expireAt: '2026-11-06 18:31:44', remainingTimes: 3 },
-  { id: 3, name: '测试卡', expireAt: '2026-10-18 20:30:00', remainingTimes: 3 },
-  { id: 4, name: '家庭保洁Plus', expireAt: '2025-11-17 19:34:28', remainingTimes: 20 },
-]
-
-function goReserve(card: ServiceCard) {
-  uni.navigateTo({
-    url: `/pages/order/create?cardId=${card.id}`,
-    fail: () => {
-      uni.showToast({ icon: 'none', title: '预约页跳转失败' })
-    },
-  })
-}
+const serviceCards: ServiceCard[] = []
 </script>
 
 <template>
@@ -53,15 +39,15 @@ function goReserve(card: ServiceCard) {
           </view>
         </view>
 
-        <view class="reserve-button" @tap="goReserve(item)">
-          <text>立即预约</text>
+        <view class="reserve-button">
+          <text>不可用</text>
         </view>
       </view>
     </view>
 
     <view v-else class="empty-card">
       <text class="empty-title">暂无服务卡</text>
-      <text class="empty-desc">购买服务卡后会展示在这里</text>
+      <text class="empty-desc">当前没有可用服务卡</text>
     </view>
   </view>
 </template>
@@ -70,51 +56,52 @@ function goReserve(card: ServiceCard) {
 .card-page {
   min-height: 100vh;
   box-sizing: border-box;
-  padding: 40rpx 32rpx 64rpx;
-  background: #f5f5f5;
+  padding: 28rpx 28rpx 56rpx;
+  background: #f6f7f9;
 }
 
 .card-list {
   display: flex;
   flex-direction: column;
-  gap: 32rpx;
+  gap: 22rpx;
 }
 
 .service-card {
   position: relative;
-  height: 210rpx;
+  height: 188rpx;
   overflow: hidden;
-  border-radius: 28rpx;
+  border-radius: 24rpx;
   background: #ff383d;
   box-sizing: border-box;
+  box-shadow: 0 10rpx 24rpx rgba(255, 56, 61, 0.14);
 }
 
 .card-pattern {
   position: absolute;
-  left: -10rpx;
-  bottom: 14rpx;
-  width: 310rpx;
-  height: 118rpx;
-  opacity: 0.18;
+  left: -18rpx;
+  bottom: 10rpx;
+  width: 280rpx;
+  height: 104rpx;
+  opacity: 0.12;
   background-image: radial-gradient(rgba(255, 255, 255, 0.8) 2rpx, transparent 2rpx);
   background-size: 20rpx 20rpx;
 }
 
 .card-slash {
   position: absolute;
-  top: -70rpx;
-  width: 210rpx;
-  height: 370rpx;
-  background: rgba(255, 255, 255, 0.08);
+  top: -64rpx;
+  width: 160rpx;
+  height: 320rpx;
+  background: rgba(255, 255, 255, 0.055);
   transform: rotate(38deg);
 }
 
 .slash-one {
-  right: 150rpx;
+  right: 132rpx;
 }
 
 .slash-two {
-  right: -24rpx;
+  right: -36rpx;
 }
 
 .card-info {
@@ -122,68 +109,83 @@ function goReserve(card: ServiceCard) {
   z-index: 1;
   height: 100%;
   box-sizing: border-box;
-  padding: 34rpx 280rpx 24rpx 36rpx;
+  padding: 26rpx 188rpx 22rpx 28rpx;
   display: flex;
   flex-direction: column;
+  justify-content: center;
+  min-width: 0;
 }
 
 .card-name {
   color: #ffffff;
-  font-size: 40rpx;
-  line-height: 52rpx;
+  font-size: 34rpx;
+  line-height: 44rpx;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card-expire {
-  margin-top: 26rpx;
-  color: rgba(255, 255, 255, 0.94);
-  font-size: 28rpx;
-  line-height: 38rpx;
+  margin-top: 12rpx;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 23rpx;
+  line-height: 32rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .remain-row {
-  margin-top: 14rpx;
+  margin-top: 10rpx;
   display: flex;
   align-items: baseline;
   color: #ffffff;
 }
 
 .remain-label {
-  font-size: 30rpx;
-  line-height: 42rpx;
+  font-size: 23rpx;
+  line-height: 32rpx;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .remain-value {
   margin-left: 8rpx;
-  font-size: 64rpx;
-  line-height: 70rpx;
+  font-size: 46rpx;
+  line-height: 52rpx;
   font-weight: 700;
+  letter-spacing: 0;
 }
 
 .remain-unit {
   margin-left: 4rpx;
-  font-size: 30rpx;
-  line-height: 42rpx;
+  font-size: 23rpx;
+  line-height: 32rpx;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .reserve-button {
   position: absolute;
   z-index: 2;
-  right: 32rpx;
+  right: 26rpx;
   top: 50%;
-  width: 170rpx;
-  height: 70rpx;
+  width: 140rpx;
+  height: 56rpx;
   border-radius: 999rpx;
   background: #ffffff;
   color: #ff383d;
-  font-size: 34rpx;
-  line-height: 44rpx;
-  font-weight: 700;
+  font-size: 25rpx;
+  line-height: 34rpx;
+  font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
   transform: translateY(-50%);
+  box-shadow: 0 8rpx 18rpx rgba(180, 24, 30, 0.14);
+}
+
+.reserve-button:active {
+  opacity: 0.88;
 }
 
 .empty-card {

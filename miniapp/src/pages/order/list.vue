@@ -80,7 +80,7 @@ function onPrimary(order: UserOrder) {
     return
   }
   if (order.status === 'completed') {
-    uni.showToast({ icon: 'none', title: '评价功能待完善' })
+    uni.showToast({ icon: 'none', title: '当前暂无评价入口' })
     return
   }
   onTapOrder(order)
@@ -101,7 +101,7 @@ function onSecondary(order: UserOrder) {
     })
     return
   }
-  uni.showToast({ icon: 'none', title: '售后功能待完善' })
+  uni.showToast({ icon: 'none', title: '如需帮助请联系客服' })
 }
 
 onLoad((query) => {

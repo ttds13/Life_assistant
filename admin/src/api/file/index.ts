@@ -1,11 +1,23 @@
 import request from "@/utils/request";
 import type { FileInfo } from "./types";
 
+function normalizeFileInfo(file: Partial<FileInfo>): FileInfo {
+  return {
+    name: file.name || file.storageKey || file.url?.split("/").pop() || "",
+    url: file.url || "",
+    signedUrl: file.signedUrl,
+    displayUrl: file.displayUrl || file.signedUrl || file.url,
+    storageKey: file.storageKey,
+    mimeType: file.mimeType,
+    size: file.size,
+    expiresIn: file.expiresIn,
+  };
+}
+
 const FileAPI = {
-  /** 上传文件 （传入 FormData，上传进度回调） */
   upload(formData: FormData, onProgress?: (percent: number) => void) {
     return request<unknown, FileInfo>({
-      url: "/api/v1/files",
+      url: "/api/upload/image",
       method: "post",
       data: formData,
       headers: { "Content-Type": "multipart/form-data" },
@@ -15,31 +27,27 @@ const FileAPI = {
           onProgress?.(percent);
         }
       },
-    });
+    }).then(normalizeFileInfo);
   },
 
-  /** 上传文件（传入 File） */
-  uploadFile(file: File) {
+  uploadFile(file: File, data: Record<string, string> = {}) {
     const formData = new FormData();
     formData.append("file", file);
+    Object.entries(data).forEach(([key, value]) => {
+      formData.append(key, value);
+    });
     return request<unknown, FileInfo>({
-      url: "/api/v1/files",
+      url: "/api/upload/image",
       method: "post",
       data: formData,
       headers: { "Content-Type": "multipart/form-data" },
-    });
+    }).then(normalizeFileInfo);
   },
 
-  /** 删除文件 */
-  delete(filePath?: string) {
-    return request({
-      url: "/api/v1/files",
-      method: "delete",
-      params: { filePath },
-    });
+  delete(_filePath?: string) {
+    return Promise.resolve({});
   },
 
-  /** 下载文件 */
   download(url: string, fileName?: string) {
     return request({
       url,
@@ -50,7 +58,7 @@ const FileAPI = {
       const a = document.createElement("a");
       const urlObject = window.URL.createObjectURL(blob);
       a.href = urlObject;
-      a.download = fileName || "下载文件";
+      a.download = fileName || "download";
       a.click();
       window.URL.revokeObjectURL(urlObject);
     });
@@ -58,6 +66,4 @@ const FileAPI = {
 };
 
 export default FileAPI;
-
-// 重导出类型
 export * from "./types";

@@ -4,6 +4,8 @@ import { OrdersModule } from '../orders/orders.module'
 import { PaymentsController } from './payments.controller'
 import { PaymentsRepository } from './payments.repository'
 import { PaymentsService } from './payments.service'
+import { WechatPayClient } from './wechat-pay.client'
+import { WechatPayConfig } from './wechat-pay.config'
 
 @Module({
   imports: [AuthModule, OrdersModule],
@@ -11,6 +13,8 @@ import { PaymentsService } from './payments.service'
   providers: [
     PaymentsService,
     PaymentsRepository,
+    WechatPayConfig,
+    WechatPayClient,
   ],
   exports: [PaymentsService, PaymentsRepository],
 })

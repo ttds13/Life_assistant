@@ -182,6 +182,14 @@
             value-format="YYYY-MM-DD HH:mm:ss"
             style="width: 100%"
           />
+          <single-image-upload
+            v-else-if="item.type === 'image'"
+            :model-value="stringFormValue(item.prop)"
+            :display-url="imageDisplayUrl(item.prop)"
+            :data="{ bizType: imageBizType(item.prop) }"
+            :max-file-size="5"
+            @update:model-value="(value: string) => setFormValue(item.prop, value)"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -565,6 +573,12 @@ function resetFormModel(row?: LifeResourceRecord) {
 }
 
 function normalizeFormValue(prop: string, value: unknown) {
+  if (prop === "coverImage") {
+    return editingRow.value?.coverImageOssUrl || value;
+  }
+  if (prop === "avatarUrl") {
+    return editingRow.value?.avatarOssUrl || editingRow.value?.avatarUrlOssUrl || value;
+  }
   if (prop === "isDefault") {
     if (value === true || value === "true" || value === "active") return "true";
     if (value === false || value === "false" || value === "disabled") return "false";
@@ -626,6 +640,23 @@ function dateFormValue(prop: string) {
 
 function setFormValue(prop: string, value: string | number | boolean | Date | null | undefined) {
   formModel[prop] = value ?? "";
+}
+
+function imageBizType(prop: string) {
+  if (prop === "coverImage") return "service_cover";
+  if (prop === "avatarUrl") return "staff_avatar";
+  return "admin_image";
+}
+
+function imageDisplayUrl(prop: string) {
+  if (!editingRow.value) return "";
+  if (prop === "coverImage") {
+    return String(editingRow.value.coverImageDisplayUrl || editingRow.value.coverImage || "");
+  }
+  if (prop === "avatarUrl") {
+    return String(editingRow.value.avatarDisplayUrl || editingRow.value.avatarUrlDisplayUrl || editingRow.value.avatarUrl || "");
+  }
+  return "";
 }
 
 function resolveTagType(value: unknown) {

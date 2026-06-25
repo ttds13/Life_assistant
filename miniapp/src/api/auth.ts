@@ -1,11 +1,11 @@
-import type { DevStaffSession, LoginResult, MockLoginParams, UpdateProfileParams, UserProfile, WechatLoginParams } from './types/auth'
+import type { LoginResult, MockLoginParams, UpdateProfileParams, UserProfile, WechatLoginParams } from './types/auth'
 import { http } from '@/http/http'
 
 export function wechatLogin(params: WechatLoginParams) {
   return http.post<LoginResult>('/auth/wechat-login', params)
 }
 
-export function mockLogin(params: MockLoginParams) {
+export function mockLogin(params?: MockLoginParams) {
   return http.post<LoginResult>('/auth/mock-login', params)
 }
 
@@ -15,8 +15,4 @@ export function getMe() {
 
 export function updateProfile(params: UpdateProfileParams) {
   return http.put<UserProfile>('/auth/profile', params)
-}
-
-export function createDevStaffSession() {
-  return http.post<DevStaffSession>('/auth/dev-staff-session')
 }

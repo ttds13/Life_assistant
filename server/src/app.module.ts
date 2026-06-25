@@ -14,11 +14,15 @@ import { OrdersModule } from './orders/orders.module'
 import { PaymentsModule } from './payments/payments.module'
 import { PrismaModule } from './prisma/prisma.module'
 import { ServicesModule } from './services/services.module'
+import { StorageModule } from './storage/storage.module'
 import { UsersModule } from './users/users.module'
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: [`.env.${process.env.NODE_ENV || 'development'}`, '.env'],
+    }),
     PrismaModule,
     HealthModule,
     ServicesModule,
@@ -31,6 +35,7 @@ import { UsersModule } from './users/users.module'
     OrdersModule,
     PaymentsModule,
     DevModule,
+    StorageModule,
     UploadModule,
   ],
   providers: [AppLoggerService],

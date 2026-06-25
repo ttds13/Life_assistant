@@ -10,12 +10,15 @@ export interface ServiceCategory {
 // 服务项目
 export interface Service {
   id: number
+  code?: string
   categoryId: number
   name: string
   description: string
   basePrice: number
   priceUnit: string
   coverImage: string
+  coverImageOssUrl?: string
+  coverImageDisplayUrl?: string
   status: number
   sortOrder: number
 }

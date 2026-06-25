@@ -29,13 +29,6 @@ interface HomePromoTile {
   bg: string
 }
 
-interface HomePassCard {
-  name: string
-  count: string
-  price: string
-  desc: string
-}
-
 interface HomeStaffAvatar {
   name: string
   color: string
@@ -103,11 +96,6 @@ const directServicePromotions: HomePromoTile[] = [
 const seasonalPromotions: HomePromoTile[] = [
   { title: '新居开荒', desc: '玻璃清洁', color: '#FFFFFF', bg: '#F5A623' },
   { title: '洗护到家', desc: '取送洗护', color: '#FFFFFF', bg: '#6BAAFB' },
-]
-
-const cardPassItems: HomePassCard[] = [
-  { name: '家庭保洁', count: '10次', price: '¥1080', desc: '低至108元/次' },
-  { name: '家庭保洁Plus', count: '20次', price: '¥2160', desc: '低至108元/次' },
 ]
 
 // ===== 数据状态 =====
@@ -202,28 +190,40 @@ function onSearchTap() {
 }
 
 function onCartTap() {
-  showTodo('购物车功能建设中')
+  showTodo('购物车当前不可用')
+}
+
+function serviceDetailUrl(service: Service) {
+  const query = service.code
+    ? `code=${encodeURIComponent(service.code)}`
+    : `id=${encodeURIComponent(String(service.id))}`
+  return `/pages/service/detail?${query}`
+}
+
+function serviceSearchUrl(keyword: string) {
+  return `/pages/service/search?keyword=${encodeURIComponent(keyword)}`
 }
 
 function onCategoryTap(item: HomeCategoryItem) {
-  showTodo(`${item.name}服务建设中`)
+  uni.navigateTo({ url: serviceSearchUrl(item.name) })
 }
 
 function onBannerTap() {
-  if (services.value[0]?.id) {
-    uni.navigateTo({ url: `/pages/service/detail?id=${services.value[0].id}` })
+  const service = services.value[0]
+  if (service) {
+    void onServiceTap(service)
     return
   }
 
-  showTodo('活动服务建设中')
+  showTodo('暂无活动服务')
+}
+
+function onServiceTap(service: Service) {
+  uni.navigateTo({ url: serviceDetailUrl(service) })
 }
 
 function onOperationTap(title: string) {
-  showTodo(`${title}建设中`)
-}
-
-function onPassCardTap(item: HomePassCard) {
-  showTodo(`${item.name}建设中`)
+  showTodo(`${title}暂无更多内容`)
 }
 
 onLoad(() => {
@@ -420,31 +420,7 @@ onShow(() => {
       </view>
     </view>
 
-    <!-- 7.7 优惠次卡模块 -->
-    <view class="mx-[24rpx] mt-[22rpx] bg-white rounded-[24rpx] p-[24rpx]">
-      <view class="flex items-center justify-between mb-[20rpx]">
-        <text class="text-[30rpx] font-700 text-gray-800">优惠次卡</text>
-        <view class="flex items-center gap-[6rpx]">
-          <text class="text-[22rpx] text-gray-400">更多</text>
-          <view class="i-carbon-arrow-right text-[22rpx] text-gray-400" />
-        </view>
-      </view>
-      <view class="flex gap-[20rpx]">
-        <view
-          v-for="(card, idx) in cardPassItems"
-          :key="idx"
-          class="flex-1 bg-[#FF373D] rounded-[16rpx] p-[24rpx]"
-          @tap="onPassCardTap(card)"
-        >
-          <text class="text-white text-[24rpx] block">{{ card.name }}</text>
-          <text class="text-white text-[20rpx] opacity-80 block mt-[6rpx]">{{ card.count }}</text>
-          <text class="text-white text-[36rpx] font-800 block mt-[12rpx]">{{ card.price }}</text>
-          <text class="text-white text-[20rpx] opacity-80 block mt-[6rpx]">{{ card.desc }}</text>
-        </view>
-      </view>
-    </view>
-
-    <!-- 7.8 热门服务区域 -->
+    <!-- 7.7 热门服务区域 -->
     <view class="mx-[24rpx] mt-[22rpx]">
       <text class="text-[32rpx] font-700 text-gray-800 block mb-[16rpx]">热门服务</text>
 
@@ -469,7 +445,7 @@ onShow(() => {
 
       <!-- 服务列表 -->
       <view v-else>
-        <service-card v-for="item in services" :key="item.id" :service="item" />
+        <service-card v-for="item in services" :key="item.id" :service="item" @tap="onServiceTap" />
       </view>
     </view>
   </view>

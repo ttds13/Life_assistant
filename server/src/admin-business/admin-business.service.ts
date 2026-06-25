@@ -6,6 +6,7 @@ import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { ORDER_STATUS } from '../orders/constants/order-status'
 import { PrismaService } from '../prisma/prisma.service'
+import { ObjectStorageService } from '../storage/storage.service'
 import type { AdminAuditReviewDto, AdminPageQueryDto, AdminStatusDto, AdminUserRoleDto } from './dto/admin-business.dto'
 
 type JsonRecord = Record<string, unknown>
@@ -37,6 +38,7 @@ export class AdminBusinessService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(AdminAuditService) private readonly audit: AdminAuditService,
+    @Inject(ObjectStorageService) private readonly storage: ObjectStorageService,
   ) {}
 
   async getDashboard() {
@@ -172,30 +174,18 @@ export class AdminBusinessService {
       }),
     ])
 
-    const userIds = users.map(user => user.id)
-    const staffUuids = users.map(user => this.devStaffUuid(user.id))
     const staffRoles = users.length
       ? await this.prisma.staff.findMany({
         where: {
           deletedAt: null,
-          OR: [
-            { userId: { in: this.uniqueBigInts(userIds) } },
-            { uuid: { in: staffUuids } },
-          ],
+          userId: { in: this.uniqueBigInts(users.map(user => user.id)) },
         },
-        select: { id: true, userId: true, uuid: true, status: true, workStatus: true },
+        select: { id: true, userId: true, status: true, workStatus: true },
       })
       : []
-    const legacyUserIdByUuid = new Map(users.map(user => [this.devStaffUuid(user.id), String(user.id)]))
     const staffByUserId = new Map<string, (typeof staffRoles)[number]>()
     for (const staff of staffRoles) {
       if (staff.userId) staffByUserId.set(String(staff.userId), staff)
-    }
-    for (const staff of staffRoles) {
-      const legacyUserId = legacyUserIdByUuid.get(staff.uuid)
-      if (legacyUserId && !staffByUserId.has(legacyUserId)) {
-        staffByUserId.set(legacyUserId, staff)
-      }
     }
 
     return this.pageResult(users.map((user) => {
@@ -256,7 +246,7 @@ export class AdminBusinessService {
       if (staff) {
         const staffData: Prisma.StaffUpdateInput = {
           name: updated.nickname || staff.name,
-          phone: updated.phone || staff.phone || this.devStaffPhone(updated.id),
+          phone: updated.phone || staff.phone,
           avatarUrl: updated.avatarUrl || '',
           cityCode: updated.cityCode || staff.cityCode,
         }
@@ -323,15 +313,19 @@ export class AdminBusinessService {
 
     if (dto.roleType === 'staff') {
       const staff = await this.prisma.$transaction(async (tx) => {
+        const phone = current.phone || existing?.phone
+        if (!phone) {
+          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'staff phone required', 400)
+        }
         const staffData = {
           userId: current.id,
-          name: current.nickname || existing?.name || `Dev Staff ${Number(current.id)}`,
-          phone: current.phone || existing?.phone || this.devStaffPhone(current.id),
+          name: current.nickname || existing?.name || `User ${Number(current.id)}`,
+          phone,
           avatarUrl: current.avatarUrl || '',
           status: 1,
           workStatus: existing?.workStatus && existing.workStatus !== 0 ? existing.workStatus : 1,
           deletedAt: null,
-          cityCode: current.cityCode || existing?.cityCode || 'dev',
+          cityCode: current.cityCode || existing?.cityCode || null,
         }
         const updated = existing
           ? await tx.staff.update({
@@ -341,8 +335,7 @@ export class AdminBusinessService {
           : await tx.staff.create({
             data: {
               ...staffData,
-              uuid: this.devStaffUuid(current.id),
-              passwordHash: 'dev',
+              passwordHash: await hashAdminPassword(`${current.id}:${current.uuid}`),
             },
           })
         await this.audit.writeWithClient(tx, {
@@ -635,6 +628,7 @@ export class AdminBusinessService {
     if (query.status) where.status = this.activeStatusToNumber(query.status)
     if (page.keyword) {
       where.OR = [
+        { code: { contains: page.keyword } },
         { name: { contains: page.keyword } },
         { category: { name: { contains: page.keyword } } },
       ]
@@ -653,6 +647,7 @@ export class AdminBusinessService {
 
     return this.pageResult(services.map(service => ({
       id: String(service.id),
+      code: service.code,
       categoryId: String(service.categoryId),
       name: service.name,
       category: service.category.name,
@@ -666,20 +661,29 @@ export class AdminBusinessService {
       rating: this.decimalToNumber(service.rating),
       totalOrders: service.totalOrders,
       status: this.activeStatus(service.status),
-      coverImage: service.coverImage || '',
+      coverImage: this.storage.signNullableUrl(service.coverImage) || service.coverImage || '',
+      coverImageOssUrl: service.coverImage || '',
+      coverImageDisplayUrl: this.storage.signNullableUrl(service.coverImage) || service.coverImage || '',
       updatedAt: this.formatDateTime(service.updatedAt),
     })), page, total)
   }
 
   async createService(body: JsonRecord, context: AdminWriteContext) {
     const created = await this.prisma.$transaction(async (tx) => {
+      const codeInput = this.optionalString(body.code)
+      const code = codeInput
+        ? await this.ensureManualServiceCode(tx, codeInput)
+        : await this.nextUniqueServiceCode(tx, this.optionalString(body.name))
+      const coverImage = this.optionalString(body.coverImage)
+      this.storage.assertPermanentOssUrl(coverImage)
       const service = await tx.service.create({
         data: {
+          code,
           categoryId: BigInt(this.requiredNumber(body.categoryId, 'categoryId required')),
           name: this.requiredString(body.name, 'name required'),
           description: this.optionalString(body.description),
           detail: this.optionalString(body.detail),
-          coverImage: this.optionalString(body.coverImage),
+          coverImage,
           basePrice: this.requiredDecimal(body.basePrice, 'basePrice required'),
           priceUnit: this.optionalString(body.priceUnit) || '次',
           minPrice: this.optionalDecimal(body.minPrice),
@@ -699,7 +703,7 @@ export class AdminBusinessService {
         targetId: service.id,
         requestId: context.requestId,
         ip: context.ip,
-        detail: { name: service.name },
+        detail: { code: service.code, name: service.name },
       })
       return service
     })
@@ -710,14 +714,17 @@ export class AdminBusinessService {
     const current = await this.prisma.service.findFirst({ where: { id: BigInt(id), deletedAt: null } })
     if (!current) throw this.notFound('service not found')
     const updated = await this.prisma.$transaction(async (tx) => {
+      const coverImage = this.optionalString(body.coverImage)
+      this.storage.assertPermanentOssUrl(coverImage)
       const service = await tx.service.update({
         where: { id: BigInt(id) },
         data: {
+          code: body.code === undefined ? current.code : await this.ensureManualServiceCode(tx, body.code, current.id),
           categoryId: body.categoryId ? BigInt(this.requiredNumber(body.categoryId, 'categoryId required')) : current.categoryId,
           name: this.optionalString(body.name) ?? current.name,
           description: this.optionalString(body.description),
           detail: this.optionalString(body.detail),
-          coverImage: this.optionalString(body.coverImage),
+          coverImage,
           basePrice: body.basePrice === undefined ? current.basePrice : this.requiredDecimal(body.basePrice, 'basePrice required'),
           priceUnit: this.optionalString(body.priceUnit) ?? current.priceUnit,
           minPrice: body.minPrice === undefined ? current.minPrice : this.optionalDecimal(body.minPrice),
@@ -737,7 +744,10 @@ export class AdminBusinessService {
         targetId: id,
         requestId: context.requestId,
         ip: context.ip,
-        detail: { before: { name: current.name }, after: { name: service.name } },
+        detail: {
+          before: { code: current.code, name: current.name },
+          after: { code: service.code, name: service.name },
+        },
       })
       return service
     })
@@ -906,6 +916,7 @@ export class AdminBusinessService {
     const name = this.requiredString(body.name, 'name required')
     const phone = this.requiredString(body.phone, 'phone required')
     const avatarUrl = this.optionalString(body.avatarUrl)
+    this.storage.assertPermanentOssUrl(avatarUrl)
     const cityCode = this.optionalString(body.cityCode)
     const userId = this.optionalPositiveInt(body.userId)
     const status = this.staffStatusToNumber(this.optionalString(body.status) || 'active')
@@ -932,7 +943,6 @@ export class AdminBusinessService {
         : await tx.staff.create({
           data: {
             ...staffData,
-            uuid: this.devStaffUuid(user.id),
             passwordHash,
           },
         })
@@ -957,10 +967,11 @@ export class AdminBusinessService {
     const name = this.optionalString(body.name) ?? current.name
     const phone = this.optionalString(body.phone) ?? current.phone
     const avatarUrl = this.optionalString(body.avatarUrl)
+    this.storage.assertPermanentOssUrl(avatarUrl)
     const cityCode = this.optionalString(body.cityCode)
     const updated = await this.prisma.$transaction(async (tx) => {
       const user = await this.ensureUserForStaff(tx, {
-        userId: this.optionalPositiveInt(body.userId) || this.boundUserIdFromStaff(current),
+        userId: this.optionalPositiveInt(body.userId) || (current.userId ? Number(current.userId) : undefined),
         name,
         phone,
         avatarUrl,
@@ -1083,7 +1094,8 @@ export class AdminBusinessService {
       orderNo: payment.order.orderNo,
       userName: payment.order.user.nickname || '',
       userPhone: payment.order.user.phone || '',
-      channel: payment.channel,
+      channel: this.paymentChannel(payment.channel),
+      transactionNo: payment.transactionNo || '',
       amount: this.decimalToNumber(payment.amount),
       status: payment.refunds.some(refund => refund.status === 'approved' || refund.status === 'refunded')
         ? 'refunded'
@@ -1690,6 +1702,7 @@ export class AdminBusinessService {
     userId?: bigint | null
     name: string
     phone: string
+    avatarUrl?: string | null
     skills: Prisma.JsonValue | null
     cityCode: string | null
     rating: Prisma.Decimal
@@ -1707,6 +1720,9 @@ export class AdminBusinessService {
       userStatus: item.user ? this.activeStatus(item.user.status) : '',
       name: item.name,
       phone: item.phone,
+      avatarUrl: this.storage.signNullableUrl(item.avatarUrl || '') || item.avatarUrl || '',
+      avatarOssUrl: item.avatarUrl || '',
+      avatarDisplayUrl: this.storage.signNullableUrl(item.avatarUrl || '') || item.avatarUrl || '',
       skills: this.formatSkills(item.skills),
       city: item.cityCode || '',
       cityCode: item.cityCode || '',
@@ -1723,10 +1739,7 @@ export class AdminBusinessService {
     return client.staff.findFirst({
       where: {
         ...(includeDeleted ? {} : { deletedAt: null }),
-        OR: [
-          { userId: id },
-          { uuid: this.devStaffUuid(id) },
-        ],
+        userId: id,
       },
       orderBy: [{ deletedAt: 'asc' }, { id: 'desc' }],
     })
@@ -1786,16 +1799,6 @@ export class AdminBusinessService {
     })
   }
 
-  private boundUserIdFromStaff(staff: { userId?: bigint | null, uuid: string }) {
-    if (staff.userId) return Number(staff.userId)
-    const legacyPrefix = 'dev-staff-user-'
-    if (staff.uuid.startsWith(legacyPrefix)) {
-      const userId = Number(staff.uuid.slice(legacyPrefix.length))
-      if (Number.isInteger(userId) && userId > 0) return userId
-    }
-    return undefined
-  }
-
   private userAuditSnapshot(user: {
     nickname: string | null
     phone: string | null
@@ -1815,6 +1818,7 @@ export class AdminBusinessService {
   }
 
   private serviceAuditSnapshot(service: {
+    code: string
     categoryId: bigint
     name: string
     basePrice: Prisma.Decimal
@@ -1823,6 +1827,7 @@ export class AdminBusinessService {
     deletedAt: Date | null
   }) {
     return {
+      code: service.code,
       categoryId: Number(service.categoryId),
       name: service.name,
       basePrice: this.decimalToNumber(service.basePrice),
@@ -2022,14 +2027,6 @@ export class AdminBusinessService {
     throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid work status', 400)
   }
 
-  private devStaffUuid(userId: bigint | number | string) {
-    return `dev-staff-user-${String(userId)}`
-  }
-
-  private devStaffPhone(userId: bigint | number | string) {
-    return `dev${String(userId)}`.padEnd(11, '0').slice(0, 11)
-  }
-
   private reviewStatus(value: number) {
     if (value === 2) return 'pending'
     return value === 1 ? 'published' : 'rejected'
@@ -2056,6 +2053,11 @@ export class AdminBusinessService {
     if (value === 'success' || value === 'paid') return 'paid'
     if (value === 'pending') return 'pending_payment'
     if (value === 'refunded') return 'refunded'
+    return value
+  }
+
+  private paymentChannel(value: string) {
+    if (value === 'wechat') return '微信支付'
     return value
   }
 
@@ -2151,6 +2153,66 @@ export class AdminBusinessService {
     if (value === undefined || value === null || value === '') return undefined
     const number = Number(value)
     return Number.isInteger(number) && number > 0 ? number : undefined
+  }
+
+  private async nextUniqueServiceCode(
+    client: Prisma.TransactionClient,
+    source?: string,
+    excludeId?: bigint,
+  ) {
+    const base = this.normalizeServiceCode(source)
+    for (let index = 0; index < 100; index += 1) {
+      const suffix = index === 0 ? '' : `_${index + 1}`
+      const candidate = `${base.slice(0, 64 - suffix.length)}${suffix}`
+      const existing = await client.service.findFirst({
+        where: {
+          code: candidate,
+          ...(excludeId ? { id: { not: excludeId } } : {}),
+        },
+        select: { id: true },
+      })
+      if (!existing) return candidate
+    }
+    throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'service code is duplicated', 409)
+  }
+
+  private async ensureManualServiceCode(
+    client: Prisma.TransactionClient,
+    value: unknown,
+    excludeId?: bigint,
+  ) {
+    const raw = this.optionalString(value)
+    if (!raw) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'service code required', 400)
+    }
+
+    const code = this.normalizeServiceCode(raw, false)
+    const existing = await client.service.findFirst({
+      where: {
+        code,
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+      },
+      select: { id: true },
+    })
+    if (existing) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'service code is duplicated', 409)
+    }
+    return code
+  }
+
+  private normalizeServiceCode(source?: string, allowFallback = true) {
+    const input = (source || `svc_${Date.now().toString(36)}`).trim().toLowerCase()
+    const cleaned = input
+      .normalize('NFKD')
+      .replace(/[^a-z0-9_-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/-+/g, '-')
+      .replace(/^[_-]+|[_-]+$/g, '')
+    if (!cleaned && !allowFallback) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'service code contains no valid characters', 400)
+    }
+    const code = cleaned || `svc_${Date.now().toString(36)}`
+    return /^[a-z0-9]/.test(code) ? code.slice(0, 64) : `svc_${code}`.slice(0, 64)
   }
 
   private requiredDecimal(value: unknown, message: string) {

@@ -81,7 +81,7 @@ export interface AddressRecord extends LifeResourceRecord {
 export interface LifeFormItem {
   prop: string;
   label: string;
-  type: "text" | "number" | "textarea" | "select" | "datetime";
+  type: "text" | "number" | "textarea" | "select" | "datetime" | "image";
   required?: boolean;
   options?: LifeStatusOption[];
   placeholder?: string;

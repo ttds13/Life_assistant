@@ -1,11 +1,9 @@
 <script lang="ts" setup>
-import { createDevStaffSession } from '@/api/auth'
 import { getOrders } from '@/api/orders'
 import type { OrderStatus } from '@/api/types/orders'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
 import { saveOrderListFilter } from '@/utils/orderListFilter'
-import { clearDevStaffSession, getStoredDevStaffSession, saveDevStaffSession } from '@/utils/devStaffStorage'
 
 definePage({
   style: {
@@ -19,7 +17,7 @@ const tokenStore = useTokenStore()
 const userStore = useUserStore()
 const staffEntering = ref(false)
 
-type StatAction = 'wallet' | 'card' | 'coupon'
+type StatAction = 'card' | 'coupon'
 type OrderAction = 'all' | 'pendingPayment' | 'pendingDispatch' | 'pendingConfirm' | 'pendingReview' | 'afterSales'
 type AppAction = 'address' | 'staffWorkbench' | 'applyStaff' | 'applyPartner' | 'faq' | 'customerService' | 'feedback' | 'settings'
 
@@ -44,8 +42,7 @@ interface AppEntry {
   auth: boolean
 }
 
-const mockProfileStats = {
-  walletBalance: 0,
+const emptyProfileStats = {
   cardCount: 0,
   couponCount: 0,
 }
@@ -60,7 +57,7 @@ const emptyOrderStats: OrderStats = {
   afterSales: 0,
 }
 
-const profileStats = computed(() => mockProfileStats)
+const profileStats = computed(() => emptyProfileStats)
 const orderStats = ref<OrderStats>({ ...emptyOrderStats })
 
 const displayName = computed(() => {
@@ -76,11 +73,6 @@ const displayPhone = computed(() => {
 })
 
 const statEntries = computed<StatEntry[]>(() => [
-  {
-    label: '钱包余额',
-    action: 'wallet',
-    value: tokenStore.hasLogin ? formatMoney(profileStats.value.walletBalance) : '--',
-  },
   {
     label: '我的卡包',
     action: 'card',
@@ -139,13 +131,6 @@ function goSettings() {
 }
 
 
-function formatMoney(value: number) {
-  const amount = Number(value)
-  if (Number.isNaN(amount))
-    return '0.00'
-  return amount.toFixed(2)
-}
-
 function formatBadge(count: number) {
   if (count > 99)
     return '99+'
@@ -180,34 +165,18 @@ async function loadOrderStats() {
 
 async function refreshUserProfile() {
   if (!tokenStore.hasLogin) {
-    clearDevStaffSession()
     return
   }
 
   try {
     await userStore.fetchUserInfo()
-    if (userStore.userInfo.role !== 'staff')
-      clearDevStaffSession()
   }
   catch {
-    clearDevStaffSession()
   }
 }
 
 function onProfileTap() {
   goSettings()
-}
-
-function goWalletPage() {
-  requireLogin(() => {
-    uni.navigateTo({
-      url: '/pages/wallet/index',
-      fail: (err) => {
-        console.error('跳转钱包页失败:', err)
-        uni.showToast({ icon: 'none', title: '钱包页跳转失败' })
-      },
-    })
-  })
 }
 
 function goCardPage() {
@@ -235,10 +204,6 @@ function goCouponPage() {
 }
 
 function onStatEntryTap(action: StatAction) {
-  if (action === 'wallet') {
-    goWalletPage()
-    return
-  }
   if (action === 'card') {
     goCardPage()
     return
@@ -272,8 +237,6 @@ async function enterStaffWorkbench() {
     return
   staffEntering.value = true
   try {
-    const session = getStoredDevStaffSession() || await createDevStaffSession()
-    saveDevStaffSession(session)
     uni.navigateTo({ url: '/pages/staff/home' })
   }
   finally {
@@ -307,11 +270,11 @@ function onAppTap(item: AppEntry) {
   }
 
   const titleMap: Record<Exclude<AppAction, 'address' | 'staffWorkbench' | 'settings'>, string> = {
-    applyStaff: '申请师傅功能待完善',
-    applyPartner: '申请合作商功能待完善',
+    applyStaff: '请联系客服申请',
+    applyPartner: '请联系客服申请',
     faq: '常见问题待配置',
     customerService: '客服信息待配置',
-    feedback: '问题反馈功能待完善',
+    feedback: '请联系客服反馈',
   }
   showPendingToast(titleMap[item.action])
 }

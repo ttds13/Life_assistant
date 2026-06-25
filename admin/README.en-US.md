@@ -31,7 +31,7 @@
 ## Project Features
 
 - **Simple and Easy-to-use**: Upgraded version of [vue-element-admin](https://gitee.com/panjiachen/vue-element-admin) for Vue3, with minimal encapsulation and easy to get started.
-- **Data Interaction**: Support for `Mock` data and [online API documentation](https://www.apifox.cn/apidoc/shared-195e783f-4d85-4235-a038-eec696de4ea5), with accompanying [Java](https://gitee.com/youlaiorg/youlai-boot) and [Node](https://gitee.com/youlaiorg/youlai-nest) backend source code.
+- **Data Interaction**: Support for online API documentation and project backend API integration.
 
 - **System Functions**: Provides user management, role management, menu management, department management, dictionary management, and other functional modules.
 - **Permission Management**: Supports dynamic routing, button permissions, role permissions, and data permissions.
@@ -169,10 +169,6 @@ server {
 ```
 
 For more detailed information, please refer to this article: [Nginx Installation and Configuration](https://blog.csdn.net/u013737132/article/details/145667694).
-
-## Local Mock
-
-The project supports both online and local Mock interfaces. By default, it uses online interfaces. To switch to Mock interfaces, modify the `VITE_MOCK_DEV_SERVER` value in the `.env.development` file to `true`.
 
 ## Backend API
 

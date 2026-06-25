@@ -31,7 +31,7 @@ export class OrdersController {
 
   @Get('orders/price-preview')
   getPricePreview(@Query() query: PricePreviewDto) {
-    return this.ordersService.getPricePreview(query.serviceId)
+    return this.ordersService.getPricePreview(query)
   }
 
   @Get('orders')

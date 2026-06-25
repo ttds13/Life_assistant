@@ -36,6 +36,7 @@ export class ServicesRepository {
         orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
         select: {
           id: true,
+          code: true,
           categoryId: true,
           name: true,
           description: true,
@@ -57,6 +58,16 @@ export class ServicesRepository {
   async findServiceById(id: number) {
     return this.prisma.service.findUnique({
       where: { id: BigInt(id) },
+      include: {
+        category: true,
+        images: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] },
+      },
+    })
+  }
+
+  async findServiceByCode(code: string) {
+    return this.prisma.service.findUnique({
+      where: { code },
       include: {
         category: true,
         images: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] },

@@ -613,7 +613,7 @@ const handleFileChange = async (event: Event) => {
     await UserAPI.updateProfile({
       avatar: data.url,
     });
-    userStore.userInfo.avatar = data.url;
+    userStore.userInfo.avatar = data.displayUrl || data.signedUrl || data.url;
   }
 };
 

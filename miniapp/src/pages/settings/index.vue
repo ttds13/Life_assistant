@@ -2,7 +2,7 @@
 import { updateProfile } from '@/api/auth'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
-import { clearDevStaffSession } from '@/utils/devStaffStorage'
+import { assertImageSize, uploadImage } from '@/utils/uploadImage'
 
 definePage({
   style: {
@@ -15,7 +15,6 @@ definePage({
 const tokenStore = useTokenStore()
 const userStore = useUserStore()
 
-const mockLoginFlagKey = 'life-assistant:mock-login'
 const editingNickname = ref(false)
 const nicknameInput = ref('')
 const saving = ref(false)
@@ -77,28 +76,20 @@ async function onChooseAvatar() {
     sourceType: ['album', 'camera'],
     success: async (res) => {
       const filePath = res.tempFilePaths[0]
+      const file = Array.isArray(res.tempFiles) ? res.tempFiles[0] : undefined
+      if (!assertImageSize(file?.size))
+        return
       saving.value = true
       try {
-        const uploadResult = await new Promise<string>((resolve, reject) => {
-          uni.uploadFile({
-            url: `${import.meta.env.VITE_SERVER_BASEURL}/upload/image`,
-            filePath,
-            name: 'file',
-            success: (uploadRes) => {
-              try {
-                const data = JSON.parse(uploadRes.data)
-                resolve(data.url || data.data?.url || '')
-              }
-              catch {
-                reject(new Error('解析上传结果失败'))
-              }
-            },
-            fail: reject,
-          })
-        })
-        if (!uploadResult) throw new Error('上传失败')
-        const profile = await updateProfile({ avatar: uploadResult })
+        const uploaded = await uploadImage({ filePath, bizType: 'user_avatar' })
+        const profile = await updateProfile({ avatar: uploaded.url })
         userStore.setFromProfile(profile)
+        if (uploaded.displayUrl) {
+          userStore.setUserInfo({
+            ...userStore.userInfo,
+            avatar: uploaded.displayUrl,
+          })
+        }
         uni.showToast({ icon: 'success', title: '头像已更新' })
       }
       catch {
@@ -110,7 +101,6 @@ async function onChooseAvatar() {
     },
   })
 }
-
 function onLogout() {
   uni.showModal({
     title: '提示',
@@ -119,8 +109,6 @@ function onLogout() {
     success: (res) => {
       if (res.confirm) {
         tokenStore.logout()
-        clearDevStaffSession()
-        uni.removeStorageSync(mockLoginFlagKey)
         uni.showToast({ icon: 'success', title: '已退出' })
         setTimeout(() => {
           uni.reLaunch({ url: '/pages/home/index' })
@@ -131,7 +119,7 @@ function onLogout() {
 }
 
 function onTodo(title: string) {
-  uni.showToast({ icon: 'none', title: `${title}待完善` })
+  uni.showToast({ icon: 'none', title: `${title}当前不可用` })
 }
 </script>
 

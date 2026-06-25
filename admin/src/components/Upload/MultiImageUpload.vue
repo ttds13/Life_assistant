@@ -15,7 +15,7 @@
     <el-icon><Plus /></el-icon>
     <template #file="{ file }">
       <div style="width: 100%">
-        <img class="el-upload-list__item-thumbnail" :src="file.url" />
+        <img class="el-upload-list__item-thumbnail" :src="displayUrlFor(file.url)" />
         <span class="el-upload-list__item-actions">
           <!-- 预览 -->
           <span @click="handlePreviewImage(file.url!)">
@@ -34,7 +34,7 @@
     v-if="previewVisible"
     :zoom-rate="1.2"
     :initial-index="previewImageIndex"
-    :url-list="modelValue"
+    :url-list="previewUrls"
     @close="handlePreviewClose"
   />
 </template>
@@ -92,6 +92,12 @@ const modelValue = defineModel("modelValue", {
 });
 
 const fileList = ref<UploadUserFile[]>([]);
+const displayUrlMap = ref<Record<string, string>>({});
+const previewUrls = computed(() => modelValue.value.map(url => displayUrlFor(url)));
+
+function displayUrlFor(url?: string) {
+  return url ? displayUrlMap.value[url] || url : "";
+}
 
 /**
  * 删除图片
@@ -184,6 +190,9 @@ const handleSuccess = (fileInfo: FileInfo, uploadFile: UploadUserFile) => {
     fileList.value[index].url = fileInfo.url;
     fileList.value[index].status = "success";
     modelValue.value[index] = fileInfo.url;
+    if (fileInfo.displayUrl || fileInfo.signedUrl) {
+      displayUrlMap.value[fileInfo.url] = fileInfo.displayUrl || fileInfo.signedUrl || fileInfo.url;
+    }
   }
 };
 

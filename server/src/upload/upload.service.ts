@@ -1,34 +1,37 @@
-import { Injectable } from '@nestjs/common'
-import { ConfigService } from '@nestjs/config'
-import * as fs from 'node:fs'
-import * as path from 'node:path'
-import * as crypto from 'node:crypto'
+import { Inject, Injectable } from '@nestjs/common'
+import { BusinessException } from '../common/errors/business-exception'
+import { ErrorCode } from '../common/errors/error-code'
+import type { RequestContext } from '../common/utils/request-context'
+import { ObjectStorageService } from '../storage/storage.service'
+import type { UploadActorType } from '../storage/storage.types'
 
 @Injectable()
 export class UploadService {
-  constructor(private readonly config: ConfigService) {}
+  constructor(@Inject(ObjectStorageService) private readonly storage: ObjectStorageService) {}
 
-  saveImage(file: Express.Multer.File) {
-    const uploadDir = this.config.get<string>('UPLOAD_DIR', 'uploads')
-    const absoluteDir = path.isAbsolute(uploadDir)
-      ? uploadDir
-      : path.join(process.cwd(), uploadDir)
-
-    if (!fs.existsSync(absoluteDir)) {
-      fs.mkdirSync(absoluteDir, { recursive: true })
+  saveImage(file: Express.Multer.File | undefined, options: {
+    bizType?: string
+    bizId?: string
+    user?: RequestContext['user']
+  }) {
+    if (!file) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'file is required', 400)
+    }
+    if (!options.user) {
+      throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, 'not logged in', 401)
     }
 
-    const ext = path.extname(file.originalname) || '.jpg'
-    const filename = `${crypto.randomUUID()}${ext}`
-    const filepath = path.join(absoluteDir, filename)
-    fs.writeFileSync(filepath, file.buffer)
-
-    const baseUrl = this.config.get<string>('SERVER_BASE_URL', '')
-    const apiPrefix = this.config.get<string>('API_PREFIX', '/api').replace(/^\/?/, '/').replace(/\/$/, '')
-    const url = baseUrl
-      ? `${baseUrl}${apiPrefix}/upload/files/${filename}`
-      : `${apiPrefix}/upload/files/${filename}`
-
-    return { url }
+    const uploaderType: UploadActorType = options.user.userType === 'admin' ? 'admin' : 'user'
+    return this.storage.putImage({
+      buffer: file.buffer,
+      mimeType: file.mimetype,
+      originalName: file.originalname,
+      bizType: options.bizType,
+      bizId: options.bizId,
+      actor: {
+        uploaderType,
+        uploaderId: options.user.userId,
+      },
+    })
   }
 }

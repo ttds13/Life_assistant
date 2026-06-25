@@ -23,10 +23,11 @@ interface ImportMetaEnv {
   readonly VITE_SERVER_HAS_API_PREFIX: 'true' | 'false'
   /** 认证模式，'single' | 'double' ==> 单token | 双token */
   readonly VITE_AUTH_MODE: 'single' | 'double'
-  readonly VITE_ENABLE_MOCK_PAYMENT?: 'true' | 'false'
-  readonly VITE_DEV_STAFF_ID?: string
   /** 是否清除console */
   readonly VITE_DELETE_CONSOLE: string
+  readonly VITE_LOCAL_DEBUG_LOGIN?: 'true' | 'false'
+  readonly VITE_LOCAL_DEBUG_LOGIN_PHONE?: string
+  readonly VITE_LOCAL_DEBUG_PAYMENT?: 'true' | 'false'
   // 更多环境变量...
 }
 

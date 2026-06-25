@@ -7,6 +7,7 @@ export const ORDER_DETAIL_INCLUDE = Prisma.validator<Prisma.OrderInclude>()({
   service: {
     select: {
       id: true,
+      code: true,
       categoryId: true,
       name: true,
       description: true,
@@ -69,6 +70,13 @@ export class OrdersRepository {
   findActiveService(serviceId: number) {
     return this.prisma.service.findFirst({
       where: { id: BigInt(serviceId), status: 1, deletedAt: null },
+      include: { category: true },
+    })
+  }
+
+  findActiveServiceByCode(serviceCode: string) {
+    return this.prisma.service.findFirst({
+      where: { code: serviceCode, status: 1, deletedAt: null },
       include: { category: true },
     })
   }

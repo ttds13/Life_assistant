@@ -29,7 +29,6 @@
 
   "include": [
     "types/**/*.d.ts",
-    "mock/**/*.ts",
     "src/**/*.ts",
     "src/**/*.vue",
     "vite.config.ts",

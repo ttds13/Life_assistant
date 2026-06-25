@@ -28,13 +28,7 @@ const tabs: Array<{ label: string, value: CouponTab }> = [
   { label: '已过期', value: 'expired' },
 ]
 
-const coupons: CouponItem[] = [
-  { id: 1, status: 'unused', amount: 50, title: '新人礼金券', desc: '满800减50(每次仅能用一张)', validity: '领取当天30天内可用' },
-  { id: 2, status: 'unused', amount: 30, title: '新人礼金券', desc: '满500减30(每次仅能用一张)', validity: '领取当天30天内可用' },
-  { id: 3, status: 'unused', amount: 20, title: '新人礼金券', desc: '满200减20(每次仅能用一张)', validity: '领取当天30天内可用' },
-  { id: 4, status: 'used', amount: 20, title: '新人礼金券', desc: '满200减20(每次仅能用一张)', validity: '已使用' },
-  { id: 5, status: 'expired', amount: 20, title: '新人礼金券', desc: '满200减20(每次仅能用一张)', validity: '已过期' },
-]
+const coupons: CouponItem[] = []
 
 const visibleCoupons = computed(() => {
   if (activeTab.value === 'all')
@@ -50,30 +44,8 @@ function getTabClass(tab: CouponTab) {
   return activeTab.value === tab ? 'tab-text tab-text-active' : 'tab-text'
 }
 
-function getCouponClass(status: CouponStatus) {
-  return status === 'unused' ? 'coupon-card' : 'coupon-card coupon-card-disabled'
-}
-
-function getActionText(status: CouponStatus) {
-  if (status === 'used')
-    return '已使用'
-  if (status === 'expired')
-    return '已过期'
-  return '立即使用'
-}
-
-function onUseCoupon(coupon: CouponItem) {
-  if (coupon.status !== 'unused') {
-    uni.showToast({ icon: 'none', title: '该优惠券不可使用' })
-    return
-  }
-
-  uni.navigateTo({
-    url: `/pages/order/create?couponId=${coupon.id}`,
-    fail: () => {
-      uni.showToast({ icon: 'none', title: '下单页跳转失败' })
-    },
-  })
+function getCouponClass() {
+  return 'coupon-card coupon-card-disabled'
 }
 </script>
 
@@ -95,7 +67,7 @@ function onUseCoupon(coupon: CouponItem) {
       <view
         v-for="item in visibleCoupons"
         :key="item.id"
-        :class="getCouponClass(item.status)"
+        :class="getCouponClass()"
       >
         <view class="amount-panel">
           <view class="amount-row">
@@ -111,15 +83,15 @@ function onUseCoupon(coupon: CouponItem) {
           <text class="coupon-validity">{{ item.validity }}</text>
         </view>
 
-        <view class="coupon-action" @tap="onUseCoupon(item)">
-          <text>{{ getActionText(item.status) }}</text>
+        <view class="coupon-action">
+          <text>不可用</text>
         </view>
       </view>
     </view>
 
     <view v-else class="empty-coupon">
       <text class="empty-title">暂无优惠券</text>
-      <text class="empty-desc">领取优惠券后会展示在这里</text>
+      <text class="empty-desc">当前没有可用优惠券</text>
     </view>
   </view>
 </template>
@@ -128,11 +100,11 @@ function onUseCoupon(coupon: CouponItem) {
 .coupon-page {
   min-height: 100vh;
   box-sizing: border-box;
-  background: #f5f5f5;
+  background: #f6f7f9;
 }
 
 .tab-row {
-  height: 128rpx;
+  height: 104rpx;
   display: flex;
   align-items: center;
   background: #ffffff;
@@ -141,7 +113,7 @@ function onUseCoupon(coupon: CouponItem) {
 .tab-item {
   position: relative;
   flex: 1;
-  height: 128rpx;
+  height: 104rpx;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -149,8 +121,8 @@ function onUseCoupon(coupon: CouponItem) {
 
 .tab-text {
   color: #2d3035;
-  font-size: 40rpx;
-  line-height: 52rpx;
+  font-size: 29rpx;
+  line-height: 38rpx;
   font-weight: 400;
 }
 
@@ -163,34 +135,35 @@ function onUseCoupon(coupon: CouponItem) {
   position: absolute;
   left: 50%;
   bottom: 0;
-  width: 56rpx;
-  height: 8rpx;
+  width: 42rpx;
+  height: 6rpx;
   border-radius: 999rpx;
   background: #ff383d;
   transform: translateX(-50%);
 }
 
 .coupon-list {
-  padding: 24rpx 24rpx 64rpx;
+  padding: 22rpx 24rpx 56rpx;
   display: flex;
   flex-direction: column;
-  gap: 26rpx;
+  gap: 20rpx;
 }
 
 .coupon-card {
-  height: 198rpx;
+  height: 180rpx;
   display: flex;
   overflow: hidden;
   border-radius: 18rpx;
   background: #ffffff;
+  box-shadow: 0 8rpx 20rpx rgba(25, 31, 40, 0.06);
 }
 
 .coupon-card-disabled {
-  opacity: 0.64;
+  box-shadow: 0 6rpx 16rpx rgba(25, 31, 40, 0.04);
 }
 
 .amount-panel {
-  width: 196rpx;
+  width: 164rpx;
   height: 100%;
   flex-shrink: 0;
   background: #ff383d;
@@ -204,80 +177,116 @@ function onUseCoupon(coupon: CouponItem) {
 .amount-row {
   display: flex;
   align-items: baseline;
+  min-width: 0;
 }
 
 .amount-symbol {
-  margin-right: 10rpx;
-  font-size: 34rpx;
-  line-height: 42rpx;
+  margin-right: 6rpx;
+  font-size: 25rpx;
+  line-height: 32rpx;
   font-weight: 700;
 }
 
 .amount-value {
-  font-size: 70rpx;
-  line-height: 76rpx;
+  font-size: 52rpx;
+  line-height: 58rpx;
   font-weight: 700;
 }
 
 .amount-scope {
-  margin-top: 14rpx;
-  font-size: 34rpx;
-  line-height: 44rpx;
+  max-width: 132rpx;
+  margin-top: 8rpx;
+  font-size: 23rpx;
+  line-height: 30rpx;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .coupon-content {
   flex: 1;
   min-width: 0;
   box-sizing: border-box;
-  padding: 34rpx 28rpx 26rpx;
+  padding: 24rpx 22rpx;
   display: flex;
   flex-direction: column;
+  justify-content: center;
 }
 
 .coupon-title {
   color: #20232a;
-  font-size: 38rpx;
-  line-height: 50rpx;
+  font-size: 31rpx;
+  line-height: 40rpx;
   font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .coupon-desc {
-  margin-top: 18rpx;
+  margin-top: 10rpx;
   color: #8c8f96;
-  font-size: 28rpx;
-  line-height: 38rpx;
+  font-size: 23rpx;
+  line-height: 31rpx;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .coupon-validity {
-  margin-top: 18rpx;
+  margin-top: 10rpx;
   color: #4c4f55;
-  font-size: 30rpx;
-  line-height: 40rpx;
+  font-size: 22rpx;
+  line-height: 30rpx;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .coupon-action {
-  width: 64rpx;
+  width: 54rpx;
   height: 100%;
   flex-shrink: 0;
   background: #ff383d;
   color: #ffffff;
-  font-size: 30rpx;
-  line-height: 38rpx;
-  font-weight: 500;
+  font-size: 24rpx;
+  line-height: 30rpx;
+  font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
   writing-mode: vertical-rl;
-  letter-spacing: 2rpx;
+  letter-spacing: 1rpx;
+}
+
+.coupon-action:active {
+  opacity: 0.86;
+}
+
+.coupon-card-disabled .amount-panel,
+.coupon-card-disabled .coupon-action {
+  background: #c8ccd3;
+}
+
+.coupon-card-disabled .coupon-action:active {
+  opacity: 1;
+}
+
+.coupon-card-disabled .coupon-title {
+  color: #747984;
+}
+
+.coupon-card-disabled .coupon-desc {
+  color: #a3a7af;
+}
+
+.coupon-card-disabled .coupon-validity {
+  color: #8e939c;
 }
 
 .empty-coupon {
-  min-height: 520rpx;
+  min-height: 480rpx;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -286,15 +295,15 @@ function onUseCoupon(coupon: CouponItem) {
 
 .empty-title {
   color: #333333;
-  font-size: 34rpx;
-  line-height: 46rpx;
+  font-size: 30rpx;
+  line-height: 40rpx;
   font-weight: 600;
 }
 
 .empty-desc {
   margin-top: 16rpx;
   color: #999999;
-  font-size: 28rpx;
-  line-height: 38rpx;
+  font-size: 24rpx;
+  line-height: 34rpx;
 }
 </style>

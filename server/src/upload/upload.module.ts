@@ -3,12 +3,14 @@ import { ServeStaticModule } from '@nestjs/serve-static'
 import { ConfigModule, ConfigService } from '@nestjs/config'
 import * as path from 'node:path'
 import { AuthModule } from '../auth/auth.module'
+import { StorageModule } from '../storage/storage.module'
 import { UploadController } from './upload.controller'
 import { UploadService } from './upload.service'
 
 @Module({
   imports: [
     AuthModule,
+    StorageModule,
     ServeStaticModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

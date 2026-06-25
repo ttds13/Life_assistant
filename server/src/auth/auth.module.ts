@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config'
 import { JwtModule } from '@nestjs/jwt'
 import { UsersModule } from '../users/users.module'
 import { PrismaModule } from '../prisma/prisma.module'
+import { StorageModule } from '../storage/storage.module'
 import { AuthController } from './auth.controller'
 import { AuthService } from './auth.service'
 import { JwtAuthGuard } from './jwt-auth.guard'
@@ -12,6 +13,7 @@ import { StaffIdentityService } from './staff-identity.service'
   imports: [
     UsersModule,
     PrismaModule,
+    StorageModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

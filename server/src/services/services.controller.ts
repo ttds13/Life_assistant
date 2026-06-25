@@ -25,13 +25,16 @@ export class ServicesController {
     })
   }
 
-  @Get('services/:id')
-  getServiceDetail(@Param('id') idText: string) {
+  @Get('services/:identifier')
+  getServiceDetail(@Param('identifier') idText: string) {
     const id = Number(idText)
-    if (!Number.isInteger(id) || id < 1) {
+    if (Number.isInteger(id) && id > 0) {
+      return this.servicesService.getServiceDetail(idText)
+    }
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(idText)) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'id 必须是正整数', 400)
     }
-    return this.servicesService.getServiceDetail(id)
+    return this.servicesService.getServiceDetail(idText)
   }
 
   private parseOptionalInt(value: string | undefined, field: string): number | undefined {

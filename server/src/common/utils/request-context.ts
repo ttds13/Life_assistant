@@ -18,6 +18,7 @@ export interface RequestContext {
 export type RequestWithContext = Request & {
   context?: RequestContext
   user?: RequestContext['user']
+  rawBody?: Buffer
 }
 
 export function getRequestId(request: RequestWithContext): string {

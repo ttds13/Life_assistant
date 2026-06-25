@@ -16,7 +16,7 @@ export const categorySeeds = [
 ]
 
 export const serviceSeeds = [
-  { categoryKey: 'daily_cleaning', name: '日常保洁 2 小时', description: '适合小户型基础清洁，覆盖客厅、卧室、厨房台面和卫生间基础清洁。', basePrice: '120', priceUnit: '次', sortOrder: 1 },
+  { categoryKey: 'daily_cleaning', name: '日常保洁 2 小时', description: '适合小户型基础清洁，覆盖客厅、卧室、厨房台面和卫生间基础清洁。', basePrice: '0.01', priceUnit: '次', sortOrder: 1 },
   { categoryKey: 'daily_cleaning', name: '日常保洁 3 小时', description: '适合标准家庭日常维护清洁，包含地面、台面、厨卫基础清洁。', basePrice: '170', priceUnit: '次', sortOrder: 2 },
   { categoryKey: 'daily_cleaning', name: '日常保洁 4 小时', description: '适合大户型或重点区域加强清洁。', basePrice: '220', priceUnit: '次', sortOrder: 3 },
   { categoryKey: 'deep_cleaning', name: '深度清洁 4 小时', description: '针对厨卫、客厅等重点区域进行深度清洁。', basePrice: '260', priceUnit: '次', sortOrder: 4 },

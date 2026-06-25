@@ -29,7 +29,8 @@ export interface PricePreview {
 }
 
 export interface CreateOrderPayload {
-  serviceId: number
+  serviceId?: number
+  serviceCode?: string
   appointmentDate: string
   appointmentTimeSlot: string
   addressId: number
@@ -44,8 +45,10 @@ export interface UserOrder {
   status: OrderStatus
   version?: number
   staffId?: number | null
+  serviceCode?: string
   serviceName: string
   serviceImage?: string
+  serviceImageOssUrl?: string
   appointmentTime: string
   addressText: string
   totalAmount: number
@@ -73,6 +76,8 @@ export interface OrderDetail extends UserOrder {
   statusLogs: OrderStatusLog[]
   amountItems: AmountDetailItem[]
   servicePhotos?: string[]
+  servicePhotoUrls?: string[]
+  servicePhotoOssUrls?: string[]
 }
 
 export interface QueryOrdersParams {
@@ -85,17 +90,15 @@ export interface PayOrderResult {
   paymentNo: string
   status: string
   amount?: number
+  provider?: 'wechat'
   channel?: string
-  paymentParams?: Record<string, any>
+  paymentParams?: WechatPaymentParams & Record<string, any>
 }
 
-export interface MockPaymentSuccessPayload {
-  paymentNo?: string
-  orderId?: number
-}
-
-export interface MockPaymentSuccessResult {
-  paymentNo: string
-  status: string
-  order: OrderDetail | null
+export interface WechatPaymentParams {
+  timeStamp: string
+  nonceStr: string
+  package: string
+  signType: 'RSA'
+  paySign: string
 }

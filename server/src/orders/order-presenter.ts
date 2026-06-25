@@ -77,6 +77,7 @@ export function presentUserOrder(order: OrderDetailRecord) {
     status: order.status,
     version: order.version,
     staffId: order.staffId ? Number(order.staffId) : null,
+    serviceCode: stringValue(serviceSnapshot.code, order.service?.code || ''),
     serviceName: stringValue(serviceSnapshot.name, order.service?.name || ''),
     serviceImage: stringValue(serviceSnapshot.coverImage, order.service?.coverImage || ''),
     appointmentStartTime: order.appointmentStartTime.toISOString(),
@@ -125,6 +126,7 @@ export function presentOrderDetail(order: OrderDetailRecord) {
     version: order.version,
     service: {
       id: Number(order.serviceId),
+      code: stringValue(serviceSnapshot.code, order.service?.code || ''),
       categoryId: numberValue(serviceSnapshot.categoryId, order.service ? Number(order.service.categoryId) : 0),
       name: stringValue(serviceSnapshot.name, order.service?.name || ''),
       description: stringValue(serviceSnapshot.description, order.service?.description || ''),

@@ -36,7 +36,6 @@ const statItems = computed(() => [
 
 const appEntries = [
   { label: '地址管理', icon: 'i-carbon-location' },
-  { label: '我的钱包', icon: 'i-carbon-wallet' },
   { label: '我的服务', icon: 'i-carbon-user-role' },
   { label: '证件管理', icon: 'i-carbon-id' },
   { label: '证件结算', icon: 'i-carbon-document' },
@@ -77,7 +76,7 @@ function onTodo(title: string) {
     goStaffSettings()
     return
   }
-  uni.showToast({ icon: 'none', title: `${title}待接入` })
+  uni.showToast({ icon: 'none', title: `${title}当前不可用` })
 }
 
 function onPeriodTap(value: StaffStatsPeriod) {

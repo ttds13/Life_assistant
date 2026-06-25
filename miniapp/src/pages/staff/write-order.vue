@@ -1,5 +1,7 @@
 <script lang="ts" setup>
 import type { CreateStaffOrderPayload, UploadImageItem } from '@/api/types/staff'
+import type { Service } from '@/api/types/services'
+import { getServices } from '@/api/services'
 import { createStaffOrder } from '@/api/staff'
 
 definePage({
@@ -10,14 +12,14 @@ definePage({
 
 const serviceAddress = ref('')
 const customServiceEnabled = ref(false)
-const selectedService = ref('')
+const services = ref<Service[]>([])
+const selectedService = ref<Service | null>(null)
 const appointmentTime = ref('')
 const dispatchMode = ref<'platform' | 'specified' | 'none'>('platform')
 const photos = ref<UploadImageItem[]>([])
 const remark = ref('')
 const submitting = ref(false)
 
-const serviceOptions = ['家庭日常保洁', '开荒保洁', '窗帘清洗', '家电清洗']
 const timeOptions = ['今天 14:00-17:00', '今天 18:00-21:00', '明天 09:00-12:00', '明天 14:00-17:00']
 const dispatchOptions: { label: string, value: typeof dispatchMode.value }[] = [
   { label: '平台分配', value: 'platform' },
@@ -25,7 +27,27 @@ const dispatchOptions: { label: string, value: typeof dispatchMode.value }[] = [
   { label: '暂不分配', value: 'none' },
 ]
 
+const serviceOptions = computed(() => services.value.map(item => item.name))
+const selectedServiceName = computed(() => selectedService.value?.name || '')
 const selectedDispatchLabel = computed(() => dispatchOptions.find(item => item.value === dispatchMode.value)?.label || '请选择订单分配方式')
+
+function normalizeServiceList(data: any): Service[] {
+  if (Array.isArray(data))
+    return data
+
+  return data?.items || data?.list || data?.records || []
+}
+
+async function loadServices() {
+  try {
+    const result = await getServices({ page: 1, pageSize: 100 })
+    services.value = normalizeServiceList(result)
+  }
+  catch {
+    services.value = []
+    uni.showToast({ icon: 'none', title: '服务列表加载失败' })
+  }
+}
 
 function chooseAddress() {
   serviceAddress.value = '黄岛区长江中路 118 号海岸花园 8 号楼 1201'
@@ -33,10 +55,15 @@ function chooseAddress() {
 }
 
 function chooseService() {
+  if (!serviceOptions.value.length) {
+    uni.showToast({ icon: 'none', title: '暂无可选服务' })
+    return
+  }
+
   uni.showActionSheet({
-    itemList: serviceOptions,
+    itemList: serviceOptions.value,
     success: (res) => {
-      selectedService.value = serviceOptions[res.tapIndex]
+      selectedService.value = services.value[res.tapIndex] || null
     },
   })
 }
@@ -68,6 +95,10 @@ function validate() {
     uni.showToast({ icon: 'none', title: '请选择预约服务' })
     return false
   }
+  if (!selectedService.value.code && !selectedService.value.id) {
+    uni.showToast({ icon: 'none', title: '服务数据异常' })
+    return false
+  }
   if (!appointmentTime.value) {
     uni.showToast({ icon: 'none', title: '请选择上门时间' })
     return false
@@ -87,12 +118,15 @@ async function onSubmit() {
     const payload: CreateStaffOrderPayload = {
       serviceAddress: serviceAddress.value,
       customServiceEnabled: customServiceEnabled.value,
-      serviceId: serviceOptions.indexOf(selectedService.value) + 1,
+      serviceCode: selectedService.value?.code,
+      serviceId: selectedService.value?.code ? undefined : selectedService.value?.id,
       appointmentTime: appointmentTime.value,
       dispatchMode: dispatchMode.value,
       photos: photos.value.map((item, index) => ({
         id: item.id || index,
-        url: item.url,
+        url: item.ossUrl || item.url,
+        ossUrl: item.ossUrl || item.url,
+        displayUrl: item.displayUrl || item.url,
         type: item.type,
       })),
       remark: remark.value,
@@ -109,8 +143,12 @@ async function onSubmit() {
 }
 
 function onDraft() {
-  uni.showToast({ icon: 'none', title: '草稿功能待接入' })
+  uni.showToast({ icon: 'none', title: '请完成后提交订单' })
 }
+
+onLoad(() => {
+  void loadServices()
+})
 </script>
 
 <template>
@@ -132,8 +170,8 @@ function onDraft() {
       <view class="mt-[28rpx] pt-[28rpx] border-t border-[#F3F4F6] flex items-center justify-between" @tap="chooseService">
         <text class="text-[32rpx] text-[#1F2937] font-700">预约服务</text>
         <view class="flex items-center min-w-0 ml-[20rpx]">
-          <text class="truncate text-[30rpx]" :class="selectedService ? 'text-[#1F2937]' : 'text-[#C4C8D0]'">
-            {{ selectedService || '请选择预约服务' }}
+          <text class="truncate text-[30rpx]" :class="selectedServiceName ? 'text-[#1F2937]' : 'text-[#C4C8D0]'">
+            {{ selectedServiceName || '请选择预约服务' }}
           </text>
           <text class="i-carbon-chevron-right text-[34rpx] text-[#C4C8D0] ml-[12rpx]" />
         </view>

@@ -63,7 +63,7 @@ async function runPrimary(task: StaffTask) {
       success: async (res) => {
         if (!res.confirm)
           return
-        await completeStaffTask(task.id, { version: task.version, photoUrls: task.photos?.map(photo => photo.url) || [] })
+        await completeStaffTask(task.id, { version: task.version, photoUrls: task.photos?.map(photo => photo.ossUrl || photo.url) || [] })
         uni.showToast({ icon: 'success', title: '已提交' })
         loadTasks()
       },

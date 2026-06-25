@@ -1,6 +1,7 @@
 <script lang="ts" setup>
-import { cancelOrder, confirmOrder, getOrderDetail, mockPaymentSuccess, payOrder } from '@/api/orders'
+import { cancelOrder, confirmOrder, getOrderDetail, payOrder } from '@/api/orders'
 import type { OrderDetail } from '@/api/types/orders'
+import { getWechatPaymentParams, requestWechatPayment } from '@/utils/wechatPayment'
 
 definePage({
   style: {
@@ -12,14 +13,7 @@ const orderId = ref(0)
 const order = ref<OrderDetail | null>(null)
 const loading = ref(true)
 const actionLoading = ref(false)
-const mockPayLoading = ref(false)
-
-const canMockPay = computed(() => {
-  return import.meta.env.VITE_ENABLE_MOCK_PAYMENT === 'true'
-    || import.meta.env.VITE_SERVER_BASEURL?.includes('192.168.')
-    || import.meta.env.VITE_SERVER_BASEURL?.includes('127.0.0.1')
-    || import.meta.env.VITE_SERVER_BASEURL?.includes('localhost')
-})
+const payLoading = ref(false)
 
 const statusInfo = computed(() => {
   const status = order.value?.status
@@ -72,47 +66,38 @@ async function loadOrder() {
   }
 }
 
-async function runMockPay() {
-  if (!order.value || mockPayLoading.value)
+async function runWechatPay() {
+  if (!order.value || payLoading.value)
     return
-  mockPayLoading.value = true
+  payLoading.value = true
   try {
     const payment = await payOrder(order.value.id)
-    const paymentNo = payment.paymentNo || String(payment.paymentParams?.paymentNo || '')
-    const result = await mockPaymentSuccess(paymentNo ? { paymentNo } : { orderId: order.value.id })
-    if (result.order)
-      order.value = result.order
-    else
+    if (payment.status !== 'pending' || !payment.paymentParams) {
       await loadOrder()
-    uni.showToast({ icon: 'success', title: '支付成功' })
+      uni.showToast({ icon: 'none', title: '订单状态已刷新' })
+      return
+    }
+    const params = getWechatPaymentParams(payment)
+    await requestWechatPayment(params)
+    uni.showToast({ icon: 'success', title: '支付完成' })
+    setTimeout(() => {
+      void loadOrder()
+    }, 1200)
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    uni.showToast({ icon: 'none', title: message.includes('cancel') ? '已取消支付' : '支付未完成' })
   }
   finally {
-    mockPayLoading.value = false
+    payLoading.value = false
   }
-}
-
-function onMockPay() {
-  if (!order.value)
-    return
-  uni.showModal({
-    title: '模拟支付成功',
-    content: '开发环境将直接把该订单推进到待派单状态，是否继续？',
-    success: async (res) => {
-      if (res.confirm)
-        await runMockPay()
-    },
-  })
 }
 
 function onPrimary() {
   if (!order.value)
     return
   if (order.value.status === 'pending_payment') {
-    if (canMockPay.value) {
-      onMockPay()
-      return
-    }
-    uni.navigateTo({ url: `/pages/payment/result?orderId=${order.value.id}&status=pending&amount=${order.value.payableAmount}` })
+    void runWechatPay()
     return
   }
   if (order.value.status === 'pending_confirm') {
@@ -135,14 +120,14 @@ function onPrimary() {
     return
   }
   if (order.value.status === 'completed') {
-    uni.showToast({ icon: 'none', title: '评价功能待完善' })
+    uni.showToast({ icon: 'none', title: '当前暂无评价入口' })
     return
   }
   if (order.value.status === 'cancelled') {
     uni.switchTab({ url: '/pages/home/index' })
     return
   }
-  uni.showToast({ icon: 'none', title: '进度功能待完善' })
+  uni.showToast({ icon: 'none', title: '请查看当前订单状态' })
 }
 
 function onSecondary() {
@@ -167,7 +152,7 @@ function onSecondary() {
     })
     return
   }
-  uni.showToast({ icon: 'none', title: '售后功能待完善' })
+  uni.showToast({ icon: 'none', title: '如需帮助请联系客服' })
 }
 
 function onCallStaff() {
@@ -259,16 +244,6 @@ onShow(() => {
         </form-section>
 
         <form-section title="支付信息">
-          <view v-if="order.status === 'pending_payment' && canMockPay" class="mb-3 rounded-[12rpx] bg-[#FFF7ED] p-3">
-            <text class="block text-[24rpx] leading-[36rpx] text-[#B45309]">开发环境可使用模拟支付推进真实订单状态。</text>
-            <button
-              class="mt-3 h-[72rpx] rounded-full bg-[#F59E0B] text-white text-[26rpx] flex items-center justify-center"
-              :loading="mockPayLoading"
-              @tap="onMockPay"
-            >
-              模拟支付成功
-            </button>
-          </view>
           <view class="flex py-2">
             <text class="w-[140rpx] text-[26rpx] text-gray-400">订单号</text>
             <text class="flex-1 text-[26rpx] text-gray-700">{{ order.orderNo }}</text>
@@ -297,7 +272,7 @@ onShow(() => {
       v-if="order"
       :primary-text="actionConfig.primary"
       :secondary-text="actionConfig.secondary"
-      :loading="actionLoading"
+      :loading="actionLoading || payLoading"
       @primary="onPrimary"
       @secondary="onSecondary"
     />

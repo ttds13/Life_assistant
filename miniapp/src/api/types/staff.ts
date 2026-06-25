@@ -17,6 +17,8 @@ export type StaffStatsPeriod = 'today' | 'week' | 'month' | 'total'
 export interface StaffServicePhoto {
   id: number | string
   url: string
+  displayUrl?: string
+  ossUrl?: string
   type?: 'before' | 'process' | 'after' | 'other'
   remark?: string
   createdAt?: string
@@ -86,7 +88,8 @@ export interface UpdateStaffProfileParams {
 export interface CreateStaffOrderPayload {
   serviceAddress: string
   customServiceEnabled: boolean
-  serviceId: number
+  serviceId?: number
+  serviceCode?: string
   appointmentTime: string
   dispatchMode: 'platform' | 'specified' | 'none'
   photos: StaffServicePhoto[]
@@ -96,6 +99,8 @@ export interface CreateStaffOrderPayload {
 export interface UploadImageItem {
   id?: number | string
   url: string
+  displayUrl?: string
+  ossUrl?: string
   status?: 'local' | 'uploading' | 'done' | 'error'
   type?: 'before' | 'process' | 'after' | 'other'
 }

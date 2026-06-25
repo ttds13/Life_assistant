@@ -4,13 +4,6 @@ import { customTabbarEnable, needHideNativeTabbar, tabbarCacheEnable } from './c
 import { tabbarList, tabbarStore } from './store'
 import TabbarItem from './TabbarItem.vue'
 
-// #ifdef MP-WEIXIN
-// 将自定义节点设置成虚拟的（去掉自定义组件包裹层），更加接近Vue组件的表现，能更好的使用flex属性
-defineOptions({
-  virtualHost: true,
-})
-// #endif
-
 /**
  * 中间的鼓包tabbarItem的点击事件
  */

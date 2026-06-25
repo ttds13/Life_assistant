@@ -17,7 +17,9 @@ async function loadPhotos() {
   const task = await getStaffTaskDetail(taskId.value || 901)
   photos.value = (task.photos || []).map(item => ({
     id: item.id,
-    url: item.url,
+    url: item.ossUrl || item.url,
+    ossUrl: item.ossUrl || item.url,
+    displayUrl: item.displayUrl || item.url,
     status: 'done',
     type: item.type,
   }))
@@ -32,7 +34,9 @@ async function onSubmit() {
   try {
     await uploadStaffOrderPhotos(taskId.value, photos.value.map((item, index) => ({
       id: item.id || index,
-      url: item.url,
+      url: item.ossUrl || item.url,
+      ossUrl: item.ossUrl || item.url,
+      displayUrl: item.displayUrl || item.url,
       type: item.type,
       remark: remark.value,
       createdAt: '刚刚',

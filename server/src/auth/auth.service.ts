@@ -1,10 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { JwtService } from '@nestjs/jwt'
-import { PrismaService } from '../prisma/prisma.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
-import { UsersRepository, UserProfileRecord } from '../users/users.repository'
+import { PrismaService } from '../prisma/prisma.service'
+import { ObjectStorageService } from '../storage/storage.service'
+import { UserProfileRecord, UsersRepository } from '../users/users.repository'
 import type { UpdateProfileDto } from './dto/update-profile.dto'
 
 type AuthUserProfile = Omit<UserProfileRecord, 'role'> & { role: 'user' | 'staff' }
@@ -16,24 +17,39 @@ export class AuthService {
     @Inject(JwtService) private readonly jwt: JwtService,
     @Inject(UsersRepository) private readonly users: UsersRepository,
     @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(ObjectStorageService) private readonly storage: ObjectStorageService,
   ) {}
 
-  async mockLogin(phone: string) {
-    if (this.config.get<string>('NODE_ENV') === 'production') {
-      throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, '生产环境禁用模拟登录', 403)
+  async mockLogin(phone?: string) {
+    this.assertMockLoginEnabled()
+
+    const allowedPhone = this.config.get<string>('MOCK_LOGIN_PHONE', '13800001111').trim()
+    const loginPhone = (phone || allowedPhone).trim()
+    if (!/^1\d{10}$/.test(loginPhone)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid mock login phone', 400)
+    }
+    if (loginPhone !== allowedPhone) {
+      throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'mock login phone is not allowed', 403)
     }
 
-    let user = await this.users.findUserByPhone(phone)
+    let user = await this.users.findUserByPhone(loginPhone)
     if (!user) {
       user = await this.users.createUser({
-        phone,
-        nickname: `用户_${phone.slice(-6)}`,
+        phone: loginPhone,
+        nickname: `Mock_${loginPhone.slice(-6)}`,
         avatar: '',
+        openid: `mock_${loginPhone}`,
+        unionid: '',
       })
     }
 
     if (user.status !== 1) {
-      throw new BusinessException(ErrorCode.AUTH_USER_DISABLED, '账号已被禁用', 403)
+      throw new BusinessException(ErrorCode.AUTH_USER_DISABLED, 'account disabled', 403)
+    }
+
+    const mockOpenid = `mock_${loginPhone}`
+    if (!user.openid) {
+      user = await this.users.updateUser(user.id, { openid: mockOpenid, unionid: '' }) || user
     }
 
     const profile = await this.resolveUserProfile(user)
@@ -54,7 +70,7 @@ export class AuthService {
     if (!user) {
       user = await this.users.createUser({
         phone,
-        nickname: `用户_${phone.slice(-6)}`,
+        nickname: `User_${phone.slice(-6)}`,
         avatar: '',
         openid,
         unionid,
@@ -62,7 +78,7 @@ export class AuthService {
     }
 
     if (user.status !== 1) {
-      throw new BusinessException(ErrorCode.AUTH_USER_DISABLED, '账号已被禁用', 403)
+      throw new BusinessException(ErrorCode.AUTH_USER_DISABLED, 'account disabled', 403)
     }
 
     if (!user.openid || user.openid !== openid || unionid) {
@@ -79,7 +95,7 @@ export class AuthService {
   async getMe(userId: number) {
     const user = await this.users.findUserById(userId)
     if (!user) {
-      throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, '用户不存在', 401)
+      throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, 'user not found', 401)
     }
     return this.formatUser(await this.resolveUserProfile(user))
   }
@@ -87,37 +103,28 @@ export class AuthService {
   async updateProfile(userId: number, dto: UpdateProfileDto) {
     const fields: UpdateProfileDto = {}
     if (dto.nickname !== undefined) fields.nickname = dto.nickname.trim()
-    if (dto.avatar !== undefined) fields.avatar = dto.avatar.trim()
+    if (dto.avatar !== undefined) {
+      fields.avatar = dto.avatar.trim()
+      this.storage.assertPermanentOssUrl(fields.avatar)
+    }
 
     const user = await this.users.updateUser(userId, fields)
     if (!user) {
-      throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, '用户不存在', 401)
+      throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, 'user not found', 401)
     }
     return this.formatUser(await this.resolveUserProfile(user))
   }
 
-  async createDevStaffSession(userId: number) {
-    if (this.config.get<string>('NODE_ENV') === 'production') {
-      throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'dev staff session disabled', 403)
-    }
-
-    const user = await this.users.findUserById(userId)
-    if (!user) {
-      throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, 'user not found', 401)
-    }
-
-    const staff = await this.findActiveStaffForUser(user.id)
-    if (!staff) {
-      throw new BusinessException(ErrorCode.STAFF_FORBIDDEN, 'staff role is not enabled', 403)
-    }
-
-    return {
-      staffId: Number(staff.id),
-      userId: user.id,
-      phone: user.phone,
-      staffName: staff.name,
-      staffPhone: staff.phone,
-    }
+  findActiveStaffForUser(userId: number | string) {
+    const id = BigInt(userId)
+    return this.prisma.staff.findFirst({
+      where: {
+        status: 1,
+        deletedAt: null,
+        userId: id,
+      },
+      select: { id: true, name: true, phone: true },
+    })
   }
 
   private async signToken(user: AuthUserProfile) {
@@ -130,11 +137,15 @@ export class AuthService {
   }
 
   private formatUser(user: AuthUserProfile) {
+    const avatarOssUrl = user.avatar
+    const avatar = this.storage.signNullableUrl(avatarOssUrl) || avatarOssUrl
     return {
       id: user.id,
       phone: user.phone,
       nickname: user.nickname,
-      avatar: user.avatar,
+      avatar,
+      avatarOssUrl,
+      avatarDisplayUrl: avatar,
       role: user.role,
     }
   }
@@ -147,23 +158,10 @@ export class AuthService {
     }
   }
 
-  private findActiveStaffForUser(userId: number | string) {
-    const id = BigInt(userId)
-    return this.prisma.staff.findFirst({
-      where: {
-        status: 1,
-        deletedAt: null,
-        OR: [
-          { userId: id },
-          { uuid: this.devStaffUuid(userId) },
-        ],
-      },
-      select: { id: true, name: true, phone: true },
-    })
-  }
-
-  private devStaffUuid(userId: number | string) {
-    return `dev-staff-user-${String(userId)}`
+  private assertMockLoginEnabled() {
+    if (this.config.get<string>('MOCK_LOGIN_ENABLED', 'false') !== 'true') {
+      throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'mock login disabled', 403)
+    }
   }
 
   private async callWechatCode2Session(loginCode: string): Promise<{ openid: string, unionid: string }> {
@@ -173,7 +171,7 @@ export class AuthService {
     const response = await fetch(url)
     const data = await response.json() as Record<string, string | number>
     if (data.errcode) {
-      throw new BusinessException(ErrorCode.AUTH_WECHAT_FAIL, `微信登录失败: ${data.errmsg || data.errcode}`, 400)
+      throw new BusinessException(ErrorCode.AUTH_WECHAT_FAIL, `wechat login failed: ${data.errmsg || data.errcode}`, 400)
     }
     return {
       openid: String(data.openid || ''),
@@ -188,7 +186,7 @@ export class AuthService {
     const tokenResponse = await fetch(tokenUrl)
     const tokenData = await tokenResponse.json() as Record<string, string | number>
     if (tokenData.errcode) {
-      throw new BusinessException(ErrorCode.AUTH_WECHAT_FAIL, `获取 access_token 失败: ${tokenData.errmsg || tokenData.errcode}`, 400)
+      throw new BusinessException(ErrorCode.AUTH_WECHAT_FAIL, `get access_token failed: ${tokenData.errmsg || tokenData.errcode}`, 400)
     }
 
     const phoneUrl = `https://api.weixin.qq.com/wxa/business/getuserphonenumber?access_token=${tokenData.access_token}`
@@ -206,12 +204,12 @@ export class AuthService {
       }
     }
     if (phoneData.errcode) {
-      throw new BusinessException(ErrorCode.AUTH_PHONE_REQUIRED, `获取手机号失败: ${phoneData.errmsg || phoneData.errcode}`, 400)
+      throw new BusinessException(ErrorCode.AUTH_PHONE_REQUIRED, `get phone number failed: ${phoneData.errmsg || phoneData.errcode}`, 400)
     }
 
     const phone = phoneData.phone_info?.purePhoneNumber || phoneData.phone_info?.phoneNumber
     if (!phone) {
-      throw new BusinessException(ErrorCode.AUTH_PHONE_REQUIRED, '获取手机号失败', 400)
+      throw new BusinessException(ErrorCode.AUTH_PHONE_REQUIRED, 'phone number is required', 400)
     }
     return phone
   }

@@ -1,6 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
-import { PAYMENT_CHANNEL } from './constants/payment-channel'
 
 @Injectable()
 export class PaymentsRepository {
@@ -10,14 +9,35 @@ export class PaymentsRepository {
     return this.prisma
   }
 
-  findLatestMockPayment(orderId: number, userId: number) {
+  findLatestPaymentByChannel(orderId: number, userId: number, channel: string) {
     return this.prisma.payment.findFirst({
       where: {
         orderId: BigInt(orderId),
         userId: BigInt(userId),
-        channel: PAYMENT_CHANNEL.MOCK,
+        channel,
       },
+      include: { order: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    })
+  }
+
+  findOrderForPayment(orderId: number) {
+    return this.prisma.order.findUnique({
+      where: { id: BigInt(orderId) },
+      include: {
+        user: {
+          select: {
+            id: true,
+            openid: true,
+          },
+        },
+        service: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
     })
   }
 
@@ -28,11 +48,4 @@ export class PaymentsRepository {
     })
   }
 
-  findLatestOrderPayment(orderId: number) {
-    return this.prisma.payment.findFirst({
-      where: { orderId: BigInt(orderId), channel: PAYMENT_CHANNEL.MOCK },
-      include: { order: true },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    })
-  }
 }

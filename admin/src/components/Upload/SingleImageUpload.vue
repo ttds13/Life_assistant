@@ -14,8 +14,8 @@
       <template v-if="modelValue">
         <el-image
           class="single-upload__image"
-          :src="modelValue"
-          :preview-src-list="[modelValue]"
+          :src="displayUrl"
+          :preview-src-list="[displayUrl]"
           @click.stop
         />
         <el-icon class="single-upload__delete-btn" @click.stop="handleDelete">
@@ -81,12 +81,19 @@ const props = defineProps({
       };
     },
   },
+  displayUrl: {
+    type: String,
+    default: "",
+  },
 });
 
 const modelValue = defineModel("modelValue", {
   type: String,
   default: () => "",
 });
+
+const displayUrlMap = ref<Record<string, string>>({});
+const displayUrl = computed(() => props.displayUrl || displayUrlMap.value[modelValue.value] || modelValue.value);
 
 /**
  * 限制用户上传文件的格式和大小
@@ -163,6 +170,9 @@ function handleDelete() {
 const onSuccess = (fileInfo: FileInfo) => {
   ElMessage.success("上传成功");
   modelValue.value = fileInfo.url;
+  if (fileInfo.displayUrl || fileInfo.signedUrl) {
+    displayUrlMap.value[fileInfo.url] = fileInfo.displayUrl || fileInfo.signedUrl || fileInfo.url;
+  }
 };
 
 /**

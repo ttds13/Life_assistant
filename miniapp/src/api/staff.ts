@@ -1,5 +1,4 @@
 import type { PageData } from './types/common'
-import type { DevStaffSession } from './types/auth'
 import type { OrderDetail, OrderStatus, UserOrder } from './types/orders'
 import type {
   CreateStaffOrderPayload,
@@ -14,13 +13,9 @@ import type {
   UpdateStaffProfileParams,
 } from './types/staff'
 import { http } from '@/http/http'
-import { getCurrentDevStaffId, getStoredDevStaffSession } from '@/utils/devStaffStorage'
-import { ensureDevStaffSession } from '@/utils/devStaffSession'
 
 async function staffHeaders() {
-  await ensureDevStaffSession()
-  const staffId = getCurrentDevStaffId()
-  return staffId ? { 'X-Staff-Id': staffId } : undefined
+  return undefined
 }
 
 function photoStorageKey(orderId: number) {
@@ -72,7 +67,9 @@ function toStaffTask(order: UserOrder | OrderDetail, group: StaffTaskGroup = 'di
     : mapStaffStatus(order.status)
   const photos = detail.servicePhotos?.map((url, index) => ({
     id: `${order.id}-${index}`,
-    url,
+    url: detail.servicePhotoOssUrls?.[index] || url,
+    ossUrl: detail.servicePhotoOssUrls?.[index] || url,
+    displayUrl: detail.servicePhotoUrls?.[index] || url,
     type: photoType(index),
     createdAt: '',
   }))
@@ -206,7 +203,7 @@ export function startStaffTask(id: number, version?: number) {
 
 export async function completeStaffTask(id: number, data?: { version?: number, remark?: string, photoUrls?: string[] }) {
   const localPhotos = getLocalPhotos(id)
-  const photoUrls = data?.photoUrls?.length ? data.photoUrls : localPhotos.map(photo => photo.url)
+  const photoUrls = data?.photoUrls?.length ? data.photoUrls : localPhotos.map(photo => photo.ossUrl || photo.url)
   const task = await transitionStaffOrder(id, 'complete', {
     ...data,
     photoUrls,
@@ -231,17 +228,6 @@ export function createStaffOrder(_payload: CreateStaffOrderPayload) {
 export function getStaffProfile(period?: StaffStatsPeriod) {
   return staffHeaders()
     .then(headers => http.get<StaffProfile>('/staff/profile', { period: period || 'today' }, headers))
-    .then((profile) => {
-      const session = getStoredDevStaffSession() as DevStaffSession | null
-      if (!profile.staffName && session) {
-        return {
-          ...profile,
-          staffName: session.staffName,
-          regionText: session.staffPhone,
-        }
-      }
-      return profile
-    })
 }
 
 export async function updateStaffProfile(params: UpdateStaffProfileParams) {

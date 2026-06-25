@@ -1,5 +1,6 @@
 <script lang="ts" setup>
-import { mockPaymentSuccess, payOrder } from '@/api/orders'
+import { getOrderDetail, payOrder } from '@/api/orders'
+import { getWechatPaymentParams, requestWechatPayment } from '@/utils/wechatPayment'
 
 definePage({
   style: {
@@ -11,13 +12,6 @@ const orderId = ref('')
 const status = ref<'pending' | 'success' | 'fail'>('pending')
 const amount = ref(0)
 const paying = ref(false)
-
-const canMockPay = computed(() => {
-  return import.meta.env.VITE_ENABLE_MOCK_PAYMENT === 'true'
-    || import.meta.env.VITE_SERVER_BASEURL?.includes('192.168.')
-    || import.meta.env.VITE_SERVER_BASEURL?.includes('127.0.0.1')
-    || import.meta.env.VITE_SERVER_BASEURL?.includes('localhost')
-})
 
 const resultConfig = computed(() => {
   if (status.value === 'success') {
@@ -39,7 +33,7 @@ const resultConfig = computed(() => {
   return {
     icon: '…',
     title: '订单已提交',
-    description: '支付能力待接入，可先在订单详情查看状态',
+    description: '请完成微信支付，支付结果以后端确认为准',
     color: '#1677FF',
   }
 })
@@ -52,32 +46,48 @@ function onHome() {
   uni.switchTab({ url: '/pages/home/index' })
 }
 
-async function runMockPay() {
+async function refreshOrderStatus() {
+  const id = Number(orderId.value)
+  if (!id)
+    return
+  const detail = await getOrderDetail(id)
+  if (detail.status !== 'pending_payment')
+    status.value = 'success'
+}
+
+async function runWechatPay() {
   const id = Number(orderId.value)
   if (!id || paying.value)
     return
   paying.value = true
   try {
     const payment = await payOrder(id)
-    const paymentNo = payment.paymentNo || String(payment.paymentParams?.paymentNo || '')
-    await mockPaymentSuccess(paymentNo ? { paymentNo } : { orderId: id })
+    if (payment.status !== 'pending' || !payment.paymentParams) {
+      await refreshOrderStatus()
+      uni.showToast({ icon: 'none', title: '订单状态已刷新' })
+      return
+    }
+    const params = getWechatPaymentParams(payment)
+    await requestWechatPayment(params)
     status.value = 'success'
-    uni.showToast({ icon: 'success', title: '支付成功' })
+    uni.showToast({ icon: 'success', title: '支付完成' })
+    setTimeout(() => {
+      void refreshOrderStatus()
+    }, 1200)
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    if (message.includes('cancel')) {
+      uni.showToast({ icon: 'none', title: '已取消支付' })
+    }
+    else {
+      status.value = 'fail'
+      uni.showToast({ icon: 'none', title: '支付未完成' })
+    }
   }
   finally {
     paying.value = false
   }
-}
-
-function onMockPay() {
-  uni.showModal({
-    title: '模拟支付成功',
-    content: '开发环境将直接把该订单推进到待派单状态，是否继续？',
-    success: async (res) => {
-      if (res.confirm)
-        await runMockPay()
-    },
-  })
 }
 
 onLoad((query) => {
@@ -110,14 +120,14 @@ onLoad((query) => {
 
     <view class="mt-6">
       <button
-        v-if="status === 'pending' && canMockPay"
-        class="h-[88rpx] rounded-full bg-[#F59E0B] text-white text-[30rpx] flex items-center justify-center mb-3"
+        v-if="status === 'pending'"
+        class="h-[88rpx] rounded-full bg-[#1677FF] text-white text-[30rpx] flex items-center justify-center mb-3"
         :loading="paying"
-        @tap="onMockPay"
+        @tap="runWechatPay"
       >
-        模拟支付成功
+        立即支付
       </button>
-      <button class="h-[88rpx] rounded-full bg-[#1677FF] text-white text-[30rpx] flex items-center justify-center" @tap="onDetail">
+      <button class="h-[88rpx] rounded-full bg-white text-[#1677FF] text-[30rpx] flex items-center justify-center" @tap="onDetail">
         查看订单
       </button>
       <button class="h-[88rpx] rounded-full bg-white text-gray-600 text-[30rpx] flex items-center justify-center mt-3" @tap="onHome">

@@ -8,14 +8,15 @@
     "start": "node dist/main.js",
     "build": "nest build",
     "lint": "eslint \"src/**/*.ts\" \"scripts/**/*.ts\"",
-    "test:contract": "tsx scripts/contract-test.ts",
     "db:verify": "tsx scripts/db-verify.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate:status": "prisma migrate status",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "seed:db": "tsx scripts/seed-db.ts",
-    "seed:admin": "tsx scripts/seed-admin.ts"
+    "seed:admin": "tsx scripts/seed-admin.ts",
+    "oss:smoke": "tsx scripts/oss-smoke-test.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",
@@ -26,6 +27,7 @@
     "@nestjs/serve-static": "^5.0.5",
     "@nestjs/swagger": "^11.2.0",
     "@prisma/client": "^6.19.3",
+    "ali-oss": "^6.23.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
     "reflect-metadata": "^0.2.2",

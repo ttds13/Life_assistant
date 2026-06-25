@@ -1,8 +1,6 @@
 import type { PageData } from './types/common'
 import type {
   CreateOrderPayload,
-  MockPaymentSuccessPayload,
-  MockPaymentSuccessResult,
   OrderDetail,
   PayOrderResult,
   PricePreview,
@@ -32,11 +30,24 @@ export function confirmOrder(id: number, data?: { version?: number }) {
 }
 
 export function payOrder(id: number) {
-  return http.post<PayOrderResult>(`/orders/${id}/pay`)
-}
+  if (import.meta.env.VITE_LOCAL_DEBUG_PAYMENT === 'true') {
+    return Promise.resolve<PayOrderResult>({
+      paymentNo: `LOCAL${Date.now()}${id}`,
+      status: 'pending',
+      amount: 0,
+      provider: 'wechat',
+      channel: 'local-debug',
+      paymentParams: {
+        timeStamp: Math.floor(Date.now() / 1000).toString(),
+        nonceStr: 'local-debug',
+        package: `prepay_id=local_debug_${id}`,
+        signType: 'RSA',
+        paySign: 'local-debug',
+      },
+    })
+  }
 
-export function mockPaymentSuccess(data: MockPaymentSuccessPayload) {
-  return http.post<MockPaymentSuccessResult>('/payments/mock-success', data)
+  return http.post<PayOrderResult>(`/orders/${id}/pay`)
 }
 
 export function getOrderPricePreview(data: Partial<CreateOrderPayload>) {

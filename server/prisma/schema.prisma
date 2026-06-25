@@ -133,6 +133,7 @@ model ServiceCategory {
 model Service {
   id              BigInt    @id @default(autoincrement())
   uuid            String    @unique @default(uuid()) @db.VarChar(36)
+  code            String    @unique @db.VarChar(64)
   categoryId      BigInt    @map("category_id")
   name            String    @db.VarChar(128)
   description     String?   @db.Text

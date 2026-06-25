@@ -12,6 +12,7 @@ import type { AdminUpdateOrderDto } from './dto/admin-update-order.dto'
 import type { AssignOrderDto } from './dto/assign-order.dto'
 import type { CompleteServiceDto } from './dto/complete-service.dto'
 import type { CreateOrderDto } from './dto/create-order.dto'
+import type { PricePreviewDto } from './dto/price-preview.dto'
 import type { QueryOrdersDto } from './dto/query-orders.dto'
 import type { RejectOrderDto } from './dto/reject-order.dto'
 import type { TransitionVersionDto } from './dto/transition-version.dto'
@@ -26,6 +27,7 @@ import {
   presentUserOrder,
 } from './order-presenter'
 import { OrderDetailRecord, OrdersRepository } from './orders.repository'
+import { ObjectStorageService } from '../storage/storage.service'
 
 type AutoAssignSource = 'payment_success' | 'admin_retry' | 'job_retry'
 type AutoAssignSkipReason = 'order_not_pending_dispatch' | 'already_assigned' | 'no_available_staff'
@@ -49,13 +51,11 @@ export class OrdersService {
     @Inject(OrdersRepository) private readonly repository: OrdersRepository,
     @Inject(OrderTransitionService) private readonly transitions: OrderTransitionService,
     @Inject(AdminAuditService) private readonly adminAudit: AdminAuditService,
+    @Inject(ObjectStorageService) private readonly storage: ObjectStorageService,
   ) {}
 
-  async getPricePreview(serviceId: number) {
-    const service = await this.repository.findActiveService(serviceId)
-    if (!service) {
-      throw new BusinessException(ErrorCode.SERVICE_NOT_FOUND, 'service not found', 404)
-    }
+  async getPricePreview(query: PricePreviewDto) {
+    const service = await this.resolveActiveService(query)
     return presentPricePreview(service.basePrice.toNumber())
   }
 
@@ -69,7 +69,7 @@ export class OrdersService {
       pageSize,
     })
     return {
-      items: result.items.map(order => presentUserOrder(order)),
+      items: result.items.map(order => this.withSignedOrderImages(presentUserOrder(order))),
       page,
       pageSize,
       total: result.total,
@@ -79,18 +79,15 @@ export class OrdersService {
   async getUserOrderDetail(userId: number, orderId: number) {
     const order = await this.getOrderDetailOrThrow(orderId)
     this.assertUserOwnsOrder(order, userId)
-    return presentOrderDetail(order)
+    return this.withSignedOrderImages(presentOrderDetail(order))
   }
 
   async createOrder(userId: number, dto: CreateOrderDto, requestId?: string) {
     const [service, address] = await Promise.all([
-      this.repository.findActiveService(dto.serviceId),
+      this.resolveActiveService(dto),
       this.repository.findUserServiceAddress(userId, dto.addressId),
     ])
 
-    if (!service) {
-      throw new BusinessException(ErrorCode.SERVICE_NOT_FOUND, 'service not found', 404)
-    }
     if (!address) {
       throw new BusinessException(ErrorCode.USER_ADDRESS_NOT_FOUND, 'address not found', 404)
     }
@@ -99,6 +96,7 @@ export class OrdersService {
     const orderNo = this.createOrderNo()
     const serviceSnapshot = {
       id: Number(service.id),
+      code: service.code,
       categoryId: Number(service.categoryId),
       name: service.name,
       description: service.description || '',
@@ -135,7 +133,7 @@ export class OrdersService {
         data: {
           orderNo,
           userId: BigInt(userId),
-          serviceId: BigInt(dto.serviceId),
+          serviceId: service.id,
           status: ORDER_STATUS.PENDING_PAYMENT,
           serviceSnapshot: serviceSnapshot as Prisma.InputJsonObject,
           addressSnapshot: addressSnapshot as Prisma.InputJsonObject,
@@ -170,7 +168,7 @@ export class OrdersService {
     const current = await this.getOrderDetailOrThrow(orderId)
     this.assertUserOwnsOrder(current, userId)
     if (current.status === ORDER_STATUS.CANCELLED) {
-      return presentOrderDetail(current)
+      return this.withSignedOrderImages(presentOrderDetail(current))
     }
 
     await this.transitions.transition({
@@ -195,7 +193,7 @@ export class OrdersService {
     const current = await this.getOrderDetailOrThrow(orderId)
     this.assertUserOwnsOrder(current, userId)
     if (current.status === ORDER_STATUS.COMPLETED) {
-      return presentOrderDetail(current)
+      return this.withSignedOrderImages(presentOrderDetail(current))
     }
 
     try {
@@ -216,7 +214,7 @@ export class OrdersService {
         && error.code === ErrorCode.ORDER_STATUS_INVALID
         && latest?.status === ORDER_STATUS.COMPLETED
         && Number(latest.userId) === userId) {
-        return presentOrderDetail(latest)
+        return this.withSignedOrderImages(presentOrderDetail(latest))
       }
       throw error
     }
@@ -236,7 +234,7 @@ export class OrdersService {
       pageSize,
     })
     return {
-      items: result.items.map(order => presentAdminOrderListItem(order)),
+      items: result.items.map(order => this.withSignedOrderImages(presentAdminOrderListItem(order))),
       page,
       pageSize,
       total: result.total,
@@ -245,7 +243,7 @@ export class OrdersService {
 
   async getAdminOrderDetail(orderId: number) {
     const order = await this.getOrderDetailOrThrow(orderId)
-    return presentAdminOrderDetail(order)
+    return this.withSignedOrderImages(presentAdminOrderDetail(order))
   }
 
   async updateAdminOrder(adminId: number, orderId: number, dto: AdminUpdateOrderDto, requestId?: string, ip?: string) {
@@ -299,7 +297,7 @@ export class OrdersService {
     if (dto.cancelReason !== undefined) data.cancelReason = dto.cancelReason
 
     if (Object.keys(data).length === 0) {
-      return presentAdminOrderDetail(current)
+      return this.withSignedOrderImages(presentAdminOrderDetail(current))
     }
 
     await this.repository.client.$transaction(async (tx) => {
@@ -624,7 +622,7 @@ export class OrdersService {
       pageSize,
     })
     return {
-      items: result.items.map(order => presentUserOrder(order)),
+      items: result.items.map(order => this.withSignedOrderImages(presentUserOrder(order))),
       page,
       pageSize,
       total: result.total,
@@ -651,7 +649,7 @@ export class OrdersService {
       pageSize,
     })
     return {
-      items: result.items.map(order => presentUserOrder(order)),
+      items: result.items.map(order => this.withSignedOrderImages(presentUserOrder(order))),
       page,
       pageSize,
       total: result.total,
@@ -666,7 +664,7 @@ export class OrdersService {
       throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'order is not available', 409)
     }
 
-    return presentOrderDetail(order)
+    return this.withSignedOrderImages(presentOrderDetail(order))
   }
 
   async getStaffProfile(staffId: number, _period?: string) {
@@ -692,11 +690,16 @@ export class OrdersService {
       this.getStaffProfileStats(staffId, 'total'),
     ])
 
+    const avatarOssUrl = staff.avatarUrl || ''
+    const avatarDisplayUrl = this.storage.signNullableUrl(avatarOssUrl) || avatarOssUrl
+
     return {
       staffId: Number(staff.id),
       staffName: staff.name,
       staffPhone: staff.phone,
-      avatar: staff.avatarUrl || '',
+      avatar: avatarDisplayUrl,
+      avatarOssUrl,
+      avatarDisplayUrl,
       verified: true,
       regionText: staff.cityCode || staff.phone,
       rating: staff.rating.toNumber(),
@@ -716,7 +719,9 @@ export class OrdersService {
     }
 
     if (dto.avatar !== undefined) {
-      data.avatarUrl = dto.avatar.trim()
+      const avatar = dto.avatar.trim()
+      this.storage.assertPermanentOssUrl(avatar)
+      data.avatarUrl = avatar
     }
 
     if (Object.keys(data).length) {
@@ -735,7 +740,7 @@ export class OrdersService {
   async getStaffOrderDetail(staffId: number, orderId: number) {
     const order = await this.getOrderDetailOrThrow(orderId)
     this.assertStaffOwnsOrder(order, staffId)
-    return presentOrderDetail(order)
+    return this.withSignedOrderImages(presentOrderDetail(order))
   }
 
   async staffAccept(staffId: number, orderId: number, requestId?: string) {
@@ -834,7 +839,7 @@ export class OrdersService {
       },
     })
 
-    return this.getOrderDetailOrThrow(orderId).then(order => presentOrderDetail(order))
+    return this.getOrderDetailOrThrow(orderId).then(order => this.withSignedOrderImages(presentOrderDetail(order)))
   }
 
   async staffOnTheWay(staffId: number, orderId: number, dto: TransitionVersionDto, requestId?: string) {
@@ -903,6 +908,7 @@ export class OrdersService {
           },
         })
         if (dto.photoUrls?.length) {
+          dto.photoUrls.forEach(url => this.storage.assertPermanentOssUrl(url))
           await tx.servicePhoto.createMany({
             data: dto.photoUrls.map((url, index) => ({
               orderId: order.id,
@@ -951,6 +957,24 @@ export class OrdersService {
       throw new BusinessException(ErrorCode.ORDER_NOT_FOUND, 'order not found', 404)
     }
     return order
+  }
+
+  private async resolveActiveService(query: { serviceId?: number, serviceCode?: string }) {
+    if (!query.serviceId && !query.serviceCode) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'serviceId or serviceCode is required', 400)
+    }
+
+    const service = query.serviceCode
+      ? await this.repository.findActiveServiceByCode(query.serviceCode)
+      : await this.repository.findActiveService(query.serviceId!)
+
+    if (!service) {
+      throw new BusinessException(ErrorCode.SERVICE_NOT_FOUND, 'service not found', 404)
+    }
+    if (query.serviceId && Number(service.id) !== query.serviceId) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'serviceId and serviceCode do not match', 400)
+    }
+    return service
   }
 
   private assertUserOwnsOrder(order: OrderDetailRecord, userId: number) {
@@ -1056,6 +1080,39 @@ export class OrdersService {
     const parsed = Number(value)
     if (!Number.isInteger(parsed) || parsed < 1) return fallback
     return max ? Math.min(parsed, max) : parsed
+  }
+
+  private withSignedOrderImages<T extends Record<string, any>>(payload: T): T {
+    const next: Record<string, any> = { ...payload }
+
+    if (typeof next.serviceImage === 'string' && next.serviceImage) {
+      next.serviceImageOssUrl = next.serviceImage
+      next.serviceImage = this.storage.signNullableUrl(next.serviceImage) || next.serviceImage
+    }
+
+    if (next.service && typeof next.service === 'object') {
+      const service = { ...next.service }
+      if (typeof service.coverImage === 'string' && service.coverImage) {
+        service.coverImageOssUrl = service.coverImage
+        service.coverImageDisplayUrl = this.storage.signNullableUrl(service.coverImage) || service.coverImage
+        service.coverImage = service.coverImageDisplayUrl
+      }
+      next.service = service
+    }
+
+    if (Array.isArray(next.servicePhotos)) {
+      next.servicePhotoOssUrls = next.servicePhotos.slice()
+      next.servicePhotoUrls = this.storage.signUrlList(next.servicePhotos)
+      next.servicePhotos = next.servicePhotoUrls
+    }
+
+    if (Array.isArray(next.photos)) {
+      next.photoOssUrls = next.photos.slice()
+      next.photoUrls = this.storage.signUrlList(next.photos)
+      next.photos = next.photoUrls
+    }
+
+    return next as T
   }
 
   private async getStaffProfileStats(staffId: number, period: 'today' | 'week' | 'month' | 'total') {

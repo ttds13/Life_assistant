@@ -72,7 +72,7 @@ const editorConfig: Partial<IEditorConfig> = {
     uploadImage: {
       async customUpload(file: File, insertFn: InsertFnType) {
         const data = await FileAPI.uploadFile(file);
-        insertFn(data.url, data.name, data.url);
+        insertFn(data.displayUrl || data.signedUrl || data.url, data.name, data.url);
       },
     } as any,
   },

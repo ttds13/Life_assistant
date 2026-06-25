@@ -11,7 +11,7 @@ import { ResponseTransformInterceptor } from './common/interceptors/response-tra
 import { AppLoggerService } from './common/logger/app-logger.service'
 
 export async function createConfiguredApp() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true })
+  const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true })
   const config = app.get(ConfigService)
   const logger = app.get(AppLoggerService)
   const reflector = app.get(Reflector)
@@ -24,7 +24,7 @@ export async function createConfiguredApp() {
   app.enableCors({
     origin: config.get<string>('CORS_ORIGIN', '*'),
     methods: 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-    allowedHeaders: 'Content-Type, Authorization, X-Request-Id, X-Request-Source, X-Client-Version, X-Admin-Id, X-Staff-Id',
+    allowedHeaders: 'Content-Type, Authorization, X-Request-Id, X-Request-Source, X-Client-Version, X-Admin-Id',
     exposedHeaders: 'X-Request-Id',
   })
 
