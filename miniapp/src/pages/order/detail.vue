@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import type { OrderDetail } from '@/api/types/orders'
 import { getMockOrderDetail } from '@/utils/mockDay4'
+import { ensureChineseStatusLabel, getOrderStatusText } from '@/utils/orderStatus'
 
 definePage({
   style: {
@@ -34,7 +35,7 @@ const statusInfo = computed(() => {
     case 'cancelled':
       return { title: '已取消', desc: '该订单已取消', next: '可再次预约服务' }
     default:
-      return { title: '订单处理中', desc: '订单状态待刷新', next: '请稍后查看' }
+      return { title: getOrderStatusText(status), desc: '订单状态待刷新', next: '请稍后查看' }
   }
 })
 
@@ -144,9 +145,11 @@ onLoad((query) => {
 
         <form-section title="状态进度">
           <view class="flex justify-between">
-            <view v-for="item in order.statusLogs" :key="item.label" class="flex-1 flex flex-col items-center">
+            <view v-for="(item, index) in order.statusLogs" :key="`${item.label}-${index}`" class="flex-1 flex flex-col items-center">
               <view class="w-[24rpx] h-[24rpx] rounded-full" :class="item.active ? 'bg-[#1677FF]' : 'bg-[#E5E7EB]'" />
-              <text class="text-[22rpx] mt-2" :class="item.active ? 'text-[#1677FF]' : 'text-gray-400'">{{ item.label }}</text>
+              <text class="text-[22rpx] mt-2" :class="item.active ? 'text-[#1677FF]' : 'text-gray-400'">
+                {{ ensureChineseStatusLabel(item.label, item.status) }}
+              </text>
             </view>
           </view>
         </form-section>

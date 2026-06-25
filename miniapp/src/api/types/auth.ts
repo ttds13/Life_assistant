@@ -1,6 +1,9 @@
 export interface LoginResult {
   accessToken: string
+  refreshToken?: string
   expiresIn: number
+  refreshExpiresIn?: number
+  tokenType?: 'Bearer'
   user: UserProfile
 }
 

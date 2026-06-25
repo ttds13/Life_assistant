@@ -1,6 +1,7 @@
 <script lang="ts" setup>
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
+import { logoutSession } from '@/api/auth'
 
 definePage({
   style: {
@@ -118,8 +119,12 @@ function onLogout() {
   uni.showModal({
     title: '提示',
     content: '确定退出登录？',
-    success: (res) => {
+    success: async (res) => {
       if (res.confirm) {
+        const refreshToken = tokenStore.tokenInfo.refreshToken
+        if (refreshToken) {
+          logoutSession(refreshToken).catch(() => {})
+        }
         tokenStore.logout()
         uni.showToast({ icon: 'success', title: '已退出' })
       }

@@ -127,7 +127,16 @@ export function getMockOrders(): UserOrder[] {
 
 export function getMockOrderDetail(id: number): OrderDetail {
   const order = getMockOrders().find(item => item.id === id) || getMockOrders()[0]
-  const logLabels = ['下单', '支付', '派单', '接单', '上门', '服务中', '待确认', '完成']
+  const logSteps: { label: string, status: OrderStatus }[] = [
+    { label: '下单', status: 'pending_payment' },
+    { label: '支付', status: 'pending_dispatch' },
+    { label: '派单', status: 'dispatched' },
+    { label: '接单', status: 'accepted' },
+    { label: '上门', status: 'on_the_way' },
+    { label: '服务中', status: 'in_service' },
+    { label: '待确认', status: 'pending_confirm' },
+    { label: '完成', status: 'completed' },
+  ]
   const activeIndexMap: Record<OrderStatus, number> = {
     pending_payment: 0,
     pending_dispatch: 1,
@@ -147,8 +156,9 @@ export function getMockOrderDetail(id: number): OrderDetail {
   return {
     ...order,
     paymentMethod: order.status === 'pending_payment' ? '待支付' : '微信支付',
-    statusLogs: logLabels.map((label, index) => ({
-      label,
+    statusLogs: logSteps.map((step, index) => ({
+      label: step.label,
+      status: step.status,
       active: index <= activeIndex && !['cancelled', 'refund_pending', 'refunded'].includes(order.status),
       time: index <= activeIndex ? order.createdAt : '',
     })),

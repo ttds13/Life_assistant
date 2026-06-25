@@ -1,6 +1,73 @@
 import type { CustomRequestOptions, IResponse } from '@/http/types'
+import type { LoginResult } from '@/api/types/auth'
 import { useTokenStore } from '@/store/token'
+import { useUserStore } from '@/store/user'
 import { toLoginPage } from '@/utils/toLoginPage'
+
+let refreshPromise: Promise<boolean> | null = null
+
+function showErrorToast(title: string) {
+  uni.showToast({
+    icon: 'none',
+    title,
+  })
+}
+
+function isAuthExpired(responseData: IResponse<any> | undefined, statusCode?: number) {
+  return statusCode === 401 || responseData?.code === 20001 || responseData?.code === 20002
+}
+
+function clearLoginAndRedirect() {
+  const tokenStore = useTokenStore()
+  tokenStore.logout()
+  toLoginPage()
+}
+
+async function refreshAccessToken() {
+  const tokenStore = useTokenStore()
+  const userStore = useUserStore()
+  const refreshToken = tokenStore.validRefreshToken
+
+  if (!refreshToken) {
+    return false
+  }
+
+  if (!refreshPromise) {
+    refreshPromise = http<LoginResult>({
+      url: '/auth/refresh',
+      method: 'POST',
+      data: { refreshToken },
+      hideErrorToast: true,
+      skipAuthRefresh: true,
+    })
+      .then((result) => {
+        tokenStore.setTokenInfo(result)
+        userStore.setFromProfile(result.user)
+        return true
+      })
+      .catch(() => false)
+      .finally(() => {
+        refreshPromise = null
+      })
+  }
+
+  return refreshPromise
+}
+
+async function handleAuthExpired<T>(options: CustomRequestOptions, responseData: IResponse<T> | undefined) {
+  if (options.skipAuthRefresh || options._retry) {
+    clearLoginAndRedirect()
+    throw responseData
+  }
+
+  const refreshed = await refreshAccessToken()
+  if (!refreshed) {
+    clearLoginAndRedirect()
+    throw responseData
+  }
+
+  return http<T>({ ...options, _retry: true })
+}
 
 export function http<T>(options: CustomRequestOptions) {
   return new Promise<T>((resolve, reject) => {
@@ -10,49 +77,41 @@ export function http<T>(options: CustomRequestOptions) {
       // #ifndef MP-WEIXIN
       responseType: 'json',
       // #endif
-      success: (res) => {
-        const responseData = res.data as IResponse<T>
+      success: async (res) => {
+        const responseData = res.data as IResponse<T> | undefined
 
-        // HTTP 状态码非 2xx
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          if (res.statusCode === 401) {
-            const tokenStore = useTokenStore()
-            tokenStore.logout()
-            toLoginPage()
-            return reject(responseData)
+          if (isAuthExpired(responseData, res.statusCode)) {
+            try {
+              return resolve(await handleAuthExpired(options, responseData))
+            }
+            catch (error) {
+              return reject(error)
+            }
           }
-          !options.hideErrorToast && uni.showToast({
-            icon: 'none',
-            title: responseData?.message || '请求错误',
-          })
+
+          !options.hideErrorToast && showErrorToast(responseData?.message || '请求错误')
           return reject(responseData)
         }
 
-        // 业务码判断：兼容常见的 0 / 200 成功码
-        if (responseData.code === 0 || responseData.code === 200) {
+        if (responseData?.code === 0 || responseData?.code === 200) {
           return resolve(responseData.data)
         }
 
-        // 业务码 401：token 过期
-        if (responseData.code === 20001 || responseData.code === 20002) {
-          const tokenStore = useTokenStore()
-          tokenStore.logout()
-          toLoginPage()
-          return reject(responseData)
+        if (isAuthExpired(responseData, res.statusCode)) {
+          try {
+            return resolve(await handleAuthExpired(options, responseData))
+          }
+          catch (error) {
+            return reject(error)
+          }
         }
 
-        // 其他业务错误
-        !options.hideErrorToast && uni.showToast({
-          icon: 'none',
-          title: responseData.message || '请求错误',
-        })
+        !options.hideErrorToast && showErrorToast(responseData?.message || '请求错误')
         return reject(responseData)
       },
       fail(err) {
-        uni.showToast({
-          icon: 'none',
-          title: '网络错误，换个网络试试',
-        })
+        !options.hideErrorToast && showErrorToast('网络错误，请检查网络')
         reject(err)
       },
     })

@@ -57,6 +57,7 @@ export interface UserOrder {
 
 export interface OrderStatusLog {
   label: string
+  status?: OrderStatus | string
   time?: string
   active: boolean
 }

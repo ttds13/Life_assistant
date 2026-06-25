@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { wechatLogin, mockLogin } from '@/api/auth'
+import { mockLogin, wechatLogin } from '@/api/auth'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
 
@@ -34,7 +34,7 @@ async function onGetPhoneNumber(e: any) {
     })
 
     const result = await wechatLogin({ loginCode, phoneCode })
-    tokenStore.setTokenInfo({ token: result.accessToken, expiresIn: result.expiresIn })
+    tokenStore.setTokenInfo(result)
     userStore.setFromProfile(result.user)
     uni.showToast({ icon: 'success', title: '登录成功' })
     setTimeout(() => navigateBack(), 500)
@@ -56,7 +56,7 @@ async function onMockLogin() {
   loading.value = true
   try {
     const result = await mockLogin({ phone: '13800001111' })
-    tokenStore.setTokenInfo({ token: result.accessToken, expiresIn: result.expiresIn })
+    tokenStore.setTokenInfo(result)
     userStore.setFromProfile(result.user)
     uni.showToast({ icon: 'success', title: '登录成功' })
     setTimeout(() => navigateBack(), 500)

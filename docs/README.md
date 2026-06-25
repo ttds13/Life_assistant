@@ -15,6 +15,7 @@ docs/plan/mvp.md
 docs/plan/day1.md
 docs/plan/day1-miniapp.md
 docs/plan/day2-rear.md
+docs/plan/day23-auth-session-30d.md
 docs/summary/day1.md
 docs/standards/development.md
 docs/ui/mvp.md
