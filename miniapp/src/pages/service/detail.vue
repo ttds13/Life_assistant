@@ -12,10 +12,21 @@ definePage({
 const tokenStore = useTokenStore()
 const service = ref<Service | null>(null)
 const loading = ref(true)
+const memberCardId = ref<number | undefined>()
+const memberCardName = ref('')
+const source = ref('')
+const promotionKey = ref('')
+const campaignId = ref('')
 
 onLoad(async (query) => {
   const code = typeof query?.code === 'string' ? decodeURIComponent(query.code) : ''
   const id = Number(query?.id)
+  const cardId = Number(query?.memberCardId)
+  memberCardId.value = Number.isInteger(cardId) && cardId > 0 ? cardId : undefined
+  memberCardName.value = typeof query?.memberCardName === 'string' ? decodeURIComponent(query.memberCardName) : ''
+  source.value = typeof query?.source === 'string' ? decodeURIComponent(query.source) : ''
+  promotionKey.value = typeof query?.promotionKey === 'string' ? decodeURIComponent(query.promotionKey) : ''
+  campaignId.value = typeof query?.campaignId === 'string' ? decodeURIComponent(query.campaignId) : ''
   const identifier = code || (Number.isInteger(id) && id > 0 ? id : '')
   if (identifier) {
     getServiceDetail(identifier)
@@ -36,6 +47,11 @@ function onBook() {
     service.value.code ? `serviceCode=${encodeURIComponent(service.value.code)}` : '',
     `serviceId=${service.value.id}`,
     `serviceName=${encodeURIComponent(service.value.name)}`,
+    memberCardId.value ? `memberCardId=${encodeURIComponent(String(memberCardId.value))}` : '',
+    memberCardName.value ? `memberCardName=${encodeURIComponent(memberCardName.value)}` : '',
+    source.value ? `source=${encodeURIComponent(source.value)}` : '',
+    promotionKey.value ? `promotionKey=${encodeURIComponent(promotionKey.value)}` : '',
+    campaignId.value ? `campaignId=${encodeURIComponent(campaignId.value)}` : '',
   ].filter(Boolean).join('&')
   const bookingQuery = `/pages/order/create?${params}`
 
@@ -45,6 +61,21 @@ function onBook() {
   }
 
   uni.navigateTo({ url: bookingQuery })
+}
+
+function onSkipBook() {
+  const pages = getCurrentPages()
+  if (pages.length > 1) {
+    uni.navigateBack()
+    return
+  }
+
+  if (memberCardId.value) {
+    uni.redirectTo({ url: '/pages/card/index' })
+    return
+  }
+
+  uni.switchTab({ url: '/pages/home/index' })
 }
 </script>
 
@@ -108,7 +139,9 @@ function onBook() {
       :price="service.basePrice"
       price-label="起步价"
       primary-text="立即预约"
+      secondary-text="暂不预约"
       @primary="onBook"
+      @secondary="onSkipBook"
     />
   </view>
 </template>

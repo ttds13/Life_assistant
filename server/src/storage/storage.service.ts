@@ -23,8 +23,7 @@ export class ObjectStorageService {
   ) {}
 
   async putImage(input: PutImageInput): Promise<PutImageResult> {
-    this.assertImageMime(input.mimeType)
-    this.assertImageMagic(input.buffer, input.mimeType)
+    input.mimeType = this.normalizeImageMime(input.buffer, input.mimeType)
 
     if (this.isAliyunOssEnabled()) {
       return this.putImageToOss(input)
@@ -57,23 +56,28 @@ export class ObjectStorageService {
     return urls.map(url => this.signUrl(url) || url)
   }
 
-  assertPermanentOssUrl(url?: string | null) {
+  isOssUploadEnabled() {
+    return this.isAliyunOssEnabled()
+  }
+
+  assertPermanentOssUrl(url?: string | null, options?: { force?: boolean }) {
     if (!url) return
-    if (!this.isAliyunOssEnabled()) return
+    if (!options?.force && !this.isAliyunOssEnabled()) return
     let parsed: URL
     try {
       parsed = new URL(url)
     }
     catch {
-      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid image url', 400)
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, '图片链接格式不正确', 400)
     }
 
     const publicBase = new URL(this.publicBaseUrl())
     if (parsed.host !== publicBase.host) {
-      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'image url host is not allowed', 400)
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, '图片链接必须使用配置的 OSS 域名', 400)
     }
-    if (!decodeURIComponent(parsed.pathname).startsWith(`/${this.uploadPrefix()}/`)) {
-      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'image url path is not allowed', 400)
+    const objectKey = decodeURIComponent(parsed.pathname).replace(/^\/+/, '')
+    if (!this.isAllowedObjectKey(objectKey)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, '图片链接必须位于允许的 OSS 目录', 400)
     }
     const signatureParams = [
       'Expires',
@@ -86,11 +90,10 @@ export class ObjectStorageService {
       'x-oss-security-token',
     ]
     if (signatureParams.some(name => parsed.searchParams.has(name))) {
-      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'signed image url cannot be saved', 400)
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, '不能保存临时签名图片链接', 400)
     }
-    const pathname = decodeURIComponent(parsed.pathname)
-    if (pathname.includes('..') || pathname.includes('\\') || pathname.includes('\0')) {
-      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid image url path', 400)
+    if (objectKey.includes('..') || objectKey.includes('\\') || objectKey.includes('\0')) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, '图片链接路径不合法', 400)
     }
   }
 
@@ -98,14 +101,14 @@ export class ObjectStorageService {
     if (!urlOrKey) return ''
     if (!/^https?:\/\//i.test(urlOrKey)) {
       const key = urlOrKey.replace(/^\/+/, '')
-      return key.startsWith(`${this.uploadPrefix()}/`) ? key : ''
+      return this.isAllowedObjectKey(key) ? key : ''
     }
     try {
       const parsed = new URL(urlOrKey)
       const publicBase = new URL(this.publicBaseUrl())
       if (parsed.host !== publicBase.host) return ''
       const key = decodeURIComponent(parsed.pathname).replace(/^\/+/, '')
-      return key.startsWith(`${this.uploadPrefix()}/`) ? key : ''
+      return this.isAllowedObjectKey(key) ? key : ''
     }
     catch {
       return ''
@@ -130,6 +133,7 @@ export class ObjectStorageService {
     return {
       url,
       signedUrl,
+      displayUrl: signedUrl || url,
       storageKey,
       mimeType: input.mimeType,
       size: input.buffer.length,
@@ -161,6 +165,7 @@ export class ObjectStorageService {
     return {
       url,
       signedUrl: url,
+      displayUrl: url,
       storageKey: filename,
       mimeType: input.mimeType,
       size: input.buffer.length,
@@ -219,6 +224,14 @@ export class ObjectStorageService {
     return this.config.get<string>('OSS_UPLOAD_PREFIX', 'life-assitant/prod').replace(/^\/+|\/+$/g, '')
   }
 
+  private allowedObjectPrefixes() {
+    return [...new Set([this.uploadPrefix(), 'life-assitant'].filter(Boolean))]
+  }
+
+  private isAllowedObjectKey(key: string) {
+    return this.allowedObjectPrefixes().some(prefix => key === prefix || key.startsWith(`${prefix}/`))
+  }
+
   private signedUrlExpiresSeconds() {
     const value = Number(this.config.get<string | number>('OSS_SIGNED_URL_EXPIRES_SECONDS', 900))
     if (!Number.isFinite(value) || value <= 0) return 900
@@ -246,20 +259,19 @@ export class ObjectStorageService {
     return '.jpg'
   }
 
-  private assertImageMime(mimeType: string) {
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
-      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'only jpeg/png/webp images are allowed', 400)
-    }
-  }
+  private normalizeImageMime(buffer: Buffer, mimeType: string) {
+    if (buffer.length > 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF)
+      return 'image/jpeg'
 
-  private assertImageMagic(buffer: Buffer, mimeType: string) {
-    const ok = mimeType === 'image/jpeg'
-      ? buffer.length > 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF
-      : mimeType === 'image/png'
-        ? buffer.length > 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
-        : buffer.length > 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP'
-    if (!ok) {
-      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid image file', 400)
-    }
+    if (buffer.length > 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])))
+      return 'image/png'
+
+    if (buffer.length > 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP')
+      return 'image/webp'
+
+    if (['image/jpeg', 'image/png', 'image/webp'].includes(mimeType))
+      return mimeType
+
+    throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, '仅支持 jpeg/png/webp 图片', 400)
   }
 }

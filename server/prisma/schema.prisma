@@ -165,6 +165,9 @@ model Service {
   priceUnit       String    @map("price_unit") @db.VarChar(16)
   minPrice        Decimal?  @map("min_price") @db.Decimal(10, 2)
   durationMinutes Int?      @map("duration_minutes")
+  cardType        String    @default("none") @map("card_type") @db.VarChar(32)
+  consumeUnit     Int?      @map("consume_unit")
+  consultationRequired Boolean @default(false) @map("consultation_required")
   serviceArea     String?   @map("service_area") @db.VarChar(256)
   notice          String?   @db.Text
   status          Int       @default(1) @db.SmallInt
@@ -218,6 +221,44 @@ model ServiceImage {
   @@map("service_images")
 }
 
+model HomeBanner {
+  id        BigInt   @id @default(autoincrement())
+  title     String   @db.VarChar(64)
+  subtitle  String?  @db.VarChar(128)
+  imageUrl  String   @map("image_url") @db.VarChar(512)
+  linkType  String   @default("none") @map("link_type") @db.VarChar(32)
+  linkValue String?  @map("link_value") @db.VarChar(128)
+  sortOrder Int      @default(0) @map("sort_order")
+  status    Int      @default(1) @db.SmallInt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status, sortOrder])
+  @@map("home_banners")
+}
+
+model PromotionLink {
+  id          BigInt    @id @default(autoincrement())
+  linkKey     String    @unique @map("link_key") @db.VarChar(64)
+  title       String    @db.VarChar(100)
+  description String?   @db.VarChar(255)
+  targetType  String    @map("target_type") @db.VarChar(32)
+  targetId    BigInt?   @map("target_id")
+  targetCode  String?   @map("target_code") @db.VarChar(100)
+  source      String    @default("channels") @db.VarChar(32)
+  campaignId  BigInt?   @map("campaign_id")
+  sortOrder   Int       @default(0) @map("sort_order")
+  status      Int       @default(1) @db.SmallInt
+  startAt     DateTime? @map("start_at")
+  endAt       DateTime? @map("end_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, sortOrder])
+  @@index([targetType])
+  @@map("promotion_links")
+}
+
 // ==================== 3. Unified Address ====================
 
 model Address {
@@ -264,6 +305,7 @@ model Order {
   userId               BigInt    @map("user_id")
   staffId              BigInt?   @map("staff_id")
   serviceId            BigInt    @map("service_id")
+  orderType            String    @default("service_booking") @map("order_type") @db.VarChar(32)
   status               String    @db.VarChar(32)
   version              Int       @default(0)
   serviceSnapshot      Json      @map("service_snapshot")
@@ -276,6 +318,11 @@ model Order {
   paidAmount           Decimal   @default(0) @map("paid_amount") @db.Decimal(10, 2)
   couponId             BigInt?   @map("coupon_id")
   memberCardId         BigInt?   @map("member_card_id")
+  memberCardConsumeUnits Int     @default(0) @map("member_card_consume_units")
+  purchaseCardId       BigInt?   @map("purchase_card_id")
+  grantedUserMemberCardId BigInt? @map("granted_user_member_card_id")
+  linkedPurchaseOrderId BigInt?  @map("linked_purchase_order_id")
+  linkedBookingOrderId BigInt?   @map("linked_booking_order_id")
   remark               String?   @db.VarChar(512)
   adminRemark          String?   @map("admin_remark") @db.VarChar(512)
   source               String    @default("miniapp") @db.VarChar(16)
@@ -304,8 +351,14 @@ model Order {
   @@index([userId])
   @@index([staffId])
   @@index([status])
+  @@index([orderType])
+  @@index([orderType, status])
   @@index([userId, status])
   @@index([staffId, status])
+  @@index([purchaseCardId])
+  @@index([grantedUserMemberCardId])
+  @@index([linkedPurchaseOrderId])
+  @@index([linkedBookingOrderId])
   @@index([status, appointmentStartTime])
   @@index([createdAt])
   @@map("orders")
@@ -575,6 +628,13 @@ model MemberCard {
   name               String   @db.VarChar(64)
   applicableServices Json     @map("applicable_services")
   totalTimes         Int      @map("total_times")
+  cardType           String   @default("times") @map("card_type") @db.VarChar(32)
+  unitName           String   @default("次") @map("unit_name") @db.VarChar(16)
+  unitMinutes        Int?     @map("unit_minutes")
+  totalUnits         Int      @default(0) @map("total_units")
+  serviceRules       Json?    @map("service_rules")
+  allowHalfDeduct    Boolean  @default(false) @map("allow_half_deduct")
+  minConsumeUnits    Int      @default(1) @map("min_consume_units")
   price              Decimal  @db.Decimal(10, 2)
   validityDays       Int      @map("validity_days")
   status             Int      @default(1) @db.SmallInt
@@ -591,6 +651,8 @@ model UserMemberCard {
   cardId         BigInt   @map("card_id")
   userId         BigInt   @map("user_id")
   remainingTimes Int      @map("remaining_times")
+  remainingUnits Int      @default(0) @map("remaining_units")
+  frozenUnits    Int      @default(0) @map("frozen_units")
   status         String   @db.VarChar(16)
   source         String   @db.VarChar(16)
   expireAt       DateTime @map("expire_at")
@@ -608,14 +670,22 @@ model UserMemberCard {
 model MemberCardRecord {
   id               BigInt   @id @default(autoincrement())
   userMemberCardId BigInt   @map("user_member_card_id")
-  orderId          BigInt   @map("order_id")
+  orderId          BigInt?  @map("order_id")
+  recordType       String   @default("consume") @map("record_type") @db.VarChar(16)
   timesUsed        Int      @default(1) @map("times_used")
+  units            Int      @default(1)
+  beforeUnits      Int?     @map("before_units")
+  afterUnits       Int?     @map("after_units")
+  operatorType     String?  @map("operator_type") @db.VarChar(16)
+  operatorId       BigInt?  @map("operator_id")
+  remark           String?  @db.VarChar(256)
   createdAt        DateTime @default(now()) @map("created_at")
 
   userMemberCard UserMemberCard @relation(fields: [userMemberCardId], references: [id])
-  order          Order          @relation(fields: [orderId], references: [id])
+  order          Order?         @relation(fields: [orderId], references: [id])
 
   @@index([userMemberCardId])
+  @@index([orderId])
   @@map("member_card_records")
 }
 

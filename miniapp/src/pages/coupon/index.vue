@@ -1,4 +1,7 @@
 <script lang="ts" setup>
+import { getUserPoints } from '@/api/points'
+import type { UserPointsSummary } from '@/api/types/points'
+
 definePage({
   style: {
     navigationBarTitleText: '我的优惠券',
@@ -13,13 +16,23 @@ type CouponTab = 'all' | CouponStatus
 interface CouponItem {
   id: number
   status: CouponStatus
-  amount: number
-  title: string
-  desc: string
-  validity: string
 }
 
 const activeTab = ref<CouponTab>('all')
+const loadingPoints = ref(false)
+const pointsSummary = ref<UserPointsSummary>({
+  totalPoints: 0,
+  availablePoints: 0,
+  totalAmount: 0,
+  rule: {
+    unitAmount: 0.1,
+    pointsPerUnit: 1,
+    description: '每实际支付 0.1 元积 1 分，0.01 元不计入积分',
+  },
+  recentEarned: [],
+  recentTotalAmount: 0,
+  recentTotalPoints: 0,
+})
 
 const tabs: Array<{ label: string, value: CouponTab }> = [
   { label: '全部', value: 'all' },
@@ -28,13 +41,8 @@ const tabs: Array<{ label: string, value: CouponTab }> = [
   { label: '已过期', value: 'expired' },
 ]
 
-const coupons: CouponItem[] = []
-
-const visibleCoupons = computed(() => {
-  if (activeTab.value === 'all')
-    return coupons
-  return coupons.filter(item => item.status === activeTab.value)
-})
+const visibleCoupons = computed<CouponItem[]>(() => [])
+const pointsRuleText = computed(() => pointsSummary.value.rule.description || '每实际支付 0.1 元积 1 分，0.01 元不计入积分')
 
 function setActiveTab(tab: CouponTab) {
   activeTab.value = tab
@@ -44,13 +52,69 @@ function getTabClass(tab: CouponTab) {
   return activeTab.value === tab ? 'tab-text tab-text-active' : 'tab-text'
 }
 
-function getCouponClass() {
-  return 'coupon-card coupon-card-disabled'
+function formatAmount(value: number) {
+  return value.toFixed(2)
 }
+
+async function loadPoints() {
+  loadingPoints.value = true
+  try {
+    pointsSummary.value = await getUserPoints()
+  }
+  catch {
+    pointsSummary.value = {
+      ...pointsSummary.value,
+      totalPoints: 0,
+      availablePoints: 0,
+      totalAmount: 0,
+      recentEarned: [],
+      recentTotalAmount: 0,
+      recentTotalPoints: 0,
+    }
+  }
+  finally {
+    loadingPoints.value = false
+  }
+}
+
+onShow(() => {
+  loadPoints()
+})
 </script>
 
 <template>
   <view class="coupon-page">
+    <view class="points-panel">
+      <view class="points-header">
+        <view>
+          <text class="points-label">我的积分</text>
+          <view class="points-value-row">
+            <text class="points-value">{{ pointsSummary.availablePoints }}</text>
+            <text class="points-unit">分</text>
+          </view>
+        </view>
+        <view class="points-badge">
+          <text>{{ loadingPoints ? '同步中' : '自动累计' }}</text>
+        </view>
+      </view>
+
+      <view class="points-rule">
+        <text>{{ pointsRuleText }}</text>
+      </view>
+
+      <view class="points-stats">
+        <view class="points-stat-item">
+          <text class="points-stat-value">{{ pointsSummary.totalPoints }}</text>
+          <text class="points-stat-label">累计积分</text>
+        </view>
+        <view class="points-stat-divider"></view>
+        <view class="points-stat-item">
+          <text class="points-stat-value">¥{{ formatAmount(pointsSummary.totalAmount) }}</text>
+          <text class="points-stat-label">计分消费</text>
+        </view>
+      </view>
+    </view>
+
     <view class="tab-row">
       <view
         v-for="tab in tabs"
@@ -63,31 +127,7 @@ function getCouponClass() {
       </view>
     </view>
 
-    <view v-if="visibleCoupons.length > 0" class="coupon-list">
-      <view
-        v-for="item in visibleCoupons"
-        :key="item.id"
-        :class="getCouponClass()"
-      >
-        <view class="amount-panel">
-          <view class="amount-row">
-            <text class="amount-symbol">¥</text>
-            <text class="amount-value">{{ item.amount }}</text>
-          </view>
-          <text class="amount-scope">全场通用</text>
-        </view>
-
-        <view class="coupon-content">
-          <text class="coupon-title">{{ item.title }}</text>
-          <text class="coupon-desc">{{ item.desc }}</text>
-          <text class="coupon-validity">{{ item.validity }}</text>
-        </view>
-
-        <view class="coupon-action">
-          <text>不可用</text>
-        </view>
-      </view>
-    </view>
+    <view v-if="visibleCoupons.length > 0" class="coupon-list"></view>
 
     <view v-else class="empty-coupon">
       <text class="empty-title">暂无优惠券</text>
@@ -100,7 +140,122 @@ function getCouponClass() {
 .coupon-page {
   min-height: 100vh;
   box-sizing: border-box;
+  padding-bottom: 56rpx;
   background: #f6f7f9;
+}
+
+.points-panel {
+  margin: 24rpx;
+  padding: 30rpx 30rpx 28rpx;
+  border-radius: 24rpx;
+  background: linear-gradient(135deg, #ff383d 0%, #ff6a3d 100%);
+  color: #ffffff;
+  box-shadow: 0 14rpx 28rpx rgba(255, 56, 61, 0.18);
+}
+
+.points-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+}
+
+.points-label {
+  display: block;
+  font-size: 28rpx;
+  line-height: 36rpx;
+  font-weight: 600;
+  opacity: 0.92;
+}
+
+.points-value-row {
+  margin-top: 8rpx;
+  display: flex;
+  align-items: baseline;
+}
+
+.points-value {
+  font-size: 72rpx;
+  line-height: 80rpx;
+  font-weight: 800;
+}
+
+.points-unit {
+  margin-left: 10rpx;
+  font-size: 28rpx;
+  line-height: 36rpx;
+  font-weight: 700;
+}
+
+.points-badge {
+  height: 44rpx;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.points-badge text {
+  font-size: 22rpx;
+  line-height: 30rpx;
+  font-weight: 600;
+}
+
+.points-rule {
+  margin-top: 18rpx;
+  padding: 16rpx 18rpx;
+  border-radius: 16rpx;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.points-rule text {
+  font-size: 24rpx;
+  line-height: 34rpx;
+  font-weight: 500;
+}
+
+.points-stats {
+  margin-top: 24rpx;
+  height: 92rpx;
+  border-radius: 18rpx;
+  background: rgba(255, 255, 255, 0.14);
+  display: flex;
+  align-items: center;
+}
+
+.points-stat-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.points-stat-value {
+  max-width: 100%;
+  color: #ffffff;
+  font-size: 30rpx;
+  line-height: 38rpx;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.points-stat-label {
+  margin-top: 6rpx;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 22rpx;
+  line-height: 28rpx;
+}
+
+.points-stat-divider {
+  width: 1rpx;
+  height: 48rpx;
+  background: rgba(255, 255, 255, 0.24);
 }
 
 .tab-row {
@@ -144,149 +299,10 @@ function getCouponClass() {
 
 .coupon-list {
   padding: 22rpx 24rpx 56rpx;
-  display: flex;
-  flex-direction: column;
-  gap: 20rpx;
-}
-
-.coupon-card {
-  height: 180rpx;
-  display: flex;
-  overflow: hidden;
-  border-radius: 18rpx;
-  background: #ffffff;
-  box-shadow: 0 8rpx 20rpx rgba(25, 31, 40, 0.06);
-}
-
-.coupon-card-disabled {
-  box-shadow: 0 6rpx 16rpx rgba(25, 31, 40, 0.04);
-}
-
-.amount-panel {
-  width: 164rpx;
-  height: 100%;
-  flex-shrink: 0;
-  background: #ff383d;
-  color: #ffffff;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-
-.amount-row {
-  display: flex;
-  align-items: baseline;
-  min-width: 0;
-}
-
-.amount-symbol {
-  margin-right: 6rpx;
-  font-size: 25rpx;
-  line-height: 32rpx;
-  font-weight: 700;
-}
-
-.amount-value {
-  font-size: 52rpx;
-  line-height: 58rpx;
-  font-weight: 700;
-}
-
-.amount-scope {
-  max-width: 132rpx;
-  margin-top: 8rpx;
-  font-size: 23rpx;
-  line-height: 30rpx;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.coupon-content {
-  flex: 1;
-  min-width: 0;
-  box-sizing: border-box;
-  padding: 24rpx 22rpx;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.coupon-title {
-  color: #20232a;
-  font-size: 31rpx;
-  line-height: 40rpx;
-  font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.coupon-desc {
-  margin-top: 10rpx;
-  color: #8c8f96;
-  font-size: 23rpx;
-  line-height: 31rpx;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.coupon-validity {
-  margin-top: 10rpx;
-  color: #4c4f55;
-  font-size: 22rpx;
-  line-height: 30rpx;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.coupon-action {
-  width: 54rpx;
-  height: 100%;
-  flex-shrink: 0;
-  background: #ff383d;
-  color: #ffffff;
-  font-size: 24rpx;
-  line-height: 30rpx;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  writing-mode: vertical-rl;
-  letter-spacing: 1rpx;
-}
-
-.coupon-action:active {
-  opacity: 0.86;
-}
-
-.coupon-card-disabled .amount-panel,
-.coupon-card-disabled .coupon-action {
-  background: #c8ccd3;
-}
-
-.coupon-card-disabled .coupon-action:active {
-  opacity: 1;
-}
-
-.coupon-card-disabled .coupon-title {
-  color: #747984;
-}
-
-.coupon-card-disabled .coupon-desc {
-  color: #a3a7af;
-}
-
-.coupon-card-disabled .coupon-validity {
-  color: #8e939c;
 }
 
 .empty-coupon {
-  min-height: 480rpx;
+  min-height: 420rpx;
   display: flex;
   flex-direction: column;
   align-items: center;

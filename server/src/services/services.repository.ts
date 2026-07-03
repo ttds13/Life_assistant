@@ -18,6 +18,7 @@ export class ServicesRepository {
         icon: true,
         sortOrder: true,
         status: true,
+        _count: { select: { services: true } },
       },
     })
   }
@@ -43,6 +44,10 @@ export class ServicesRepository {
           coverImage: true,
           basePrice: true,
           priceUnit: true,
+          durationMinutes: true,
+          cardType: true,
+          consumeUnit: true,
+          consultationRequired: true,
           status: true,
           sortOrder: true,
           rating: true,
@@ -81,6 +86,13 @@ export class ServicesRepository {
     })
   }
 
+  async findHomeBanners(query: { status?: number } = {}) {
+    return this.prisma.homeBanner.findMany({
+      where: { status: query.status ?? SERVICE_STATUS_ONLINE },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
+    })
+  }
+
   private buildServiceWhere(query: QueryServicesDto): Prisma.ServiceWhereInput {
     const where: Prisma.ServiceWhereInput = {
       status: query.status ?? SERVICE_STATUS_ONLINE,
@@ -89,6 +101,13 @@ export class ServicesRepository {
     }
 
     if (query.categoryId !== undefined) where.categoryId = BigInt(query.categoryId)
+    if (query.cardType) where.cardType = query.cardType
+    if (query.serviceCodes) {
+      const codes = query.serviceCodes.split(',').map(item => item.trim()).filter(Boolean)
+      if (codes.length) {
+        where.code = { in: codes }
+      }
+    }
     if (query.keyword) {
       where.OR = [
         { name: { contains: query.keyword } },

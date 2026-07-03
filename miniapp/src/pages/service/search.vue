@@ -66,6 +66,17 @@ function clearKeyword() {
   page.value = 1
 }
 
+function serviceDetailUrl(service: Service) {
+  const query = service.code
+    ? `code=${encodeURIComponent(service.code)}`
+    : `id=${encodeURIComponent(String(service.id))}`
+  return `/pages/service/detail?${query}`
+}
+
+function onServiceTap(service: Service) {
+  uni.navigateTo({ url: serviceDetailUrl(service) })
+}
+
 onLoad((query) => {
   const queryKeyword = typeof query?.keyword === 'string' ? decodeURIComponent(query.keyword) : ''
   if (queryKeyword) {
@@ -120,6 +131,7 @@ onLoad((query) => {
           v-for="item in services"
           :key="item.id"
           :service="item"
+          @tap="onServiceTap"
         />
       </view>
 

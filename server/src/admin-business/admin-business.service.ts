@@ -657,6 +657,9 @@ export class AdminBusinessService {
       priceUnit: service.priceUnit,
       duration: service.durationMinutes ? `${service.durationMinutes} 分钟` : '-',
       durationMinutes: service.durationMinutes || 0,
+      cardType: service.cardType,
+      consumeUnit: service.consumeUnit || 0,
+      consultationRequired: service.consultationRequired,
       serviceArea: service.serviceArea || '',
       rating: this.decimalToNumber(service.rating),
       totalOrders: service.totalOrders,
@@ -688,6 +691,9 @@ export class AdminBusinessService {
           priceUnit: this.optionalString(body.priceUnit) || '次',
           minPrice: this.optionalDecimal(body.minPrice),
           durationMinutes: this.optionalNumber(body.durationMinutes),
+          cardType: this.normalizeCardType(body.cardType, 'none'),
+          consumeUnit: this.optionalNumber(body.consumeUnit),
+          consultationRequired: this.optionalBoolean(body.consultationRequired),
           serviceArea: this.optionalString(body.serviceArea),
           notice: this.optionalString(body.notice),
           sortOrder: this.optionalNumber(body.sortOrder, 0),
@@ -729,6 +735,9 @@ export class AdminBusinessService {
           priceUnit: this.optionalString(body.priceUnit) ?? current.priceUnit,
           minPrice: body.minPrice === undefined ? current.minPrice : this.optionalDecimal(body.minPrice),
           durationMinutes: body.durationMinutes === undefined ? current.durationMinutes : this.optionalNumber(body.durationMinutes),
+          cardType: body.cardType === undefined ? current.cardType : this.normalizeCardType(body.cardType, current.cardType),
+          consumeUnit: body.consumeUnit === undefined ? current.consumeUnit : this.optionalNumber(body.consumeUnit),
+          consultationRequired: body.consultationRequired === undefined ? current.consultationRequired : this.optionalBoolean(body.consultationRequired),
           serviceArea: this.optionalString(body.serviceArea),
           notice: this.optionalString(body.notice),
           sortOrder: this.optionalNumber(body.sortOrder, current.sortOrder),
@@ -800,6 +809,153 @@ export class AdminBusinessService {
     })
 
     return { id, status: this.activeStatus(0), deletedAt: deletedAt.toISOString() }
+  }
+
+  async listHomeBanners(query: AdminPageQueryDto) {
+    const page = this.getPage(query)
+    const where: Prisma.HomeBannerWhereInput = {}
+    if (query.status) where.status = this.activeStatusToNumber(query.status)
+    if (page.keyword) {
+      where.OR = [
+        { title: { contains: page.keyword } },
+        { subtitle: { contains: page.keyword } },
+        { linkValue: { contains: page.keyword } },
+      ]
+    }
+
+    const [total, banners] = await this.prisma.$transaction([
+      this.prisma.homeBanner.count({ where }),
+      this.prisma.homeBanner.findMany({
+        where,
+        orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
+        skip: this.skip(page),
+        take: page.pageSize,
+      }),
+    ])
+
+    return this.pageResult(banners.map(banner => this.presentHomeBanner(banner)), page, total)
+  }
+
+  async createHomeBanner(body: JsonRecord, context: AdminWriteContext) {
+    const imageUrl = this.requiredString(body.imageUrl, 'imageUrl required')
+    this.storage.assertPermanentOssUrl(imageUrl, { force: true })
+    const linkType = this.homeBannerLinkType(body.linkType)
+    const linkValue = this.homeBannerLinkValue(linkType, body.linkValue)
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const banner = await tx.homeBanner.create({
+        data: {
+          title: this.requiredString(body.title, 'title required'),
+          subtitle: this.optionalString(body.subtitle),
+          imageUrl,
+          linkType,
+          linkValue,
+          sortOrder: this.optionalNumber(body.sortOrder, 0),
+          status: this.activeStatusToNumber(this.optionalString(body.status) || 'active'),
+        },
+      })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'home-banner:create',
+        module: 'marketing',
+        targetType: 'home_banner',
+        targetId: banner.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { title: banner.title, linkType: banner.linkType, linkValue: banner.linkValue },
+      })
+      return banner
+    })
+
+    return this.presentHomeBanner(created)
+  }
+
+  async updateHomeBanner(id: number, body: JsonRecord, context: AdminWriteContext) {
+    const current = await this.prisma.homeBanner.findUnique({ where: { id: BigInt(id) } })
+    if (!current) throw this.notFound('home banner not found')
+
+    const imageUrl = Object.prototype.hasOwnProperty.call(body, 'imageUrl')
+      ? this.requiredString(body.imageUrl, 'imageUrl required')
+      : current.imageUrl
+    this.storage.assertPermanentOssUrl(imageUrl, { force: true })
+    const linkType = Object.prototype.hasOwnProperty.call(body, 'linkType')
+      ? this.homeBannerLinkType(body.linkType)
+      : current.linkType
+    const linkValue = Object.prototype.hasOwnProperty.call(body, 'linkValue')
+      ? this.homeBannerLinkValue(linkType, body.linkValue)
+      : current.linkValue
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const banner = await tx.homeBanner.update({
+        where: { id: BigInt(id) },
+        data: {
+          title: this.optionalString(body.title) ?? current.title,
+          subtitle: this.optionalString(body.subtitle),
+          imageUrl,
+          linkType,
+          linkValue,
+          sortOrder: this.optionalNumber(body.sortOrder, current.sortOrder),
+          status: body.status ? this.activeStatusToNumber(String(body.status)) : current.status,
+        },
+      })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'home-banner:update',
+        module: 'marketing',
+        targetType: 'home_banner',
+        targetId: id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: {
+          before: this.homeBannerAuditSnapshot(current),
+          after: this.homeBannerAuditSnapshot(banner),
+        },
+      })
+      return banner
+    })
+
+    return this.presentHomeBanner(updated)
+  }
+
+  async updateHomeBannerStatus(id: number, dto: AdminStatusDto, context: AdminWriteContext) {
+    const current = await this.prisma.homeBanner.findUnique({ where: { id: BigInt(id) } })
+    if (!current) throw this.notFound('home banner not found')
+    const status = this.activeStatusToNumber(dto.status)
+    await this.prisma.$transaction(async (tx) => {
+      await tx.homeBanner.update({ where: { id: BigInt(id) }, data: { status } })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'home-banner:status:update',
+        module: 'marketing',
+        targetType: 'home_banner',
+        targetId: id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { before: current.status, after: status },
+      })
+    })
+    return { id, status: this.activeStatus(status) }
+  }
+
+  async deleteHomeBanner(id: number, context: AdminWriteContext) {
+    const current = await this.prisma.homeBanner.findUnique({ where: { id: BigInt(id) } })
+    if (!current) throw this.notFound('home banner not found')
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.homeBanner.delete({ where: { id: BigInt(id) } })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'home-banner:delete',
+        module: 'marketing',
+        targetType: 'home_banner',
+        targetId: id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { before: this.homeBannerAuditSnapshot(current) },
+      })
+    })
+
+    return { id, deleted: true }
   }
 
   async listFulfillments(query: AdminPageQueryDto) {
@@ -916,7 +1072,7 @@ export class AdminBusinessService {
     const name = this.requiredString(body.name, 'name required')
     const phone = this.requiredString(body.phone, 'phone required')
     const avatarUrl = this.optionalString(body.avatarUrl)
-    this.storage.assertPermanentOssUrl(avatarUrl)
+    this.storage.assertPermanentOssUrl(avatarUrl, { force: true })
     const cityCode = this.optionalString(body.cityCode)
     const userId = this.optionalPositiveInt(body.userId)
     const status = this.staffStatusToNumber(this.optionalString(body.status) || 'active')
@@ -967,7 +1123,7 @@ export class AdminBusinessService {
     const name = this.optionalString(body.name) ?? current.name
     const phone = this.optionalString(body.phone) ?? current.phone
     const avatarUrl = this.optionalString(body.avatarUrl)
-    this.storage.assertPermanentOssUrl(avatarUrl)
+    this.storage.assertPermanentOssUrl(avatarUrl, { force: true })
     const cityCode = this.optionalString(body.cityCode)
     const updated = await this.prisma.$transaction(async (tx) => {
       const user = await this.ensureUserForStaff(tx, {
@@ -1299,6 +1455,14 @@ export class AdminBusinessService {
       id: String(card.id),
       name: card.name,
       totalTimes: card.totalTimes,
+      cardType: card.cardType,
+      unitName: card.unitName,
+      unitMinutes: card.unitMinutes || 0,
+      totalUnits: card.totalUnits,
+      allowHalfDeduct: card.allowHalfDeduct,
+      minConsumeUnits: card.minConsumeUnits,
+      applicableServices: Array.isArray(card.applicableServices) ? card.applicableServices.join(',') : '',
+      serviceRules: card.serviceRules ? JSON.stringify(card.serviceRules) : '',
       price: this.decimalToNumber(card.price),
       validityDays: card.validityDays,
       soldCount: card._count.userCards,
@@ -1309,11 +1473,23 @@ export class AdminBusinessService {
 
   async createMemberCard(body: JsonRecord, context: AdminWriteContext) {
     const created = await this.prisma.$transaction(async (tx) => {
+      const totalUnits = this.optionalNumber(body.totalUnits)
+      const totalTimes = this.optionalNumber(body.totalTimes, totalUnits)
+      if (!totalTimes || totalTimes <= 0) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'totalUnits required', 400)
+      }
       const card = await tx.memberCard.create({
         data: {
           name: this.requiredString(body.name, 'name required'),
           applicableServices: this.parseJsonArray(body.applicableServices),
-          totalTimes: this.requiredNumber(body.totalTimes, 'totalTimes required'),
+          totalTimes,
+          cardType: this.normalizeCardType(body.cardType, 'times'),
+          unitName: this.optionalString(body.unitName) || '次',
+          unitMinutes: this.optionalPositiveInt(body.unitMinutes),
+          totalUnits: this.optionalNumber(body.totalUnits, totalTimes) || totalTimes,
+          serviceRules: this.parseJsonObject(body.serviceRules),
+          allowHalfDeduct: this.optionalBoolean(body.allowHalfDeduct),
+          minConsumeUnits: this.optionalNumber(body.minConsumeUnits, 1),
           price: this.requiredDecimal(body.price, 'price required'),
           validityDays: this.requiredNumber(body.validityDays, 'validityDays required'),
           status: this.publishStatusToNumber(this.optionalString(body.status) || 'draft'),
@@ -1344,6 +1520,13 @@ export class AdminBusinessService {
           name: this.optionalString(body.name) ?? current.name,
           applicableServices: body.applicableServices === undefined ? current.applicableServices as Prisma.InputJsonValue : this.parseJsonArray(body.applicableServices),
           totalTimes: this.optionalNumber(body.totalTimes, current.totalTimes),
+          cardType: body.cardType === undefined ? current.cardType : this.normalizeCardType(body.cardType, current.cardType),
+          unitName: this.optionalString(body.unitName) ?? current.unitName,
+          unitMinutes: body.unitMinutes === undefined ? current.unitMinutes : this.optionalPositiveInt(body.unitMinutes),
+          totalUnits: this.optionalNumber(body.totalUnits, current.totalUnits || current.totalTimes),
+          serviceRules: body.serviceRules === undefined ? current.serviceRules as Prisma.InputJsonValue : this.parseJsonObject(body.serviceRules),
+          allowHalfDeduct: body.allowHalfDeduct === undefined ? current.allowHalfDeduct : this.optionalBoolean(body.allowHalfDeduct),
+          minConsumeUnits: this.optionalNumber(body.minConsumeUnits, current.minConsumeUnits),
           price: body.price === undefined ? current.price : this.requiredDecimal(body.price, 'price required'),
           validityDays: this.optionalNumber(body.validityDays, current.validityDays),
           status: body.status ? this.publishStatusToNumber(String(body.status)) : current.status,
@@ -1382,6 +1565,180 @@ export class AdminBusinessService {
       })
     })
     return { id, status: this.publishStatus(status) }
+  }
+
+  async listUserMemberCards(query: AdminPageQueryDto) {
+    const page = this.getPage(query)
+    const where: Prisma.UserMemberCardWhereInput = {}
+    if (query.status) where.status = query.status
+    if (query.source) where.source = query.source
+    if (query.cardType) where.card = { cardType: query.cardType }
+    if (page.keyword) {
+      where.OR = [
+        { user: { nickname: { contains: page.keyword } } },
+        { user: { phone: { contains: page.keyword } } },
+        { card: { name: { contains: page.keyword } } },
+      ]
+    }
+    const createdAtRange = this.createdAtRange(query)
+    if (createdAtRange) where.createdAt = createdAtRange
+
+    const [total, cards] = await this.prisma.$transaction([
+      this.prisma.userMemberCard.count({ where }),
+      this.prisma.userMemberCard.findMany({
+        where,
+        include: {
+          user: { select: { id: true, nickname: true, phone: true } },
+          card: true,
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: this.skip(page),
+        take: page.pageSize,
+      }),
+    ])
+
+    const cardIds = cards.map(card => card.id)
+    const purchaseOrders = cardIds.length
+      ? await this.prisma.order.findMany({
+          where: { grantedUserMemberCardId: { in: cardIds } },
+          select: { id: true, orderNo: true, grantedUserMemberCardId: true },
+        })
+      : []
+    const purchaseOrderMap = new Map(purchaseOrders.map(order => [String(order.grantedUserMemberCardId), order]))
+
+    return this.pageResult(cards.map(card => {
+      const usableUnits = Math.max(0, card.remainingUnits - card.frozenUnits)
+      const purchaseOrder = purchaseOrderMap.get(String(card.id))
+      return {
+        id: String(card.id),
+        userId: Number(card.userId),
+        userName: card.user.nickname || `User ${Number(card.userId)}`,
+        userPhone: card.user.phone || '',
+        cardId: Number(card.cardId),
+        cardName: card.card.name,
+        cardType: card.card.cardType,
+        unitName: card.card.unitName,
+        source: card.source,
+        remainingUnits: card.remainingUnits,
+        frozenUnits: card.frozenUnits,
+        usableUnits,
+        remainingTimes: card.remainingTimes,
+        purchaseOrderId: purchaseOrder ? Number(purchaseOrder.id) : null,
+        purchaseOrderNo: purchaseOrder?.orderNo || '',
+        expireAt: this.formatDateTime(card.expireAt),
+        status: card.status,
+        createdAt: this.formatDateTime(card.createdAt),
+        updatedAt: this.formatDateTime(card.updatedAt),
+      }
+    }), page, total)
+  }
+
+  async getUserMemberCard(id: number) {
+    const card = await this.prisma.userMemberCard.findUnique({
+      where: { id: BigInt(id) },
+      include: { user: true, card: true },
+    })
+    if (!card) throw this.notFound('user member card not found')
+    return {
+      id: String(card.id),
+      userId: Number(card.userId),
+      userName: card.user.nickname || `User ${Number(card.userId)}`,
+      userPhone: card.user.phone || '',
+      cardId: Number(card.cardId),
+      cardName: card.card.name,
+      cardType: card.card.cardType,
+      unitName: card.card.unitName,
+      unitMinutes: card.card.unitMinutes || 0,
+      source: card.source,
+      remainingUnits: card.remainingUnits,
+      frozenUnits: card.frozenUnits,
+      usableUnits: Math.max(0, card.remainingUnits - card.frozenUnits),
+      remainingTimes: card.remainingTimes,
+      expireAt: this.formatDateTime(card.expireAt),
+      status: card.status,
+      createdAt: this.formatDateTime(card.createdAt),
+      updatedAt: this.formatDateTime(card.updatedAt),
+    }
+  }
+
+  async updateUserMemberCardStatus(id: number, dto: AdminStatusDto, context: AdminWriteContext) {
+    const current = await this.prisma.userMemberCard.findUnique({ where: { id: BigInt(id) } })
+    if (!current) throw this.notFound('user member card not found')
+    const status = this.normalizeUserMemberCardStatus(dto.status)
+    await this.prisma.$transaction(async (tx) => {
+      await tx.userMemberCard.update({ where: { id: BigInt(id) }, data: { status } })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'user-member-card:status:update',
+        module: 'marketing',
+        targetType: 'user_member_card',
+        targetId: id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { before: current.status, after: status },
+      })
+    })
+    return { id, status }
+  }
+
+  async listMemberCardRecords(query: AdminPageQueryDto) {
+    const page = this.getPage(query)
+    const where: Prisma.MemberCardRecordWhereInput = {}
+    const recordType = query.recordType || query.type
+    if (recordType && recordType !== 'all') where.recordType = recordType
+    if (query.cardType) where.userMemberCard = { card: { cardType: query.cardType } }
+    if (page.keyword) {
+      where.OR = [
+        { userMemberCard: { user: { nickname: { contains: page.keyword } } } },
+        { userMemberCard: { user: { phone: { contains: page.keyword } } } },
+        { userMemberCard: { card: { name: { contains: page.keyword } } } },
+        { order: { orderNo: { contains: page.keyword } } },
+      ]
+    }
+    const createdAtRange = this.createdAtRange(query)
+    if (createdAtRange) where.createdAt = createdAtRange
+
+    const [total, records] = await this.prisma.$transaction([
+      this.prisma.memberCardRecord.count({ where }),
+      this.prisma.memberCardRecord.findMany({
+        where,
+        include: {
+          userMemberCard: {
+            include: {
+              user: { select: { id: true, nickname: true, phone: true } },
+              card: true,
+            },
+          },
+          order: { select: { id: true, orderNo: true } },
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: this.skip(page),
+        take: page.pageSize,
+      }),
+    ])
+
+    return this.pageResult(records.map(record => ({
+      id: String(record.id),
+      userMemberCardId: Number(record.userMemberCardId),
+      userId: Number(record.userMemberCard.userId),
+      userName: record.userMemberCard.user.nickname || `User ${Number(record.userMemberCard.userId)}`,
+      userPhone: record.userMemberCard.user.phone || '',
+      cardId: Number(record.userMemberCard.cardId),
+      cardName: record.userMemberCard.card.name,
+      cardType: record.userMemberCard.card.cardType,
+      unitName: record.userMemberCard.card.unitName,
+      orderId: record.orderId ? Number(record.orderId) : null,
+      orderNo: record.order?.orderNo || '',
+      recordType: record.recordType,
+      timesUsed: record.timesUsed,
+      units: record.units,
+      beforeUnits: record.beforeUnits ?? '',
+      afterUnits: record.afterUnits ?? '',
+      operatorType: record.operatorType || '',
+      operatorId: record.operatorId ? Number(record.operatorId) : '',
+      remark: record.remark || '',
+      createdAt: this.formatDateTime(record.createdAt),
+    })), page, total)
   }
 
   async listAuditItems(type: string | undefined, query: AdminPageQueryDto) {
@@ -1857,6 +2214,77 @@ export class AdminBusinessService {
     }
   }
 
+  private homeBannerAuditSnapshot(banner: {
+    title: string
+    subtitle: string | null
+    imageUrl: string
+    linkType: string
+    linkValue: string | null
+    sortOrder: number
+    status: number
+  }) {
+    return {
+      title: banner.title,
+      subtitle: banner.subtitle,
+      imageUrl: banner.imageUrl,
+      linkType: banner.linkType,
+      linkValue: banner.linkValue,
+      sortOrder: banner.sortOrder,
+      status: banner.status,
+    }
+  }
+
+  private presentHomeBanner(banner: {
+    id: bigint
+    title: string
+    subtitle: string | null
+    imageUrl: string
+    linkType: string
+    linkValue: string | null
+    sortOrder: number
+    status: number
+    updatedAt: Date
+  }) {
+    const displayUrl = this.storage.signNullableUrl(banner.imageUrl) || banner.imageUrl
+    return {
+      id: String(banner.id),
+      title: banner.title,
+      subtitle: banner.subtitle || '',
+      imageUrl: displayUrl,
+      imageOssUrl: banner.imageUrl,
+      imageDisplayUrl: displayUrl,
+      linkType: banner.linkType,
+      linkValue: banner.linkValue || '',
+      sortOrder: banner.sortOrder,
+      status: this.activeStatus(banner.status),
+      updatedAt: this.formatDateTime(banner.updatedAt),
+    }
+  }
+
+  private homeBannerLinkType(value: unknown) {
+    const linkType = this.optionalString(value) || 'none'
+    if (['none', 'service', 'category', 'url'].includes(linkType)) return linkType
+    throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid banner link type', 400)
+  }
+
+  private homeBannerLinkValue(linkType: string, value: unknown) {
+    const linkValue = this.optionalString(value)
+    if (linkType === 'none') return null
+    if (!linkValue) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'linkValue required', 400)
+    }
+    if (linkType === 'service' && !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(linkValue) && !/^\d+$/.test(linkValue)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid service link value', 400)
+    }
+    if (linkType === 'category' && !/^\d+$/.test(linkValue)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid category link value', 400)
+    }
+    if (linkType === 'url' && !/^https?:\/\//i.test(linkValue)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid url link value', 400)
+    }
+    return linkValue
+  }
+
   private async staffNameMap(ids: bigint[]) {
     const uniqueIds = [...new Set(ids.map(id => id.toString()))].map(id => BigInt(id))
     const staff = uniqueIds.length
@@ -2149,10 +2577,23 @@ export class AdminBusinessService {
     return Number.isFinite(number) ? number : fallback
   }
 
+  private optionalBoolean(value: unknown, fallback = false) {
+    if (value === undefined || value === null || value === '') return fallback
+    if (typeof value === 'boolean') return value
+    const text = String(value).trim().toLowerCase()
+    return ['true', '1', 'yes', 'active', 'published'].includes(text)
+  }
+
   private optionalPositiveInt(value: unknown) {
     if (value === undefined || value === null || value === '') return undefined
     const number = Number(value)
     return Number.isInteger(number) && number > 0 ? number : undefined
+  }
+
+  private normalizeCardType(value: unknown, fallback: string) {
+    const cardType = this.optionalString(value) || fallback
+    if (['none', 'time', 'times', 'consultation'].includes(cardType)) return cardType
+    throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid cardType', 400)
   }
 
   private async nextUniqueServiceCode(
@@ -2233,6 +2674,23 @@ export class AdminBusinessService {
     return Number.isNaN(date.getTime()) ? undefined : date
   }
 
+  private createdAtRange(query: AdminPageQueryDto): Prisma.DateTimeFilter | undefined {
+    const start = this.optionalDate(query.dateStart)
+    const end = this.optionalDate(query.dateEnd)
+    if (!start && !end) return undefined
+    return {
+      ...(start ? { gte: start } : {}),
+      ...(end ? { lte: end } : {}),
+    }
+  }
+
+  private normalizeUserMemberCardStatus(value: string) {
+    if (['active', 'disabled', 'expired', 'used_up'].includes(value)) return value
+    if (value === 'published') return 'active'
+    if (value === 'draft') return 'disabled'
+    throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid user member card status', 400)
+  }
+
   private parseJsonArray(value: unknown): Prisma.InputJsonValue {
     if (Array.isArray(value)) return value as Prisma.InputJsonArray
     if (typeof value === 'string') {
@@ -2248,6 +2706,25 @@ export class AdminBusinessService {
       return trimmed.split(/[,\s，、]+/).filter(Boolean)
     }
     return []
+  }
+
+  private parseJsonObject(value: unknown): Prisma.InputJsonValue {
+    if (!value) return {}
+    if (typeof value === 'object' && !Array.isArray(value)) return value as Prisma.InputJsonObject
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (!trimmed) return {}
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Prisma.InputJsonObject
+        }
+      }
+      catch {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid JSON object', 400)
+      }
+    }
+    throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid JSON object', 400)
   }
 
   private notFound(message: string) {

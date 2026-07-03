@@ -20,9 +20,10 @@ async function main() {
 
   const existing = await prisma.adminUser.findUnique({ where: { username } })
   if (existing) {
+    const passwordHash = await hashAdminPassword(password)
     const updated = await prisma.adminUser.update({
       where: { id: existing.id },
-      data: { name, role, status: 1 },
+      data: { name, role, passwordHash, status: 1 },
     })
     console.log(JSON.stringify({
       action: 'updated',

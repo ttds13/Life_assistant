@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { logoutSession } from '@/api/auth'
+import { getMyMemberCards } from '@/api/memberCards'
 import { getOrders } from '@/api/orders'
 import type { OrderStatus } from '@/api/types/orders'
 import { useTokenStore } from '@/store/token'
@@ -58,7 +59,7 @@ const emptyOrderStats: OrderStats = {
   afterSales: 0,
 }
 
-const profileStats = computed(() => emptyProfileStats)
+const profileStats = ref({ ...emptyProfileStats })
 const orderStats = ref<OrderStats>({ ...emptyOrderStats })
 
 const displayName = computed(() => {
@@ -144,6 +145,7 @@ function onLogout() {
         logoutSession(refreshToken).catch(() => {})
 
       tokenStore.logout()
+      profileStats.value = { ...emptyProfileStats }
       orderStats.value = { ...emptyOrderStats }
       uni.showToast({ icon: 'success', title: '已退出' })
     },
@@ -182,6 +184,27 @@ async function loadOrderStats() {
   }
 }
 
+async function loadProfileStats() {
+  if (!tokenStore.hasLogin) {
+    profileStats.value = { ...emptyProfileStats }
+    return
+  }
+
+  try {
+    const cards = await getMyMemberCards()
+    profileStats.value = {
+      ...profileStats.value,
+      cardCount: cards.length,
+    }
+  }
+  catch {
+    profileStats.value = {
+      ...profileStats.value,
+      cardCount: 0,
+    }
+  }
+}
+
 async function refreshUserProfile() {
   if (!tokenStore.hasLogin)
     return
@@ -199,13 +222,13 @@ function onProfileTap() {
 
 function goCardPage() {
   requireLogin(() => {
-    uni.showToast({ icon: 'none', title: '卡包功能待完善' })
+    uni.navigateTo({ url: '/pages/card/index' })
   })
 }
 
 function goCouponPage() {
   requireLogin(() => {
-    uni.showToast({ icon: 'none', title: '优惠券功能待完善' })
+    uni.navigateTo({ url: '/pages/coupon/index' })
   })
 }
 
@@ -287,6 +310,7 @@ function onAppTap(item: AppEntry) {
 
 onShow(() => {
   refreshUserProfile()
+  loadProfileStats()
   loadOrderStats()
 })
 </script>

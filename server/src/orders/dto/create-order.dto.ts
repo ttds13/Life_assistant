@@ -60,4 +60,22 @@ export class CreateOrderDto {
   @Min(1)
   @Transform(({ value }) => toOptionalNumber(value))
   memberCardId?: number
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  @Transform(({ value }) => trimOptional(value))
+  source?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  @Transform(({ value }) => trimOptional(value))
+  promotionKey?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  @Transform(({ value }) => trimOptional(value))
+  campaignId?: string
 }

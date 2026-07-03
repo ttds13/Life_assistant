@@ -16,6 +16,7 @@ import { CreateOrderDto } from './dto/create-order.dto'
 import { PricePreviewDto } from './dto/price-preview.dto'
 import { QueryOrdersDto } from './dto/query-orders.dto'
 import { RejectOrderDto } from './dto/reject-order.dto'
+import { RescheduleOrderDto } from './dto/reschedule-order.dto'
 import { TransitionVersionDto } from './dto/transition-version.dto'
 import { UpdateStaffProfileDto } from './dto/update-staff-profile.dto'
 import { OrdersService } from './orders.service'
@@ -54,6 +55,12 @@ export class OrdersController {
   @HttpCode(200)
   cancelOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: TransitionVersionDto) {
     return this.ordersService.cancelOrder(request.user!.userId, this.parseId(idText), dto, getRequestId(request))
+  }
+
+  @Post('orders/:id/reschedule')
+  @HttpCode(200)
+  rescheduleOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: RescheduleOrderDto) {
+    return this.ordersService.rescheduleOrder(request.user!.userId, this.parseId(idText), dto, getRequestId(request))
   }
 
   @Post('orders/:id/confirm')

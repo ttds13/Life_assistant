@@ -53,11 +53,13 @@ function addressText(snapshot: JsonRecord) {
   ].filter(Boolean).join('')
 }
 
-export function presentPricePreview(amount: number) {
+export function presentPricePreview(amount: number, options?: { consultationRequired?: boolean, cardType?: string }) {
   return {
     serviceAmount: amount,
     discountAmount: 0,
     payableAmount: amount,
+    consultationRequired: options?.consultationRequired || false,
+    cardType: options?.cardType || '',
     items: [
       { label: 'Service amount', amount },
       { label: 'Discount', amount: 0, type: 'discount' as const },
@@ -76,7 +78,12 @@ export function presentUserOrder(order: OrderDetailRecord) {
     orderNo: order.orderNo,
     status: order.status,
     version: order.version,
+    orderType: order.orderType,
     staffId: order.staffId ? Number(order.staffId) : null,
+    memberCardId: order.memberCardId ? Number(order.memberCardId) : null,
+    memberCardConsumeUnits: order.memberCardConsumeUnits,
+    purchaseCardId: order.purchaseCardId ? Number(order.purchaseCardId) : null,
+    grantedUserMemberCardId: order.grantedUserMemberCardId ? Number(order.grantedUserMemberCardId) : null,
     serviceCode: stringValue(serviceSnapshot.code, order.service?.code || ''),
     serviceName: stringValue(serviceSnapshot.name, order.service?.name || ''),
     serviceImage: stringValue(serviceSnapshot.coverImage, order.service?.coverImage || ''),
@@ -133,6 +140,10 @@ export function presentOrderDetail(order: OrderDetailRecord) {
       coverImage: stringValue(serviceSnapshot.coverImage, order.service?.coverImage || ''),
       basePrice: numberValue(serviceSnapshot.basePrice, decimalToNumber(order.originalAmount)),
       priceUnit: stringValue(serviceSnapshot.priceUnit, order.service?.priceUnit || ''),
+      durationMinutes: numberValue(serviceSnapshot.durationMinutes, order.service?.durationMinutes || 0),
+      cardType: stringValue(serviceSnapshot.cardType, order.service?.cardType || ''),
+      consumeUnit: numberValue(serviceSnapshot.consumeUnit, order.service?.consumeUnit || 0),
+      consultationRequired: Boolean(serviceSnapshot.consultationRequired || order.service?.consultationRequired),
       status: numberValue(serviceSnapshot.status, order.service?.status || 1),
       sortOrder: numberValue(serviceSnapshot.sortOrder, order.service?.sortOrder || 0),
     },

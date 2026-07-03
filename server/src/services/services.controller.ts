@@ -14,6 +14,11 @@ export class ServicesController {
     return this.servicesService.listCategories(parsedStatus)
   }
 
+  @Get('home/banners')
+  listHomeBanners() {
+    return this.servicesService.listHomeBanners()
+  }
+
   @Get('services')
   listServices(@Query() query: QueryServicesDto) {
     return this.servicesService.listServices({

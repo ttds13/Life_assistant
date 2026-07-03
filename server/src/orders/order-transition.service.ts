@@ -29,6 +29,7 @@ export interface CreateInitialStatusLogParams {
   orderId: bigint
   operatorType: OrderOperatorType
   operatorId: bigint
+  toStatus?: OrderStatus
   requestId?: string
   remark?: string
   detail?: Record<string, unknown>
@@ -125,7 +126,7 @@ export class OrderTransitionService {
       data: {
         orderId: params.orderId,
         fromStatus: null,
-        toStatus: rule.to,
+        toStatus: params.toStatus || rule.to,
         operatorType: params.operatorType,
         operatorId: params.operatorId,
         action: 'create_order',

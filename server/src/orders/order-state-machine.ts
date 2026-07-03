@@ -70,6 +70,16 @@ export const ORDER_TRANSITIONS = {
     to: ORDER_STATUS.CANCELLED,
     lockMode: 'pessimistic',
   },
+  [ORDER_ACTION.USER_CANCEL_BOOKING]: {
+    from: ORDER_STATUS.PENDING_DISPATCH,
+    to: ORDER_STATUS.CANCELLED,
+    lockMode: 'pessimistic',
+  },
+  [ORDER_ACTION.USER_CANCEL_PAID_REFUND]: {
+    from: ORDER_STATUS.PENDING_DISPATCH,
+    to: ORDER_STATUS.REFUND_PENDING,
+    lockMode: 'pessimistic',
+  },
   [ORDER_ACTION.TIMEOUT_UNPAID]: {
     from: ORDER_STATUS.PENDING_PAYMENT,
     to: ORDER_STATUS.CANCELLED,

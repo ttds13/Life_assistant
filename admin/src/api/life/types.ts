@@ -8,8 +8,12 @@ export type LifeModuleKey =
   | "staffStatus"
   | "payments"
   | "reviews"
+  | "homeBanners"
+  | "promotionLinks"
   | "coupons"
-  | "memberCards";
+  | "memberCards"
+  | "userMemberCards"
+  | "memberCardRecords";
 
 export type AuditType = "all" | "staff" | "refund" | "withdraw" | "ticket";
 
@@ -18,8 +22,13 @@ export interface LifeQueryParams {
   pageSize: number;
   keywords?: string;
   status?: string;
+  orderType?: string;
   module?: LifeModuleKey;
   type?: AuditType;
+  recordType?: string;
+  cardType?: string;
+  source?: string;
+  targetType?: string;
 }
 
 export interface LifeColumn {
@@ -27,7 +36,7 @@ export interface LifeColumn {
   label: string;
   width?: number;
   minWidth?: number;
-  type?: "text" | "tag" | "money" | "datetime" | "rate";
+  type?: "text" | "tag" | "money" | "datetime" | "rate" | "image" | "copy";
 }
 
 export interface LifeStatusOption {
@@ -50,6 +59,7 @@ export interface LifeResourceConfig {
   columns: LifeColumn[];
   statusOptions: LifeStatusOption[];
   primaryAction?: string;
+  submitAction?: string;
   editable?: boolean;
   deletable?: boolean;
   formItems?: LifeFormItem[];
@@ -81,10 +91,16 @@ export interface AddressRecord extends LifeResourceRecord {
 export interface LifeFormItem {
   prop: string;
   label: string;
-  type: "text" | "number" | "textarea" | "select" | "datetime" | "image";
+  type: "text" | "number" | "textarea" | "select" | "datetime" | "image" | "switch" | "promotion-target";
   required?: boolean;
   options?: LifeStatusOption[];
   placeholder?: string;
+}
+
+export interface LifeSelectOption {
+  label: string;
+  value: string;
+  code?: string;
 }
 
 export interface LifeResourcePage {
@@ -151,6 +167,7 @@ export interface DashboardData {
 export interface OrderListItem {
   id: string;
   orderNo: string;
+  orderType?: string;
   status: string;
   staffId?: number | null;
   serviceName: string;
@@ -169,6 +186,10 @@ export interface OrderListItem {
   source: string;
   remark?: string;
   adminRemark?: string;
+  memberCardId?: number | null;
+  memberCardConsumeUnits?: number;
+  purchaseCardId?: number | null;
+  grantedUserMemberCardId?: number | null;
   paidAt?: string | null;
   completedAt?: string | null;
   cancelledAt?: string | null;

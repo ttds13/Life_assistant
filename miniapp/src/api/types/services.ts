@@ -5,6 +5,7 @@ export interface ServiceCategory {
   icon: string
   sortOrder: number
   status: number
+  serviceCount?: number
 }
 
 // 服务项目
@@ -12,10 +13,16 @@ export interface Service {
   id: number
   code?: string
   categoryId: number
+  category?: string
+  categoryName?: string
   name: string
   description: string
   basePrice: number
   priceUnit: string
+  durationMinutes?: number
+  cardType?: 'none' | 'time' | 'times' | 'consultation'
+  consumeUnit?: number
+  consultationRequired?: boolean
   coverImage: string
   coverImageOssUrl?: string
   coverImageDisplayUrl?: string
@@ -27,6 +34,8 @@ export interface Service {
 export interface QueryServicesParams {
   keyword?: string
   categoryId?: number
+  cardType?: 'none' | 'time' | 'times' | 'consultation'
+  serviceCodes?: string
   status?: number
   page?: number
   pageSize?: number

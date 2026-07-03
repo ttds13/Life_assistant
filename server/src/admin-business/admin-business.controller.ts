@@ -108,6 +108,35 @@ export class AdminBusinessController {
     return this.service.deleteService(this.parseId(idText), this.context(request))
   }
 
+  @Get('home-banners')
+  listHomeBanners(@Query() query: AdminPageQueryDto) {
+    return this.service.listHomeBanners(query)
+  }
+
+  @Post('home-banners')
+  @HttpCode(200)
+  createHomeBanner(@Req() request: RequestWithContext, @Body() body: Record<string, unknown>) {
+    return this.service.createHomeBanner(body, this.context(request))
+  }
+
+  @Put('home-banners/:id')
+  @HttpCode(200)
+  updateHomeBanner(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
+    return this.service.updateHomeBanner(this.parseId(idText), body, this.context(request))
+  }
+
+  @Put('home-banners/:id/status')
+  @HttpCode(200)
+  updateHomeBannerStatus(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminStatusDto) {
+    return this.service.updateHomeBannerStatus(this.parseId(idText), dto, this.context(request))
+  }
+
+  @Delete('home-banners/:id')
+  @HttpCode(200)
+  deleteHomeBanner(@Req() request: RequestWithContext, @Param('id') idText: string) {
+    return this.service.deleteHomeBanner(this.parseId(idText), this.context(request))
+  }
+
   @Get('fulfillments')
   listFulfillments(@Query() query: AdminPageQueryDto) {
     return this.service.listFulfillments(query)
@@ -207,6 +236,27 @@ export class AdminBusinessController {
   @HttpCode(200)
   updateMemberCardStatus(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminStatusDto) {
     return this.service.updateMemberCardStatus(this.parseId(idText), dto, this.context(request))
+  }
+
+  @Get('user-member-cards')
+  listUserMemberCards(@Query() query: AdminPageQueryDto) {
+    return this.service.listUserMemberCards(query)
+  }
+
+  @Get('user-member-cards/:id')
+  getUserMemberCard(@Param('id') idText: string) {
+    return this.service.getUserMemberCard(this.parseId(idText))
+  }
+
+  @Put('user-member-cards/:id/status')
+  @HttpCode(200)
+  updateUserMemberCardStatus(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminStatusDto) {
+    return this.service.updateUserMemberCardStatus(this.parseId(idText), dto, this.context(request))
+  }
+
+  @Get('member-card-records')
+  listMemberCardRecords(@Query() query: AdminPageQueryDto) {
+    return this.service.listMemberCardRecords(query)
   }
 
   @Get('audits')

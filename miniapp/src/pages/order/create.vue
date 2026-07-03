@@ -1,11 +1,14 @@
 <script lang="ts" setup>
 import { getUserAddresses } from '@/api/address'
+import { getMyMemberCards } from '@/api/memberCards'
 import { createOrder, getOrderPricePreview } from '@/api/orders'
-import type { PricePreview } from '@/api/types/orders'
-import type { UserAddress } from '@/api/types/address'
-import type { Service } from '@/api/types/services'
 import { getServiceDetail, getServices } from '@/api/services'
+import type { UserAddress } from '@/api/types/address'
+import type { UserMemberCard } from '@/api/types/memberCards'
+import type { PricePreview } from '@/api/types/orders'
+import type { Service } from '@/api/types/services'
 import { formatAddress, getSelectedAddress } from '@/utils/addressSelection'
+import { availableAppointmentSlots, buildAppointmentDateOptions } from '@/utils/appointmentSlots'
 
 definePage({
   style: {
@@ -33,22 +36,28 @@ const submitting = ref(false)
 const priceLoading = ref(false)
 const pricePreview = ref<PricePreview>({ ...emptyPricePreview })
 const pricePreviewReady = ref(false)
+const memberCards = ref<UserMemberCard[]>([])
+const selectedMemberCardId = ref<number | undefined>()
+const preferredMemberCardId = ref<number | undefined>()
+const memberCardLoading = ref(false)
+const source = ref('')
+const promotionKey = ref('')
+const campaignId = ref('')
 
-const dateOptions = computed(() => {
-  const result: { label: string, value: string }[] = []
-  const now = new Date()
-  for (let i = 0; i < 5; i++) {
-    const date = new Date(now)
-    date.setDate(now.getDate() + i)
-    const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-    const label = i === 0 ? '今天' : i === 1 ? '明天' : `${date.getMonth() + 1}月${date.getDate()}日`
-    result.push({ label, value })
-  }
-  return result
-})
-
-const timeSlots = ['09:00-11:00', '11:00-13:00', '13:00-15:00', '15:00-17:00', '17:00-19:00']
-
+const dateOptions = computed(() => buildAppointmentDateOptions())
+const timeSlots = computed(() => availableAppointmentSlots(selectedDate.value))
+const effectiveServiceId = computed(() => serviceId.value)
+const effectiveServiceCode = computed(() => service.value?.code || serviceCode.value)
+const hasServiceIdentifier = computed(() => !!effectiveServiceCode.value || effectiveServiceId.value > 0)
+const selectedMemberCard = computed(() => memberCards.value.find(item => item.id === selectedMemberCardId.value))
+const isConsultationService = computed(() =>
+  service.value?.consultationRequired
+  || service.value?.cardType === 'consultation'
+  || pricePreview.value.consultationRequired,
+)
+const displayPayableAmount = computed(() =>
+  selectedMemberCard.value || isConsultationService.value ? 0 : pricePreview.value.payableAmount,
+)
 const canSubmit = computed(() =>
   !!service.value
   && hasServiceIdentifier.value
@@ -59,21 +68,15 @@ const canSubmit = computed(() =>
   && !priceLoading.value,
 )
 
-const effectiveServiceId = computed(() => serviceId.value)
-const effectiveServiceCode = computed(() => service.value?.code || serviceCode.value)
-const hasServiceIdentifier = computed(() => !!effectiveServiceCode.value || effectiveServiceId.value > 0)
-
 function normalizeServiceList(data: any): Service[] {
   if (Array.isArray(data))
     return data
-
   return data?.items || data?.list || data?.records || []
 }
 
 async function resolveServiceByName() {
   if (!serviceName.value)
     return null
-
   const result = await getServices({ keyword: serviceName.value, page: 1, pageSize: 20 })
   return normalizeServiceList(result).find(item => item.name === serviceName.value && item.id > 0) || null
 }
@@ -86,8 +89,7 @@ async function ensureServiceLoaded() {
       serviceCode.value = loaded.code || serviceCode.value
       return loaded
     }
-    catch {
-    }
+    catch {}
   }
 
   if (Number.isInteger(serviceId.value) && serviceId.value > 0) {
@@ -96,8 +98,7 @@ async function ensureServiceLoaded() {
       serviceCode.value = loaded.code || serviceCode.value
       return loaded
     }
-    catch {
-    }
+    catch {}
   }
 
   const matchedService = await resolveServiceByName()
@@ -114,6 +115,7 @@ async function loadService() {
   try {
     service.value = await ensureServiceLoaded()
     await loadPricePreview()
+    await loadMemberCards()
   }
   catch {
     service.value = null
@@ -124,6 +126,43 @@ async function loadService() {
   finally {
     loading.value = false
   }
+}
+
+async function loadMemberCards() {
+  if (!service.value?.id) {
+    memberCards.value = []
+    selectedMemberCardId.value = undefined
+    return
+  }
+
+  memberCardLoading.value = true
+  try {
+    memberCards.value = await getMyMemberCards({ serviceId: service.value.id })
+    if (preferredMemberCardId.value && memberCards.value.some(item => item.id === preferredMemberCardId.value)) {
+      selectedMemberCardId.value = preferredMemberCardId.value
+      preferredMemberCardId.value = undefined
+    }
+    if (selectedMemberCardId.value && !memberCards.value.some(item => item.id === selectedMemberCardId.value)) {
+      selectedMemberCardId.value = undefined
+    }
+  }
+  catch {
+    memberCards.value = []
+    selectedMemberCardId.value = undefined
+  }
+  finally {
+    memberCardLoading.value = false
+  }
+}
+
+function formatCardBalance(card: UserMemberCard) {
+  if (card.cardType === 'time')
+    return `${card.usableUnits}分钟可用`
+  return `${card.usableUnits}${card.unitName || '次'}可用`
+}
+
+function onSelectMemberCard(card?: UserMemberCard) {
+  selectedMemberCardId.value = card?.id
 }
 
 async function loadPricePreview() {
@@ -144,7 +183,7 @@ async function loadPricePreview() {
   }
   catch {
     pricePreview.value = { ...emptyPricePreview }
-    uni.showToast({ icon: 'none', title: '价格预览加载失败' })
+    uni.showToast({ icon: 'none', title: '价格预览失败' })
   }
   finally {
     priceLoading.value = false
@@ -185,6 +224,7 @@ async function onSubmit() {
     uni.showToast({ icon: 'none', title: message })
     return
   }
+
   submitting.value = true
   try {
     const order = await createOrder({
@@ -194,7 +234,16 @@ async function onSubmit() {
       appointmentTimeSlot: selectedTimeSlot.value,
       addressId: selectedAddress.value!.id,
       remark: remark.value.trim() || undefined,
+      memberCardId: selectedMemberCardId.value,
+      source: source.value || undefined,
+      promotionKey: promotionKey.value || undefined,
+      campaignId: campaignId.value || undefined,
     })
+    if (selectedMemberCard.value || isConsultationService.value) {
+      uni.showToast({ icon: 'success', title: '预约成功' })
+      uni.redirectTo({ url: `/pages/order/detail?id=${order.id}` })
+      return
+    }
     uni.navigateTo({ url: `/pages/payment/result?orderId=${order.id}&status=pending&amount=${pricePreview.value.payableAmount}` })
   }
   finally {
@@ -210,6 +259,13 @@ onLoad((query) => {
       ? decodeURIComponent(query.code)
       : ''
   serviceName.value = typeof query?.serviceName === 'string' ? decodeURIComponent(query.serviceName) : ''
+  const cardId = Number(query?.memberCardId)
+  preferredMemberCardId.value = Number.isInteger(cardId) && cardId > 0 ? cardId : undefined
+  selectedMemberCardId.value = preferredMemberCardId.value
+  source.value = typeof query?.source === 'string' ? decodeURIComponent(query.source) : ''
+  promotionKey.value = typeof query?.promotionKey === 'string' ? decodeURIComponent(query.promotionKey) : ''
+  campaignId.value = typeof query?.campaignId === 'string' ? decodeURIComponent(query.campaignId) : ''
+  selectedDate.value = dateOptions.value[0]?.value || ''
   void loadService()
   void syncSelectedAddress()
 })
@@ -222,6 +278,13 @@ watch([selectedAddress, selectedDate, selectedTimeSlot], () => {
   if (service.value)
     void loadPricePreview()
 })
+
+watch(timeSlots, (slots) => {
+  if (selectedTimeSlot.value && !slots.includes(selectedTimeSlot.value))
+    selectedTimeSlot.value = ''
+  if (!selectedTimeSlot.value && slots.length)
+    selectedTimeSlot.value = slots[0]
+}, { immediate: true })
 </script>
 
 <template>
@@ -275,6 +338,11 @@ watch([selectedAddress, selectedDate, selectedTimeSlot], () => {
             </text>
           </view>
         </view>
+        <view v-if="!timeSlots.length" class="mt-3 rounded-[12rpx] bg-[#FFF7E6] px-3 py-2">
+          <text class="text-[24rpx] text-[#AD6800]">
+            今天已无可预约时间段，请选择明天或更晚日期
+          </text>
+        </view>
       </form-section>
 
       <form-section title="服务地址" required>
@@ -310,36 +378,60 @@ watch([selectedAddress, selectedDate, selectedTimeSlot], () => {
 
       <form-section title="优惠权益">
         <view class="flex items-center justify-between py-3 border-b border-[#F3F4F6]">
-          <text class="text-[28rpx] text-gray-700">
-            优惠券
-          </text>
-          <text class="text-[26rpx] text-gray-400">
-            无可用
-          </text>
+          <text class="text-[28rpx] text-gray-700">优惠券</text>
+          <text class="text-[26rpx] text-gray-400">暂无可用</text>
         </view>
         <view class="flex items-center justify-between py-3">
-          <text class="text-[28rpx] text-gray-700">
-            会员次卡
+          <text class="text-[28rpx] text-gray-700">会员卡</text>
+          <text v-if="memberCardLoading" class="text-[26rpx] text-gray-400">加载中</text>
+          <text v-else-if="!memberCards.length" class="text-[26rpx] text-gray-400">暂无可用</text>
+          <text v-else class="text-[26rpx] text-[#1677FF]">
+            {{ selectedMemberCard ? selectedMemberCard.name : '请选择' }}
           </text>
-          <text class="text-[26rpx] text-gray-400">
-            无可用
-          </text>
+        </view>
+        <view v-if="memberCards.length" class="mt-2">
+          <view
+            class="mb-2 rounded-[12rpx] border px-3 py-2"
+            :class="!selectedMemberCardId ? 'border-[#1677FF] bg-[#EAF3FF]' : 'border-[#E5E7EB] bg-white'"
+            @tap="onSelectMemberCard(undefined)"
+          >
+            <text class="text-[26rpx]" :class="!selectedMemberCardId ? 'text-[#1677FF]' : 'text-gray-600'">
+              不使用会员卡
+            </text>
+          </view>
+          <view
+            v-for="card in memberCards"
+            :key="card.id"
+            class="mb-2 rounded-[12rpx] border px-3 py-2"
+            :class="selectedMemberCardId === card.id ? 'border-[#1677FF] bg-[#EAF3FF]' : 'border-[#E5E7EB] bg-white'"
+            @tap="onSelectMemberCard(card)"
+          >
+            <view class="flex items-center justify-between">
+              <text class="text-[26rpx] font-600" :class="selectedMemberCardId === card.id ? 'text-[#1677FF]' : 'text-gray-700'">
+                {{ card.name }}
+              </text>
+              <text class="text-[24rpx] text-gray-500">
+                本次扣 {{ card.consumeUnits }}{{ card.cardType === 'time' ? '分钟' : card.unitName || '次' }}
+              </text>
+            </view>
+            <text class="block mt-1 text-[23rpx] text-gray-400">
+              {{ formatCardBalance(card) }}，有效期至 {{ card.expireAt.slice(0, 10) }}
+            </text>
+          </view>
         </view>
       </form-section>
 
       <form-section title="金额明细">
         <view v-if="priceLoading" class="py-4 text-center">
-          <text class="text-[26rpx] text-gray-400">
-            价格加载中
-          </text>
+          <text class="text-[26rpx] text-gray-400">价格加载中</text>
         </view>
-        <amount-detail v-else :items="pricePreview.items" :total="pricePreview.payableAmount" />
+        <amount-detail v-else :items="pricePreview.items" :total="displayPayableAmount" />
       </form-section>
     </loading-state>
 
     <bottom-action-bar
-      :price="pricePreview.payableAmount"
-      primary-text="提交订单"
+      :price="displayPayableAmount"
+      :primary-text="selectedMemberCard || isConsultationService ? '提交预约' : '提交订单'"
       :primary-disabled="!canSubmit"
       :loading="submitting"
       @primary="onSubmit"

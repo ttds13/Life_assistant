@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import { ORDER_STATUS } from './constants/order-status'
+import { ORDER_TYPE, STAFF_VISIBLE_ORDER_TYPES } from './constants/order-type'
 
 export const ORDER_DETAIL_INCLUDE = Prisma.validator<Prisma.OrderInclude>()({
   service: {
@@ -14,6 +15,10 @@ export const ORDER_DETAIL_INCLUDE = Prisma.validator<Prisma.OrderInclude>()({
       coverImage: true,
       basePrice: true,
       priceUnit: true,
+      durationMinutes: true,
+      cardType: true,
+      consumeUnit: true,
+      consultationRequired: true,
       status: true,
       sortOrder: true,
     },
@@ -102,6 +107,7 @@ export class OrdersRepository {
   }) {
     const where: Prisma.OrderWhereInput = {
       userId: BigInt(params.userId),
+      orderType: { not: ORDER_TYPE.MEMBER_CARD_PURCHASE },
     }
     if (params.status && params.status !== 'all') {
       where.status = params.status
@@ -128,10 +134,26 @@ export class OrdersRepository {
     dateEnd?: Date
     page: number
     pageSize: number
+    orderType?: string
+    source?: string
   }) {
     const where: Prisma.OrderWhereInput = {}
     if (params.status && params.status !== 'all') {
       where.status = params.status
+    }
+    if (params.source) {
+      where.source = params.source
+    }
+    if (params.orderType === 'bookings') {
+      where.orderType = { in: [...STAFF_VISIBLE_ORDER_TYPES] }
+    }
+    else if (params.orderType && params.orderType !== 'all') {
+      if (params.orderType.includes(',')) {
+        where.orderType = { in: params.orderType.split(',').map(item => item.trim()).filter(Boolean) }
+      }
+      else {
+        where.orderType = params.orderType
+      }
     }
     if (params.keyword) {
       const keyword = params.keyword
@@ -171,6 +193,7 @@ export class OrdersRepository {
   }) {
     const where: Prisma.OrderWhereInput = {
       staffId: BigInt(params.staffId),
+      orderType: { in: [...STAFF_VISIBLE_ORDER_TYPES] },
     }
     if (params.status && params.status !== 'all') {
       where.status = params.status
@@ -198,6 +221,7 @@ export class OrdersRepository {
       status: ORDER_STATUS.PENDING_DISPATCH,
       staffId: null,
       cancelledAt: null,
+      orderType: { in: [...STAFF_VISIBLE_ORDER_TYPES] },
     }
 
     const [total, items] = await this.prisma.$transaction([
@@ -230,6 +254,7 @@ export class OrdersRepository {
       where: {
         staffId: BigInt(staffId),
         status: { in: STAFF_BUSY_ORDER_STATUSES },
+        orderType: { in: [...STAFF_VISIBLE_ORDER_TYPES] },
         ...(excludeOrderId ? { id: { not: BigInt(excludeOrderId) } } : {}),
       },
     })
@@ -244,6 +269,7 @@ export class OrdersRepository {
         orders: {
           none: {
             status: { in: STAFF_BUSY_ORDER_STATUSES },
+            orderType: { in: [...STAFF_VISIBLE_ORDER_TYPES] },
           },
         },
         assignments: {

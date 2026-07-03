@@ -10,6 +10,7 @@ export interface UserInfo {
   phone: string
   nickname: string
   avatar: string
+  avatarOssUrl: string
   role: UserRole
 }
 
@@ -18,15 +19,26 @@ const defaultUserInfo: UserInfo = {
   phone: '',
   nickname: '',
   avatar: '/static/images/default-avatar.png',
+  avatarOssUrl: '',
   role: 'user',
 }
 
-function profileToUserInfo(profile: UserProfile): UserInfo {
+function isLocalHttpUrl(url?: string) {
+  return /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(url || '')
+}
+
+function profileToUserInfo(profile: UserProfile, current?: UserInfo): UserInfo {
+  const remoteAvatar = profile.avatarOssUrl || profile.avatar || ''
+  const localDisplayAvatar = current?.avatarOssUrl === remoteAvatar && current?.avatar && !isLocalHttpUrl(current.avatar)
+    ? current.avatar
+    : ''
+
   return {
     userId: profile.id,
     phone: profile.phone,
     nickname: profile.nickname,
-    avatar: profile.avatar || defaultUserInfo.avatar,
+    avatar: localDisplayAvatar || profile.avatarDisplayUrl || profile.avatar || defaultUserInfo.avatar,
+    avatarOssUrl: remoteAvatar,
     role: profile.role,
   }
 }
@@ -38,11 +50,12 @@ export const useUserStore = defineStore(
 
     const setUserInfo = (val: UserInfo) => {
       if (!val.avatar) val.avatar = defaultUserInfo.avatar
+      if (!val.avatarOssUrl) val.avatarOssUrl = ''
       userInfo.value = val
     }
 
     const setFromProfile = (profile: UserProfile) => {
-      setUserInfo(profileToUserInfo(profile))
+      setUserInfo(profileToUserInfo(profile, userInfo.value))
     }
 
     const clearUserInfo = () => {

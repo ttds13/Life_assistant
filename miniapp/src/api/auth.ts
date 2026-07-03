@@ -28,6 +28,11 @@ export function getMe() {
   return http.get<UserProfile>('/auth/me')
 }
 
-export function updateProfile(params: UpdateProfileParams) {
-  return http.put<UserProfile>('/auth/profile', params)
+export function updateProfile(params: UpdateProfileParams, header?: Record<string, string>) {
+  return http.put<UserProfile>(
+    '/auth/profile',
+    params,
+    undefined,
+    header,
+  )
 }

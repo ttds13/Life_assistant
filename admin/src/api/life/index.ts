@@ -10,6 +10,7 @@ import type {
   LifeResourceRecord,
   LifeResourceConfig,
   LifeResourcePage,
+  LifeSelectOption,
   LifeStatusOption,
   OrderDetail,
   OrderListItem,
@@ -81,6 +82,13 @@ const publishStatusOptions = [
   { label: "草稿", value: "draft" },
 ];
 
+const bannerLinkTypeOptions = [
+  { label: "不跳转", value: "none" },
+  { label: "服务详情", value: "service" },
+  { label: "服务分类", value: "category" },
+  { label: "外部链接", value: "url" },
+];
+
 const staffStatusOptions = [
   { label: "正常", value: "active" },
   { label: "停用", value: "disabled" },
@@ -102,6 +110,42 @@ const addressTypeOptions = [
 const defaultAddressOptions = [
   { label: "默认", value: "true" },
   { label: "普通", value: "false" },
+];
+
+const cardTypeOptions = [
+  { label: "不计卡", value: "none" },
+  { label: "时长卡", value: "time" },
+  { label: "次卡", value: "times" },
+  { label: "需咨询", value: "consultation" },
+];
+
+const memberCardTypeOptions = [
+  { label: "时长卡", value: "time" },
+  { label: "次卡", value: "times" },
+  { label: "需咨询", value: "consultation" },
+];
+
+const userMemberCardStatusOptions = [
+  { label: "全部", value: "" },
+  { label: "正常", value: "active", tagType: "success" },
+  { label: "停用", value: "disabled", tagType: "info" },
+  { label: "已过期", value: "expired", tagType: "warning" },
+  { label: "已用完", value: "used_up", tagType: "info" },
+] satisfies LifeStatusOption[];
+
+const memberCardRecordTypeOptions = [
+  { label: "全部", value: "" },
+  { label: "发放", value: "grant", tagType: "success" },
+  { label: "冻结", value: "freeze", tagType: "warning" },
+  { label: "释放", value: "release", tagType: "primary" },
+  { label: "核销", value: "consume", tagType: "danger" },
+] satisfies LifeStatusOption[];
+
+const promotionTargetTypeOptions = [
+  { label: "服务商品", value: "service" },
+  { label: "会员卡商品", value: "member_card" },
+  { label: "服务分类", value: "category" },
+  { label: "首页", value: "home" },
 ];
 
 const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
@@ -212,6 +256,9 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "basePrice", label: "基础价格", width: 120, type: "money" },
       { prop: "priceUnit", label: "单位", width: 80 },
       { prop: "duration", label: "时长", width: 100 },
+      { prop: "cardType", label: "计卡类型", width: 100, type: "tag" },
+      { prop: "consumeUnit", label: "扣减额度", width: 100 },
+      { prop: "consultationRequired", label: "需咨询", width: 90, type: "tag" },
       { prop: "rating", label: "评分", width: 90, type: "rate" },
       { prop: "status", label: "状态", width: 90, type: "tag" },
     ],
@@ -224,6 +271,9 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "basePrice", label: "基础价格", type: "number", required: true },
       { prop: "priceUnit", label: "单位", type: "text" },
       { prop: "durationMinutes", label: "时长分钟", type: "number" },
+      { prop: "cardType", label: "计卡类型", type: "select", options: cardTypeOptions },
+      { prop: "consumeUnit", label: "单次扣减额度", type: "number" },
+      { prop: "consultationRequired", label: "需人工咨询", type: "switch" },
       { prop: "status", label: "状态", type: "select", options: categoryStatusOptions },
     ],
   },
@@ -322,6 +372,83 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "status", label: "状态", width: 100, type: "tag" },
     ],
   },
+  homeBanners: {
+    module: "homeBanners",
+    title: "首页图片管理",
+    description: "管理小程序首页轮播图。管理员可以上传新图，也可以直接粘贴已经上传到 OSS 的永久图片地址。",
+    searchPlaceholder: "标题 / 副标题 / 跳转值",
+    primaryAction: "新增图片",
+    submitAction: "上传到 OSS 并保存",
+    editable: true,
+    deletable: true,
+    statusOptions: [
+      { label: "全部", value: "" },
+      { label: "启用", value: "active", tagType: "success" },
+      { label: "停用", value: "disabled", tagType: "info" },
+    ],
+    columns: [
+      { prop: "imageUrl", label: "图片预览", width: 150, type: "image" },
+      { prop: "imageOssUrl", label: "OSS 链接", minWidth: 320, type: "copy" },
+      { prop: "title", label: "标题", minWidth: 160 },
+      { prop: "subtitle", label: "副标题", minWidth: 180 },
+      { prop: "linkType", label: "跳转类型", width: 110, type: "tag" },
+      { prop: "linkValue", label: "跳转值", minWidth: 160 },
+      { prop: "sortOrder", label: "排序", width: 80 },
+      { prop: "status", label: "状态", width: 90, type: "tag" },
+      { prop: "updatedAt", label: "更新时间", width: 170, type: "datetime" },
+    ],
+    formItems: [
+      { prop: "title", label: "标题", type: "text", required: true },
+      { prop: "subtitle", label: "副标题", type: "text" },
+      { prop: "imageUrl", label: "轮播图片", type: "image", required: true },
+      { prop: "linkType", label: "跳转类型", type: "select", options: bannerLinkTypeOptions },
+      { prop: "linkValue", label: "跳转值", type: "text", placeholder: "服务 code/ID、分类 ID 或 URL" },
+      { prop: "sortOrder", label: "排序", type: "number" },
+      { prop: "status", label: "状态", type: "select", options: categoryStatusOptions },
+    ],
+  },
+  promotionLinks: {
+    module: "promotionLinks",
+    title: "视频号链接管理",
+    description: "管理视频号挂载的小程序固定路径，可随时调整链接指向的服务商品、会员卡商品或分类。",
+    searchPlaceholder: "链接 key / 标题 / 商品编码",
+    primaryAction: "新增链接",
+    editable: true,
+    deletable: true,
+    statusOptions: [
+      { label: "全部", value: "" },
+      { label: "启用", value: "active", tagType: "success" },
+      { label: "停用", value: "disabled", tagType: "info" },
+    ],
+    columns: [
+      { prop: "linkKey", label: "链接 key", minWidth: 150 },
+      { prop: "title", label: "标题", minWidth: 160 },
+      { prop: "targetType", label: "目标类型", width: 120, type: "tag" },
+      { prop: "targetName", label: "目标商品", minWidth: 180 },
+      { prop: "miniappPath", label: "小程序固定路径", minWidth: 300, type: "copy" },
+      { prop: "resolvedPath", label: "最终跳转路径", minWidth: 360, type: "copy" },
+      { prop: "source", label: "来源", width: 110, type: "tag" },
+      { prop: "sortOrder", label: "排序", width: 80 },
+      { prop: "status", label: "状态", width: 90, type: "tag" },
+      { prop: "startAt", label: "生效时间", width: 170, type: "datetime" },
+      { prop: "endAt", label: "过期时间", width: 170, type: "datetime" },
+      { prop: "updatedAt", label: "更新时间", width: 170, type: "datetime" },
+    ],
+    formItems: [
+      { prop: "title", label: "标题", type: "text", required: true },
+      { prop: "linkKey", label: "链接 key", type: "text", required: true, placeholder: "如 cleaning_2h，只允许小写字母、数字、下划线、短横线" },
+      { prop: "description", label: "描述", type: "textarea" },
+      { prop: "targetType", label: "目标类型", type: "select", required: true, options: promotionTargetTypeOptions },
+      { prop: "targetId", label: "选择目标", type: "promotion-target" },
+      { prop: "targetCode", label: "服务编码", type: "text", placeholder: "选择服务后自动填充，也可手动填写服务 code" },
+      { prop: "source", label: "来源", type: "text", placeholder: "默认 channels" },
+      { prop: "campaignId", label: "活动 ID", type: "number" },
+      { prop: "sortOrder", label: "排序", type: "number" },
+      { prop: "startAt", label: "生效时间", type: "datetime" },
+      { prop: "endAt", label: "过期时间", type: "datetime" },
+      { prop: "status", label: "状态", type: "select", options: categoryStatusOptions },
+    ],
+  },
   coupons: {
     module: "coupons",
     title: "优惠券",
@@ -357,6 +484,9 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
     statusOptions: statusOptions.publish,
     columns: [
       { prop: "name", label: "会员卡名称", minWidth: 160 },
+      { prop: "cardType", label: "卡类型", width: 100, type: "tag" },
+      { prop: "unitName", label: "单位", width: 90 },
+      { prop: "totalUnits", label: "总额度", width: 100 },
       { prop: "totalTimes", label: "总次数", width: 100 },
       { prop: "price", label: "售价", width: 120, type: "money" },
       { prop: "validityDays", label: "有效天数", width: 110 },
@@ -365,10 +495,61 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
     ],
     formItems: [
       { prop: "name", label: "会员卡名称", type: "text", required: true },
-      { prop: "totalTimes", label: "总次数", type: "number", required: true },
+      { prop: "cardType", label: "卡类型", type: "select", required: true, options: memberCardTypeOptions },
+      { prop: "unitName", label: "单位名称", type: "text", placeholder: "分钟 / 次" },
+      { prop: "unitMinutes", label: "单位分钟数", type: "number" },
+      { prop: "totalUnits", label: "总额度", type: "number", required: true },
+      { prop: "totalTimes", label: "兼容总次数", type: "number" },
+      { prop: "allowHalfDeduct", label: "允许半次核销", type: "switch" },
+      { prop: "minConsumeUnits", label: "最小扣减额度", type: "number" },
+      { prop: "applicableServices", label: "适用服务", type: "textarea", placeholder: "服务ID、code 或名称，多个用逗号分隔；留空表示通用" },
+      { prop: "serviceRules", label: "服务扣减规则", type: "textarea", placeholder: "{\"serviceCode\":{\"consumeUnits\":120}}" },
       { prop: "price", label: "售价", type: "number", required: true },
       { prop: "validityDays", label: "有效天数", type: "number", required: true },
       { prop: "status", label: "状态", type: "select", options: publishStatusOptions },
+    ],
+  },
+  userMemberCards: {
+    module: "userMemberCards",
+    title: "用户会员卡",
+    description: "查看用户已购买或后台发放的会员卡余额、冻结额度和有效期。",
+    searchPlaceholder: "用户昵称 / 手机号 / 会员卡名称",
+    statusOptions: userMemberCardStatusOptions,
+    columns: [
+      { prop: "userName", label: "用户", minWidth: 120 },
+      { prop: "userPhone", label: "手机号", width: 130 },
+      { prop: "cardName", label: "会员卡", minWidth: 160 },
+      { prop: "cardType", label: "卡类型", width: 100, type: "tag" },
+      { prop: "source", label: "来源", width: 100, type: "tag" },
+      { prop: "remainingUnits", label: "剩余额度", width: 100 },
+      { prop: "frozenUnits", label: "冻结额度", width: 100 },
+      { prop: "usableUnits", label: "可用额度", width: 100 },
+      { prop: "remainingTimes", label: "兼容次数", width: 100 },
+      { prop: "purchaseOrderNo", label: "购买订单", minWidth: 150 },
+      { prop: "expireAt", label: "有效期", width: 170, type: "datetime" },
+      { prop: "status", label: "状态", width: 90, type: "tag" },
+      { prop: "createdAt", label: "创建时间", width: 170, type: "datetime" },
+    ],
+  },
+  memberCardRecords: {
+    module: "memberCardRecords",
+    title: "会员卡流水",
+    description: "查看会员卡发放、预约冻结、取消释放和服务核销记录。",
+    searchPlaceholder: "用户 / 手机号 / 会员卡 / 订单号",
+    statusOptions: memberCardRecordTypeOptions,
+    columns: [
+      { prop: "userName", label: "用户", minWidth: 120 },
+      { prop: "userPhone", label: "手机号", width: 130 },
+      { prop: "cardName", label: "会员卡", minWidth: 160 },
+      { prop: "orderNo", label: "订单号", minWidth: 150 },
+      { prop: "recordType", label: "流水类型", width: 100, type: "tag" },
+      { prop: "units", label: "变动额度", width: 100 },
+      { prop: "beforeUnits", label: "变动前", width: 100 },
+      { prop: "afterUnits", label: "变动后", width: 100 },
+      { prop: "operatorType", label: "操作方", width: 90 },
+      { prop: "operatorId", label: "操作人ID", width: 100 },
+      { prop: "remark", label: "备注", minWidth: 220 },
+      { prop: "createdAt", label: "创建时间", width: 170, type: "datetime" },
     ],
   },
 };
@@ -383,8 +564,12 @@ const moduleEndpointMap: Record<LifeModuleKey, string> = {
   staffStatus: "staff/status",
   payments: "payments",
   reviews: "reviews",
+  homeBanners: "home-banners",
+  promotionLinks: "promotion-links",
   coupons: "coupons",
   memberCards: "member-cards",
+  userMemberCards: "user-member-cards",
+  memberCardRecords: "member-card-records",
 };
 
 function toPageResult<T>(data: ServerPageResult<T>): PageResult<T> {
@@ -400,7 +585,12 @@ function toAdminQuery(queryParams: LifeQueryParams) {
     pageSize: queryParams.pageSize,
     keyword: queryParams.keywords,
     status: queryParams.status || undefined,
-    type: queryParams.type || undefined,
+    orderType: queryParams.orderType || undefined,
+    type: queryParams.type || (queryParams.module === "memberCardRecords" ? queryParams.status : undefined),
+    recordType: queryParams.recordType || undefined,
+    cardType: queryParams.cardType || undefined,
+    source: queryParams.source || undefined,
+    targetType: queryParams.targetType || undefined,
   };
 }
 
@@ -454,6 +644,28 @@ const LifeAPI = {
       url: `${ADMIN_BASE_URL}/users/${id}/role`,
       method: "put",
       data: { roleType },
+    });
+  },
+
+  grantMemberCard(data: { userId: number | string; cardId: number | string; totalUnits?: number; validityDays?: number; remark?: string }) {
+    return request({
+      url: `${ADMIN_BASE_URL}/member-cards/grant`,
+      method: "post",
+      data: {
+        userId: Number(data.userId),
+        cardId: Number(data.cardId),
+        totalUnits: data.totalUnits ? Number(data.totalUnits) : undefined,
+        validityDays: data.validityDays ? Number(data.validityDays) : undefined,
+        remark: data.remark,
+      },
+    });
+  },
+
+  getPromotionTargetOptions(targetType: string, keyword?: string) {
+    return request<unknown, LifeSelectOption[]>({
+      url: `${ADMIN_BASE_URL}/promotion-links/target-options`,
+      method: "get",
+      params: { targetType, keyword },
     });
   },
 

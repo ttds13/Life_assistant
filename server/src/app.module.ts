@@ -9,10 +9,12 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware'
 import { DevModule } from './dev/dev.module'
 import { HealthModule } from './health/health.module'
 import { MapsModule } from './maps/maps.module'
+import { MemberCardsModule } from './member-cards/member-cards.module'
 import { UploadModule } from './upload/upload.module'
 import { OrdersModule } from './orders/orders.module'
 import { PaymentsModule } from './payments/payments.module'
 import { PrismaModule } from './prisma/prisma.module'
+import { PromotionLinksModule } from './promotion-links/promotion-links.module'
 import { ServicesModule } from './services/services.module'
 import { StorageModule } from './storage/storage.module'
 import { UsersModule } from './users/users.module'
@@ -32,8 +34,10 @@ import { UsersModule } from './users/users.module'
     AdminBusinessModule,
     AddressesModule,
     MapsModule,
+    MemberCardsModule,
     OrdersModule,
     PaymentsModule,
+    PromotionLinksModule,
     DevModule,
     StorageModule,
     UploadModule,

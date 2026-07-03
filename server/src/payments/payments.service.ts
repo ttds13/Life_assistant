@@ -3,10 +3,10 @@ import { ConfigService } from '@nestjs/config'
 import { Prisma } from '@prisma/client'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
+import { MemberCardsService } from '../member-cards/member-cards.service'
 import { ORDER_ACTION } from '../orders/constants/order-action'
 import { ORDER_STATUS } from '../orders/constants/order-status'
-import type { AutoAssignSystemResult } from '../orders/orders.service'
-import { OrdersService } from '../orders/orders.service'
+import { ORDER_TYPE } from '../orders/constants/order-type'
 import { OrderTransitionService } from '../orders/order-transition.service'
 import { OrdersRepository } from '../orders/orders.repository'
 import { presentOrderDetail } from '../orders/order-presenter'
@@ -22,11 +22,11 @@ export class PaymentsService {
   constructor(
     @Inject(PaymentsRepository) private readonly repository: PaymentsRepository,
     @Inject(OrdersRepository) private readonly ordersRepository: OrdersRepository,
-    @Inject(OrdersService) private readonly ordersService: OrdersService,
     @Inject(OrderTransitionService) private readonly transitions: OrderTransitionService,
     @Inject(ConfigService) private readonly config: ConfigService,
     @Inject(WechatPayConfig) private readonly payConfig: WechatPayConfig,
     @Inject(WechatPayClient) private readonly wechatPay: WechatPayClient,
+    @Inject(MemberCardsService) private readonly memberCards: MemberCardsService,
   ) {}
 
   async createPayment(userId: number, orderId: number, requestId?: string) {
@@ -70,12 +70,11 @@ export class PaymentsService {
       throw new BusinessException(ErrorCode.PAYMENT_NOT_FOUND, 'payment not found', 404)
     }
     await this.markPaymentSuccess(paymentWithOrder, transactionNo, JSON.stringify({ channel: PAYMENT_CHANNEL.MOCK, requestId }), PAYMENT_CHANNEL.MOCK, requestId)
-    const autoAssign = await this.tryAutoAssignAfterPayment(payment.id, payment.paymentNo, payment.orderId, requestId, PAYMENT_CHANNEL.MOCK)
     const updatedOrder = await this.ordersRepository.findOrderDetail(Number(payment.orderId))
 
     return {
       ...this.presentMockPaymentResult(payment.paymentNo, payment.amount.toNumber(), PAYMENT_STATUS.SUCCESS),
-      autoAssign,
+      autoAssign: null,
       order: updatedOrder ? presentOrderDetail(updatedOrder) : null,
     }
   }
@@ -176,12 +175,11 @@ export class PaymentsService {
 
     if (payment.status === PAYMENT_STATUS.SUCCESS) {
       await this.writeNotifyLog(payment.id, payment.paymentNo, 'duplicate_success', PAYMENT_CHANNEL.WECHAT, rawBody)
-      const autoAssign = await this.tryAutoAssignAfterPayment(payment.id, payment.paymentNo, payment.orderId, requestId)
       const order = await this.ordersRepository.findOrderDetail(Number(payment.orderId))
       return {
         paymentNo: payment.paymentNo,
         status: payment.status,
-        autoAssign,
+        autoAssign: null,
         order: order ? presentOrderDetail(order) : null,
       }
     }
@@ -204,12 +202,11 @@ export class PaymentsService {
         const latestOrder = await this.ordersRepository.findOrderDetail(Number(payment.orderId))
         if (latestPayment?.status === PAYMENT_STATUS.SUCCESS && latestOrder) {
           await this.writeNotifyLog(payment.id, payment.paymentNo, 'duplicate', PAYMENT_CHANNEL.WECHAT, rawBody)
-          const autoAssign = await this.tryAutoAssignAfterPayment(payment.id, payment.paymentNo, payment.orderId, requestId)
           const latestAssignedOrder = await this.ordersRepository.findOrderDetail(Number(payment.orderId))
           return {
             paymentNo: payment.paymentNo,
             status: PAYMENT_STATUS.SUCCESS,
-            autoAssign,
+            autoAssign: null,
             order: latestAssignedOrder ? presentOrderDetail(latestAssignedOrder) : presentOrderDetail(latestOrder),
           }
         }
@@ -226,38 +223,12 @@ export class PaymentsService {
       throw error
     }
 
-    const autoAssign = await this.tryAutoAssignAfterPayment(payment.id, payment.paymentNo, payment.orderId, requestId)
     const order = await this.ordersRepository.findOrderDetail(Number(payment.orderId))
     return {
       paymentNo: payment.paymentNo,
       status: PAYMENT_STATUS.SUCCESS,
-      autoAssign,
+      autoAssign: null,
       order: order ? presentOrderDetail(order) : null,
-    }
-  }
-
-  private async tryAutoAssignAfterPayment(
-    paymentId: bigint,
-    paymentNo: string,
-    orderId: bigint,
-    requestId?: string,
-    channel: PaymentChannel = PAYMENT_CHANNEL.WECHAT,
-  ): Promise<AutoAssignSystemResult | null> {
-    try {
-      return await this.ordersService.autoAssignOrderBySystem(Number(orderId), {
-        requestId,
-        source: 'payment_success',
-        remark: 'auto assign after payment success',
-      })
-    }
-    catch {
-      try {
-        await this.writeNotifyLog(paymentId, paymentNo, 'auto_assign_fail', channel)
-      }
-      catch {
-        // Payment success must remain authoritative even if dispatch failure logging fails.
-      }
-      return null
     }
   }
 
@@ -314,6 +285,11 @@ export class PaymentsService {
     channel: string,
     requestId?: string,
   ) {
+    if (payment.order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE) {
+      await this.markMemberCardPurchasePaymentSuccess(payment, transactionNo, rawBody, channel, requestId)
+      return
+    }
+
     await this.transitions.transition({
       orderId: payment.orderId,
       action: ORDER_ACTION.PAY_SUCCESS,
@@ -359,6 +335,102 @@ export class PaymentsService {
           },
         })
       },
+    })
+  }
+
+  private async markMemberCardPurchasePaymentSuccess(
+    payment: NonNullable<Awaited<ReturnType<PaymentsRepository['findPaymentByNo']>>>,
+    transactionNo: string,
+    rawBody: string,
+    channel: string,
+    requestId?: string,
+  ) {
+    await this.repository.client.$transaction(async (tx) => {
+      const now = new Date()
+      const order = await tx.order.findUnique({ where: { id: payment.orderId } })
+      if (!order) {
+        throw new BusinessException(ErrorCode.ORDER_NOT_FOUND, 'order not found', 404)
+      }
+      if (order.userId !== payment.userId) {
+        throw new BusinessException(ErrorCode.PAYMENT_STATUS_INVALID, 'payment user mismatch', 409)
+      }
+      if (!new Prisma.Decimal(order.payableAmount).equals(payment.amount)) {
+        throw new BusinessException(ErrorCode.ORDER_PRICE_CHANGED, 'payment amount mismatch', 409)
+      }
+
+      if (order.status === ORDER_STATUS.COMPLETED && order.paidAt) {
+        await tx.paymentNotifyLog.create({
+          data: {
+            paymentId: payment.id,
+            paymentNo: payment.paymentNo,
+            channel,
+            rawBody: JSON.stringify({ paymentNo: payment.paymentNo, orderId: Number(order.id), requestId }),
+            processResult: 'duplicate',
+          },
+        })
+        return
+      }
+      if (order.status !== ORDER_STATUS.PENDING_PAYMENT) {
+        throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order is not payable', 409)
+      }
+
+      const updatedPayment = await tx.payment.updateMany({
+        where: {
+          id: payment.id,
+          status: PAYMENT_STATUS.PENDING,
+        },
+        data: {
+          status: PAYMENT_STATUS.SUCCESS,
+          transactionNo,
+          paidAt: now,
+          callbackRaw: rawBody,
+        },
+      })
+      if (updatedPayment.count !== 1) {
+        throw new BusinessException(ErrorCode.PAYMENT_STATUS_INVALID, 'payment status changed', 409)
+      }
+
+      const grantedCard = await this.memberCards.grantForPaidPurchaseOrder(tx, order, 'system', BigInt(0))
+
+      await tx.order.update({
+        where: { id: order.id },
+        data: {
+          status: ORDER_STATUS.COMPLETED,
+          version: { increment: 1 },
+          paidAt: now,
+          paidAmount: payment.amount,
+          completedAt: now,
+        },
+      })
+      await tx.orderStatusLog.create({
+        data: {
+          orderId: order.id,
+          fromStatus: ORDER_STATUS.PENDING_PAYMENT,
+          toStatus: ORDER_STATUS.COMPLETED,
+          operatorType: 'system',
+          operatorId: BigInt(0),
+          action: ORDER_ACTION.PAY_SUCCESS,
+          requestId,
+          remark: 'member card granted after payment success',
+          detail: {
+            paymentNo: payment.paymentNo,
+            transactionNo,
+            orderType: order.orderType,
+            purchaseCardId: order.purchaseCardId ? Number(order.purchaseCardId) : order.memberCardId ? Number(order.memberCardId) : null,
+            grantedUserMemberCardId: grantedCard ? Number(grantedCard.id) : order.grantedUserMemberCardId ? Number(order.grantedUserMemberCardId) : null,
+            totalUnits: order.memberCardConsumeUnits,
+          },
+        },
+      })
+      await tx.paymentNotifyLog.create({
+        data: {
+          paymentId: payment.id,
+          paymentNo: payment.paymentNo,
+          channel,
+          rawBody: JSON.stringify({ paymentNo: payment.paymentNo, orderId: Number(order.id), requestId }),
+          processResult: 'success',
+        },
+      })
     })
   }
 

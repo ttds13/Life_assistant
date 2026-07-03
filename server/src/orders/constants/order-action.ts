@@ -11,6 +11,8 @@ export const ORDER_ACTION = {
   STAFF_COMPLETE: 'staff_complete',
   USER_CONFIRM: 'user_confirm',
   USER_CANCEL_UNPAID: 'user_cancel_unpaid',
+  USER_CANCEL_BOOKING: 'user_cancel_booking',
+  USER_CANCEL_PAID_REFUND: 'user_cancel_paid_refund',
   TIMEOUT_UNPAID: 'timeout_unpaid',
   AUTO_CONFIRM: 'auto_confirm',
 } as const

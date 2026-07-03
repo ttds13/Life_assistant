@@ -5,6 +5,7 @@ import type {
   PayOrderResult,
   PricePreview,
   QueryOrdersParams,
+  RescheduleOrderPayload,
   UserOrder,
 } from './types/orders'
 import { http } from '@/http/http'
@@ -25,28 +26,15 @@ export function cancelOrder(id: number, data?: { version?: number, reason?: stri
   return http.post<OrderDetail>(`/orders/${id}/cancel`, data)
 }
 
+export function rescheduleOrder(id: number, data: RescheduleOrderPayload) {
+  return http.post<OrderDetail>(`/orders/${id}/reschedule`, data)
+}
+
 export function confirmOrder(id: number, data?: { version?: number }) {
   return http.post<OrderDetail>(`/orders/${id}/confirm`, data)
 }
 
 export function payOrder(id: number) {
-  if (import.meta.env.VITE_LOCAL_DEBUG_PAYMENT === 'true') {
-    return Promise.resolve<PayOrderResult>({
-      paymentNo: `LOCAL${Date.now()}${id}`,
-      status: 'pending',
-      amount: 0,
-      provider: 'wechat',
-      channel: 'local-debug',
-      paymentParams: {
-        timeStamp: Math.floor(Date.now() / 1000).toString(),
-        nonceStr: 'local-debug',
-        package: `prepay_id=local_debug_${id}`,
-        signType: 'RSA',
-        paySign: 'local-debug',
-      },
-    })
-  }
-
   return http.post<PayOrderResult>(`/orders/${id}/pay`)
 }
 

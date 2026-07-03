@@ -25,6 +25,8 @@ export interface PricePreview {
   serviceAmount: number
   discountAmount: number
   payableAmount: number
+  consultationRequired?: boolean
+  cardType?: string
   items: AmountDetailItem[]
 }
 
@@ -37,6 +39,16 @@ export interface CreateOrderPayload {
   remark?: string
   couponId?: number
   memberCardId?: number
+  source?: string
+  promotionKey?: string
+  campaignId?: string
+}
+
+export interface RescheduleOrderPayload {
+  appointmentDate: string
+  appointmentTimeSlot: string
+  version?: number
+  reason?: string
 }
 
 export interface UserOrder {
@@ -49,14 +61,24 @@ export interface UserOrder {
   serviceName: string
   serviceImage?: string
   serviceImageOssUrl?: string
+  appointmentStartTime?: string
+  appointmentEndTime?: string
   appointmentTime: string
   addressText: string
   totalAmount: number
   payableAmount: number
+  paidAmount?: number
   remark?: string
   staffName?: string
   staffPhone?: string
   staffRating?: number
+  memberCardId?: number | null
+  memberCardConsumeUnits?: number
+  orderType?: string
+  paidAt?: string | null
+  completedAt?: string | null
+  cancelledAt?: string | null
+  cancelReason?: string
   createdAt: string
 }
 
@@ -72,8 +94,6 @@ export interface OrderDetail extends UserOrder {
   service?: Service
   address?: UserAddress
   paymentMethod?: string
-  paidAt?: string | null
-  completedAt?: string | null
   statusLogs: OrderStatusLog[]
   amountItems: AmountDetailItem[]
   servicePhotos?: string[]
@@ -91,7 +111,7 @@ export interface PayOrderResult {
   paymentNo: string
   status: string
   amount?: number
-  provider?: 'wechat'
+  provider?: 'wechat' | 'mock'
   channel?: string
   paymentParams?: WechatPaymentParams & Record<string, any>
 }

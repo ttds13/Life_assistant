@@ -22,7 +22,13 @@ export class ServicesService {
       icon: item.icon || '',
       sortOrder: item.sortOrder,
       status: item.status,
+      serviceCount: item._count.services,
     }))
+  }
+
+  async listHomeBanners() {
+    const banners = await this.repository.findHomeBanners()
+    return banners.map(banner => this.formatHomeBanner(banner))
   }
 
   async listServices(query: QueryServicesDto) {
@@ -75,6 +81,21 @@ export class ServicesService {
       coverImageDisplayUrl: coverImage,
       images,
       priceUnit: typeof serialized.priceUnit === 'string' ? serialized.priceUnit : '',
+    }
+  }
+
+  private formatHomeBanner(banner: Record<string, unknown>) {
+    const serialized = serialize(banner) as Record<string, unknown>
+    const imageOssUrl = typeof serialized.imageUrl === 'string' ? serialized.imageUrl : ''
+    const imageUrl = this.storage.signNullableUrl(imageOssUrl) || imageOssUrl
+    return {
+      ...serialized,
+      subtitle: typeof serialized.subtitle === 'string' ? serialized.subtitle : '',
+      linkType: typeof serialized.linkType === 'string' ? serialized.linkType : 'none',
+      linkValue: typeof serialized.linkValue === 'string' ? serialized.linkValue : '',
+      imageUrl,
+      imageOssUrl,
+      imageDisplayUrl: imageUrl,
     }
   }
 }

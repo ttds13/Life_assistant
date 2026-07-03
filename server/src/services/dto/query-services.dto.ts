@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer'
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator'
+import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator'
 
 function toOptionalNumber(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined
@@ -17,6 +17,17 @@ export class QueryServicesDto {
   @IsString()
   @Transform(({ value }) => trimOptional(value))
   keyword?: string
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['none', 'time', 'times', 'consultation'])
+  @Transform(({ value }) => trimOptional(value))
+  cardType?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  serviceCodes?: string
 
   @IsOptional()
   @IsInt()

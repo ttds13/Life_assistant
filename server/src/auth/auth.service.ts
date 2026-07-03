@@ -51,10 +51,11 @@ export class AuthService {
     }
 
     let user = await this.users.findUserByPhone(loginPhone)
+    const mockNickname = this.config.get<string>('MOCK_LOGIN_NICKNAME', '').trim()
     if (!user) {
       user = await this.users.createUser({
         phone: loginPhone,
-        nickname: `Mock_${loginPhone.slice(-6)}`,
+        nickname: mockNickname || `Mock_${loginPhone.slice(-6)}`,
         avatar: '',
         openid: `mock_${loginPhone}`,
         unionid: '',
@@ -68,6 +69,9 @@ export class AuthService {
     const mockOpenid = `mock_${loginPhone}`
     if (!user.openid) {
       user = await this.users.updateUser(user.id, { openid: mockOpenid, unionid: '' }) || user
+    }
+    if (mockNickname && user.nickname !== mockNickname) {
+      user = await this.users.updateUser(user.id, { nickname: mockNickname }) || user
     }
 
     const profile = await this.resolveUserProfile(user)
@@ -169,10 +173,18 @@ export class AuthService {
 
   async updateProfile(userId: number, dto: UpdateProfileDto) {
     const fields: UpdateProfileDto = {}
-    if (dto.nickname !== undefined) fields.nickname = dto.nickname.trim()
+    if (dto.nickname !== undefined) {
+      fields.nickname = dto.nickname.trim()
+      if (!fields.nickname) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'nickname cannot be empty', 400)
+      }
+      if (fields.nickname.length > 20) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'nickname too long', 400)
+      }
+    }
     if (dto.avatar !== undefined) {
       fields.avatar = dto.avatar.trim()
-      this.storage.assertPermanentOssUrl(fields.avatar)
+      this.storage.assertPermanentOssUrl(fields.avatar, { force: true })
     }
 
     const user = await this.users.updateUser(userId, fields)

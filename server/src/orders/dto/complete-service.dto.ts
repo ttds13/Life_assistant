@@ -23,4 +23,10 @@ export class CompleteServiceDto {
   @Min(0)
   @Transform(({ value }) => toOptionalNumber(value))
   version?: number
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Transform(({ value }) => toOptionalNumber(value))
+  actualMinutes?: number
 }

@@ -62,6 +62,18 @@
             <el-tag v-if="column.type === 'tag'" :type="resolveTagType(row[column.prop])">
               {{ formatValue(row[column.prop], column.type) }}
             </el-tag>
+            <el-image
+              v-else-if="column.type === 'image'"
+              class="life-table-image"
+              :src="tableImageUrl(row, column.prop)"
+              fit="cover"
+              :preview-src-list="tableImageUrl(row, column.prop) ? [tableImageUrl(row, column.prop)] : []"
+              preview-teleported
+            />
+            <div v-else-if="column.type === 'copy'" class="life-copy-cell">
+              <span class="life-copy-cell__text">{{ formatValue(row[column.prop], column.type) }}</span>
+              <copy-button v-if="copyTextValue(row[column.prop])" :text="copyTextValue(row[column.prop])" />
+            </div>
             <span v-else>{{ formatValue(row[column.prop], column.type) }}</span>
           </template>
         </el-table-column>
@@ -88,6 +100,15 @@
               @click="handleToggleUserRole(row)"
             >
               {{ isStaffRole(row) ? "关闭师傅" : "开通师傅" }}
+            </el-button>
+            <el-button
+              v-if="moduleKey === 'users'"
+              type="success"
+              link
+              size="small"
+              @click="openGrantCard(row)"
+            >
+              发卡
             </el-button>
             <el-button
               v-if="pageConfig?.editable"
@@ -182,19 +203,57 @@
             value-format="YYYY-MM-DD HH:mm:ss"
             style="width: 100%"
           />
-          <single-image-upload
-            v-else-if="item.type === 'image'"
-            :model-value="stringFormValue(item.prop)"
-            :display-url="imageDisplayUrl(item.prop)"
-            :data="{ bizType: imageBizType(item.prop) }"
-            :max-file-size="5"
-            @update:model-value="(value: string) => setFormValue(item.prop, value)"
+          <div v-else-if="item.type === 'promotion-target'" class="promotion-target-control">
+            <el-select
+              :model-value="stringFormValue(item.prop)"
+              filterable
+              remote
+              clearable
+              :disabled="promotionTargetDisabled"
+              :loading="promotionTargetLoading"
+              :remote-method="loadPromotionTargetOptions"
+              :placeholder="promotionTargetPlaceholder"
+              style="width: 100%"
+              @visible-change="handlePromotionTargetVisible"
+              @update:model-value="setPromotionTargetValue"
+            >
+              <el-option
+                v-for="option in promotionTargetOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+            <div class="form-tip">
+              {{ promotionTargetTip }}
+            </div>
+          </div>
+          <div v-else-if="item.type === 'image'" class="image-form-control">
+            <single-image-upload
+              :model-value="stringFormValue(item.prop)"
+              :display-url="imageDisplayUrl(item.prop)"
+              :data="{ bizType: imageBizType(item.prop) }"
+              :max-file-size="5"
+              @update:model-value="(value: string) => setFormValue(item.prop, value)"
+            />
+            <el-input
+              :model-value="stringFormValue(item.prop)"
+              @update:model-value="(value) => setFormValue(item.prop, value)"
+              placeholder="可直接粘贴 OSS 图片地址"
+            />
+          </div>
+          <el-switch
+            v-else-if="item.type === 'switch'"
+            :model-value="Boolean(formModel[item.prop])"
+            @update:model-value="(value) => setFormValue(item.prop, value)"
           />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="formVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitForm">保存</el-button>
+        <el-button type="primary" :loading="saving" @click="submitForm">
+          {{ pageConfig?.submitAction || "保存" }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -271,6 +330,31 @@
         <el-button type="primary" :loading="addressSaving" @click="submitOwnerAddress">保存</el-button>
       </template>
     </el-dialog>
+    <el-dialog v-model="grantCardVisible" title="给用户发放会员卡" width="520px">
+      <el-form :model="grantCardForm" label-width="110px">
+        <el-form-item label="用户">
+          <el-text>{{ grantCardUser?.nickname || grantCardUser?.phone || grantCardUser?.id }}</el-text>
+        </el-form-item>
+        <el-form-item label="会员卡模板ID" required>
+          <el-input-number v-model="grantCardForm.cardId" :min="1" :step="1" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="发放额度">
+          <el-input-number v-model="grantCardForm.totalUnits" :min="0" :step="1" style="width: 100%" />
+          <div class="form-tip">0 表示使用模板默认额度；时长卡单位为分钟，次卡单位为次。</div>
+        </el-form-item>
+        <el-form-item label="有效天数">
+          <el-input-number v-model="grantCardForm.validityDays" :min="0" :step="1" style="width: 100%" />
+          <div class="form-tip">0 表示使用模板默认有效期。</div>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="grantCardForm.remark" type="textarea" :rows="3" maxlength="256" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="grantCardVisible = false">取消</el-button>
+        <el-button type="primary" :loading="grantCardSaving" @click="submitGrantCard">确认发卡</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -283,6 +367,7 @@ import type {
   LifeModuleKey,
   LifeResourceConfig,
   LifeResourceRecord,
+  LifeSelectOption,
   LifeStatusOption,
 } from "@/api/life";
 
@@ -306,6 +391,11 @@ const addressDialogVisible = ref(false);
 const addressFormVisible = ref(false);
 const addressLoading = ref(false);
 const addressSaving = ref(false);
+const grantCardVisible = ref(false);
+const grantCardSaving = ref(false);
+const grantCardUser = ref<LifeResourceRecord>();
+const promotionTargetOptions = ref<LifeSelectOption[]>([]);
+const promotionTargetLoading = ref(false);
 const addressOwner = ref<{ ownerType: "user" | "staff"; ownerId: string; title: string }>();
 const editingAddress = ref<AddressRecord>();
 const ownerAddresses = ref<AddressRecord[]>([]);
@@ -322,6 +412,12 @@ const addressFormModel = reactive({
   houseNumber: "",
   isDefault: false,
 });
+const grantCardForm = reactive({
+  cardId: 0,
+  totalUnits: 0,
+  validityDays: 0,
+  remark: "",
+});
 const queryParams = reactive({
   pageNum: 1,
   pageSize: 10,
@@ -333,6 +429,20 @@ const statusOptions = computed<LifeStatusOption[]>(() => pageConfig.value?.statu
 const formTitle = computed(() => `${editingRow.value ? "编辑" : "新增"}${pageConfig.value?.title || ""}`);
 const addressDialogTitle = computed(() => `地址管理 - ${addressOwner.value?.title || ""}`);
 const addressFormTitle = computed(() => `${editingAddress.value ? "编辑" : "新增"}地址`);
+const promotionTargetType = computed(() => String(formModel.targetType || "service"));
+const promotionTargetDisabled = computed(() => moduleKey.value !== "promotionLinks" || promotionTargetType.value === "home");
+const promotionTargetPlaceholder = computed(() => {
+  if (promotionTargetType.value === "service") return "搜索并选择服务商品";
+  if (promotionTargetType.value === "member_card") return "搜索并选择会员卡商品";
+  if (promotionTargetType.value === "category") return "搜索并选择服务分类";
+  return "首页不需要选择目标";
+});
+const promotionTargetTip = computed(() => {
+  if (promotionTargetType.value === "service") return "选择服务后会自动生成服务详情页路径。";
+  if (promotionTargetType.value === "member_card") return "选择会员卡后会生成会员卡详情页路径。";
+  if (promotionTargetType.value === "category") return "选择分类后会生成服务列表页路径。";
+  return "目标类型为首页时，固定链接会直接回到小程序首页。";
+});
 
 watch(
   () => moduleKey.value,
@@ -374,6 +484,8 @@ function handleCreate() {
   }
   editingRow.value = undefined;
   resetFormModel();
+  seedPromotionTargetOption();
+  void loadPromotionTargetOptions();
   formVisible.value = true;
 }
 
@@ -387,6 +499,8 @@ function handleView(row: LifeResourceRecord) {
 function handleEdit(row: LifeResourceRecord) {
   editingRow.value = row;
   resetFormModel(row);
+  seedPromotionTargetOption(row);
+  void loadPromotionTargetOptions();
   formVisible.value = true;
 }
 
@@ -411,6 +525,37 @@ async function handleToggleUserRole(row: LifeResourceRecord) {
   await LifeAPI.updateUserRole(String(row.id), nextRole);
   ElMessage.success("角色已更新");
   await fetchPage();
+}
+
+function openGrantCard(row: LifeResourceRecord) {
+  grantCardUser.value = row;
+  grantCardForm.cardId = 0;
+  grantCardForm.totalUnits = 0;
+  grantCardForm.validityDays = 0;
+  grantCardForm.remark = "";
+  grantCardVisible.value = true;
+}
+
+async function submitGrantCard() {
+  if (!grantCardUser.value) return;
+  if (!grantCardForm.cardId) {
+    ElMessage.warning("请填写会员卡模板ID");
+    return;
+  }
+  grantCardSaving.value = true;
+  try {
+    await LifeAPI.grantMemberCard({
+      userId: grantCardUser.value.id,
+      cardId: grantCardForm.cardId,
+      totalUnits: grantCardForm.totalUnits || undefined,
+      validityDays: grantCardForm.validityDays || undefined,
+      remark: grantCardForm.remark.trim() || undefined,
+    });
+    ElMessage.success("会员卡已发放");
+    grantCardVisible.value = false;
+  } finally {
+    grantCardSaving.value = false;
+  }
 }
 
 async function openOwnerAddresses(row: LifeResourceRecord) {
@@ -489,6 +634,9 @@ async function submitOwnerAddress() {
 }
 
 function canToggleStatus(row: LifeResourceRecord) {
+  if (moduleKey.value === "userMemberCards") {
+    return ["active", "disabled"].includes(String(row.status || ""));
+  }
   return ["active", "disabled", "published", "draft", "pending", "rejected"].includes(
     String(row.status || "")
   );
@@ -572,9 +720,30 @@ function resetFormModel(row?: LifeResourceRecord) {
   }
 }
 
+function seedPromotionTargetOption(row?: LifeResourceRecord) {
+  if (moduleKey.value !== "promotionLinks") {
+    promotionTargetOptions.value = [];
+    return;
+  }
+  const targetId = row?.targetId;
+  const targetName = row?.targetName;
+  if (targetId && targetName) {
+    promotionTargetOptions.value = [{
+      value: String(targetId),
+      label: String(targetName),
+      code: typeof row.targetCode === "string" ? row.targetCode : undefined,
+    }];
+  } else {
+    promotionTargetOptions.value = [];
+  }
+}
+
 function normalizeFormValue(prop: string, value: unknown) {
   if (prop === "coverImage") {
     return editingRow.value?.coverImageOssUrl || value;
+  }
+  if (prop === "imageUrl") {
+    return editingRow.value?.imageOssUrl || value;
   }
   if (prop === "avatarUrl") {
     return editingRow.value?.avatarOssUrl || editingRow.value?.avatarUrlOssUrl || value;
@@ -640,10 +809,55 @@ function dateFormValue(prop: string) {
 
 function setFormValue(prop: string, value: string | number | boolean | Date | null | undefined) {
   formModel[prop] = value ?? "";
+  if (moduleKey.value === "promotionLinks" && prop === "targetType") {
+    formModel.targetId = "";
+    formModel.targetCode = "";
+    promotionTargetOptions.value = [];
+    void loadPromotionTargetOptions();
+  }
+}
+
+async function loadPromotionTargetOptions(keyword = "") {
+  if (moduleKey.value !== "promotionLinks" || promotionTargetDisabled.value) {
+    promotionTargetOptions.value = [];
+    return;
+  }
+  promotionTargetLoading.value = true;
+  try {
+    const selectedValue = String(formModel.targetId || "");
+    const selectedOption = selectedValue
+      ? promotionTargetOptions.value.find((item) => item.value === selectedValue)
+      : undefined;
+    const options = await LifeAPI.getPromotionTargetOptions(promotionTargetType.value, keyword);
+    if (selectedOption && !options.some((item) => item.value === selectedOption.value)) {
+      promotionTargetOptions.value = [selectedOption, ...options];
+    } else {
+      promotionTargetOptions.value = options;
+    }
+  } finally {
+    promotionTargetLoading.value = false;
+  }
+}
+
+function handlePromotionTargetVisible(visible: boolean) {
+  if (visible && !promotionTargetOptions.value.length) {
+    void loadPromotionTargetOptions();
+  }
+}
+
+function setPromotionTargetValue(value: string) {
+  formModel.targetId = value || "";
+  const selected = promotionTargetOptions.value.find((item) => item.value === value);
+  if (promotionTargetType.value === "service") {
+    formModel.targetCode = selected?.code || "";
+  } else {
+    formModel.targetCode = "";
+  }
 }
 
 function imageBizType(prop: string) {
   if (prop === "coverImage") return "service_cover";
+  if (prop === "imageUrl") return "home_banner";
   if (prop === "avatarUrl") return "staff_avatar";
   return "admin_image";
 }
@@ -653,10 +867,26 @@ function imageDisplayUrl(prop: string) {
   if (prop === "coverImage") {
     return String(editingRow.value.coverImageDisplayUrl || editingRow.value.coverImage || "");
   }
+  if (prop === "imageUrl") {
+    return String(editingRow.value.imageDisplayUrl || editingRow.value.imageUrl || "");
+  }
   if (prop === "avatarUrl") {
     return String(editingRow.value.avatarDisplayUrl || editingRow.value.avatarUrlDisplayUrl || editingRow.value.avatarUrl || "");
   }
   return "";
+}
+
+function tableImageUrl(row: LifeResourceRecord, prop: string) {
+  if (prop === "imageUrl") {
+    return String(row.imageDisplayUrl || row.imageUrl || "");
+  }
+  if (prop === "coverImage") {
+    return String(row.coverImageDisplayUrl || row.coverImage || "");
+  }
+  if (prop === "avatarUrl") {
+    return String(row.avatarDisplayUrl || row.avatarUrlDisplayUrl || row.avatarUrl || "");
+  }
+  return String(row[`${prop}DisplayUrl`] || row[prop] || "");
 }
 
 function resolveTagType(value: unknown) {
@@ -665,6 +895,7 @@ function resolveTagType(value: unknown) {
   if (value === true) return "success";
   if (value === false) return "info";
   if (value === "active" || value === "published" || value === "online" || value === "staff") return "success";
+  if (value === "service" || value === "member_card" || value === "category" || value === "home" || value === "channels") return "primary";
   if (value === "pending" || value === "busy") return "warning";
   if (value === "rejected") return "danger";
   return "info";
@@ -691,6 +922,12 @@ function formatValue(value: unknown, type?: string) {
       draft: "草稿",
       pending: "待审核",
       rejected: "已驳回",
+      service: "服务商品",
+      member_card: "会员卡商品",
+      category: "服务分类",
+      home: "首页",
+      channels: "视频号",
+      miniapp: "小程序",
       pending_payment: "待支付",
       pending_dispatch: "待派单",
       dispatched: "已派单",
@@ -705,6 +942,10 @@ function formatValue(value: unknown, type?: string) {
     return fallback[String(value)] || String(value);
   }
   return String(value);
+}
+
+function copyTextValue(value: unknown) {
+  return value === undefined || value === null ? "" : String(value);
 }
 
 function buildDetailText(row: LifeResourceRecord) {
@@ -768,5 +1009,43 @@ function buildDeleteConfirmText(name: string) {
   justify-content: flex-end;
   gap: 8px;
   margin-bottom: 12px;
+}
+
+.life-table-image {
+  width: 120px;
+  height: 48px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+}
+
+.image-form-control {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.promotion-target-control {
+  width: 100%;
+}
+
+.form-tip {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--el-text-color-secondary);
+}
+
+.life-copy-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.life-copy-cell__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

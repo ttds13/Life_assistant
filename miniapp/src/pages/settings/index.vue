@@ -1,8 +1,8 @@
 <script lang="ts" setup>
-import { updateProfile } from '@/api/auth'
+import { useProfileEditor } from '@/hooks/useProfileEditor'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
-import { assertImageSize, uploadImage } from '@/utils/uploadImage'
+import { assertImageSize } from '@/utils/uploadImage'
 
 definePage({
   style: {
@@ -14,9 +14,12 @@ definePage({
 
 const tokenStore = useTokenStore()
 const userStore = useUserStore()
+const { saveUserProfile } = useProfileEditor()
 
-const editingNickname = ref(false)
-const nicknameInput = ref('')
+const avatarPanelVisible = ref(false)
+const nicknamePanelVisible = ref(false)
+const manualNickname = ref('')
+const wechatNickname = ref('')
 const saving = ref(false)
 
 const displayName = computed(() =>
@@ -27,80 +30,123 @@ const displayPhone = computed(() =>
   userStore.userInfo.phone || '未绑定手机号',
 )
 
-function onEditNickname() {
-  if (!tokenStore.hasLogin) {
-    uni.navigateTo({ url: '/pages/login/index' })
-    return
-  }
-  nicknameInput.value = userStore.userInfo.nickname || ''
-  editingNickname.value = true
+function ensureLogin() {
+  if (tokenStore.hasLogin)
+    return true
+  uni.navigateTo({ url: '/pages/login/index' })
+  return false
 }
 
-async function onSaveNickname() {
-  const val = nicknameInput.value.trim()
-  if (!val) {
-    uni.showToast({ icon: 'none', title: '昵称不能为空' })
+function openAvatarPanel() {
+  if (!ensureLogin())
     return
-  }
-  if (val.length > 20) {
-    uni.showToast({ icon: 'none', title: '昵称最多20个字符' })
+  avatarPanelVisible.value = true
+}
+
+function closeAvatarPanel() {
+  if (saving.value)
     return
-  }
+  avatarPanelVisible.value = false
+}
+
+function openNicknamePanel() {
+  if (!ensureLogin())
+    return
+  const nickname = userStore.userInfo.nickname || ''
+  manualNickname.value = nickname
+  wechatNickname.value = nickname
+  nicknamePanelVisible.value = true
+}
+
+function closeNicknamePanel() {
+  if (saving.value)
+    return
+  nicknamePanelVisible.value = false
+}
+
+async function saveAvatarFile(filePath: string) {
+  if (!filePath || saving.value)
+    return
+
   saving.value = true
   try {
-    const profile = await updateProfile({ nickname: val })
-    userStore.setFromProfile(profile)
-    editingNickname.value = false
-    uni.showToast({ icon: 'success', title: '保存成功' })
+    await saveUserProfile({ avatarFilePath: filePath })
+    avatarPanelVisible.value = false
+    uni.showToast({ icon: 'success', title: '头像已更新' })
   }
-  catch {
-    uni.showToast({ icon: 'none', title: '保存失败，请重试' })
+  catch (err: any) {
+    const message = err?.message || err?.errMsg || '头像上传失败'
+    uni.showToast({ icon: 'none', title: message.slice(0, 20) })
   }
   finally {
     saving.value = false
   }
 }
 
-function onCancelNickname() {
-  editingNickname.value = false
-}
-
-async function onChooseAvatar() {
-  if (!tokenStore.hasLogin) {
-    uni.navigateTo({ url: '/pages/login/index' })
+function onChooseWechatAvatar(e: any) {
+  const avatarUrl = e.detail?.avatarUrl
+  if (!avatarUrl) {
+    uni.showToast({ icon: 'none', title: '未获取到头像' })
     return
   }
+  saveAvatarFile(avatarUrl)
+}
+
+function onChooseLocalAvatar() {
+  if (saving.value)
+    return
+
   uni.chooseImage({
     count: 1,
     sizeType: ['compressed'],
     sourceType: ['album', 'camera'],
-    success: async (res) => {
+    success: (res) => {
       const filePath = res.tempFilePaths[0]
       const file = Array.isArray(res.tempFiles) ? res.tempFiles[0] : undefined
-      if (!assertImageSize(file?.size))
+      if (!filePath || !assertImageSize(file?.size))
         return
-      saving.value = true
-      try {
-        const uploaded = await uploadImage({ filePath, bizType: 'user_avatar' })
-        const profile = await updateProfile({ avatar: uploaded.url })
-        userStore.setFromProfile(profile)
-        if (uploaded.displayUrl) {
-          userStore.setUserInfo({
-            ...userStore.userInfo,
-            avatar: uploaded.displayUrl,
-          })
-        }
-        uni.showToast({ icon: 'success', title: '头像已更新' })
-      }
-      catch {
-        uni.showToast({ icon: 'none', title: '头像上传失败，请重试' })
-      }
-      finally {
-        saving.value = false
-      }
+      saveAvatarFile(filePath)
+    },
+    fail: (err) => {
+      if (!String(err?.errMsg || '').includes('cancel'))
+        uni.showToast({ icon: 'none', title: '选择头像失败' })
     },
   })
 }
+
+async function saveNickname(value: string) {
+  if (saving.value)
+    return
+
+  saving.value = true
+  try {
+    await saveUserProfile({ nickname: value })
+    nicknamePanelVisible.value = false
+    uni.showToast({ icon: 'success', title: '昵称已更新' })
+  }
+  catch (err: any) {
+    const message = err?.message || err?.errMsg || '保存失败'
+    uni.showToast({ icon: 'none', title: message.slice(0, 20) })
+  }
+  finally {
+    saving.value = false
+  }
+}
+
+function onWechatNicknameInput(e: any) {
+  wechatNickname.value = e.detail?.value || ''
+}
+
+function onWechatNicknameValueChange(e: any) {
+  const value = e.detail?.value
+  if (typeof value === 'string')
+    wechatNickname.value = value
+}
+
+function onManualNicknameInput(e: any) {
+  manualNickname.value = e.detail?.value || ''
+}
+
 function onLogout() {
   uni.showModal({
     title: '提示',
@@ -125,14 +171,12 @@ function onTodo(title: string) {
 
 <template>
   <view class="min-h-screen bg-[#F5F7FA] pb-[60rpx]">
-    <!-- 个人信息卡片 -->
     <view class="mx-4 mt-4 bg-white rounded-[24rpx] shadow-sm overflow-hidden">
       <view class="px-4 py-3">
         <text class="text-[28rpx] text-[#9CA3AF] font-500">个人信息</text>
       </view>
 
-      <!-- 头像 -->
-      <view class="flex items-center justify-between px-4 py-4 border-t border-[#F3F4F6]" @tap="onChooseAvatar">
+      <view class="flex items-center justify-between px-4 py-4 border-t border-[#F3F4F6]" @tap="openAvatarPanel">
         <text class="text-[30rpx] text-[#1F2937]">头像</text>
         <view class="flex items-center gap-3">
           <view class="w-[88rpx] h-[88rpx] rounded-full bg-[#EAF3FF] overflow-hidden">
@@ -150,16 +194,14 @@ function onTodo(title: string) {
         </view>
       </view>
 
-      <!-- 昵称 -->
-      <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="onEditNickname">
+      <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="openNicknamePanel">
         <text class="text-[30rpx] text-[#1F2937]">昵称</text>
-        <view class="flex items-center gap-2">
-          <text class="text-[28rpx] text-[#6B7280]">{{ displayName }}</text>
-          <text class="i-carbon-chevron-right text-[32rpx] text-[#C4C8D0]" />
+        <view class="flex items-center gap-2 min-w-0">
+          <text class="max-w-[420rpx] truncate text-[28rpx] text-[#6B7280]">{{ displayName }}</text>
+          <text class="i-carbon-chevron-right text-[32rpx] text-[#C4C8D0] shrink-0" />
         </view>
       </view>
 
-      <!-- 手机号 -->
       <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]">
         <text class="text-[30rpx] text-[#1F2937]">手机号</text>
         <view class="flex items-center gap-2">
@@ -168,7 +210,6 @@ function onTodo(title: string) {
       </view>
     </view>
 
-    <!-- 其他设置 -->
     <view class="mx-4 mt-3 bg-white rounded-[24rpx] shadow-sm overflow-hidden">
       <view class="px-4 py-3">
         <text class="text-[28rpx] text-[#9CA3AF] font-500">其他</text>
@@ -187,7 +228,6 @@ function onTodo(title: string) {
       </view>
     </view>
 
-    <!-- 退出登录 -->
     <view v-if="tokenStore.hasLogin" class="mx-4 mt-6">
       <button
         class="w-full h-[88rpx] bg-white text-[30rpx] text-[#EF4444] rounded-[24rpx] center shadow-sm font-500"
@@ -197,37 +237,117 @@ function onTodo(title: string) {
       </button>
     </view>
 
-    <!-- 编辑昵称弹窗 -->
     <view
-      v-if="editingNickname"
+      v-if="avatarPanelVisible"
       class="fixed inset-0 z-50 flex items-end"
       style="background: rgba(0,0,0,0.4)"
-      @tap.self="onCancelNickname"
     >
-      <view class="w-full bg-white rounded-t-[32rpx] px-6 pb-[env(safe-area-inset-bottom)] pt-6">
+      <view class="w-full bg-white rounded-t-[32rpx] px-6 pb-[calc(env(safe-area-inset-bottom)+40rpx)] pt-6">
+        <view class="flex items-center justify-between mb-5">
+          <text class="text-[32rpx] text-[#1F2937] font-600">修改头像</text>
+          <text class="i-carbon-close text-[40rpx] text-[#9CA3AF]" @tap="closeAvatarPanel" />
+        </view>
+
+        <!-- #ifdef MP-WEIXIN -->
+        <button
+          class="profile-action-button bg-[#07C160] text-white"
+          open-type="chooseAvatar"
+          :disabled="saving"
+          @chooseavatar="onChooseWechatAvatar"
+        >
+          {{ saving ? '处理中...' : '使用微信头像' }}
+        </button>
+        <!-- #endif -->
+
+        <button
+          class="profile-action-button mt-3 bg-[#1677FF] text-white"
+          :disabled="saving"
+          @tap="onChooseLocalAvatar"
+        >
+          {{ saving ? '处理中...' : '从相册/拍照上传' }}
+        </button>
+        <view
+          class="mt-3 w-full h-[80rpx] bg-white text-[#6B7280] text-[28rpx] rounded-[20rpx] center"
+          @tap="closeAvatarPanel"
+        >
+          取消
+        </view>
+      </view>
+    </view>
+
+    <view
+      v-if="nicknamePanelVisible"
+      class="fixed inset-0 z-50 flex items-end"
+      style="background: rgba(0,0,0,0.4)"
+    >
+      <view class="w-full bg-white rounded-t-[32rpx] px-6 pb-[calc(env(safe-area-inset-bottom)+40rpx)] pt-6">
         <view class="flex items-center justify-between mb-5">
           <text class="text-[32rpx] text-[#1F2937] font-600">修改昵称</text>
-          <text class="i-carbon-close text-[40rpx] text-[#9CA3AF]" @tap="onCancelNickname" />
+          <text class="i-carbon-close text-[40rpx] text-[#9CA3AF]" @tap="closeNicknamePanel" />
         </view>
-        <input
-          v-model="nicknameInput"
-          class="w-full h-[88rpx] px-4 bg-[#F5F7FA] rounded-[16rpx] text-[30rpx] text-[#1F2937]"
-          placeholder="请输入昵称"
-          placeholder-class="text-[#C4C8D0]"
-          :maxlength="20"
-          focus
-        />
-        <view class="mt-1 text-right">
-          <text class="text-[24rpx] text-[#9CA3AF]">{{ nicknameInput.length }}/20</text>
+
+        <!-- #ifdef MP-WEIXIN -->
+        <view class="mb-5">
+          <text class="block mb-2 text-[26rpx] text-[#6B7280]">微信昵称</text>
+          <input
+            name="nickname"
+            type="nickname"
+            class="w-full h-[88rpx] px-4 bg-[#F5F7FA] rounded-[16rpx] text-[30rpx] text-[#1F2937]"
+            placeholder="请输入或选择微信昵称"
+            placeholder-class="text-[#C4C8D0]"
+            :maxlength="20"
+            :value="wechatNickname"
+            @input="onWechatNicknameInput"
+            @change="onWechatNicknameValueChange"
+            @blur="onWechatNicknameValueChange"
+          />
+          <view
+            class="mt-3 w-full h-[84rpx] bg-[#07C160] text-white text-[30rpx] rounded-[20rpx] center font-500"
+            @tap="saveNickname(wechatNickname)"
+          >
+            {{ saving ? '保存中...' : '保存微信昵称' }}
+          </view>
         </view>
-        <button
-          class="mt-4 w-full h-[88rpx] bg-[#1677FF] text-white text-[30rpx] rounded-[20rpx] center font-500"
-          :disabled="saving"
-          @tap="onSaveNickname"
-        >
-          {{ saving ? '保存中...' : '保存' }}
-        </button>
+        <!-- #endif -->
+
+        <view>
+          <text class="block mb-2 text-[26rpx] text-[#6B7280]">手动编辑</text>
+          <input
+            name="nickname"
+            class="w-full h-[88rpx] px-4 bg-[#F5F7FA] rounded-[16rpx] text-[30rpx] text-[#1F2937]"
+            placeholder="请输入昵称"
+            placeholder-class="text-[#C4C8D0]"
+            :maxlength="20"
+            :value="manualNickname"
+            @input="onManualNicknameInput"
+          />
+          <view class="mt-1 text-right">
+            <text class="text-[24rpx] text-[#9CA3AF]">{{ manualNickname.length }}/20</text>
+          </view>
+          <view
+            class="mt-3 w-full h-[84rpx] bg-[#1677FF] text-white text-[30rpx] rounded-[20rpx] center font-500"
+            @tap="saveNickname(manualNickname)"
+          >
+            {{ saving ? '保存中...' : '保存手动昵称' }}
+          </view>
+        </view>
       </view>
     </view>
   </view>
 </template>
+
+<style scoped>
+.profile-action-button {
+  width: 100%;
+  height: 88rpx;
+  line-height: 88rpx;
+  border-radius: 20rpx;
+  font-size: 30rpx;
+  font-weight: 500;
+  padding: 0;
+}
+
+.profile-action-button::after {
+  border: 0;
+}
+</style>

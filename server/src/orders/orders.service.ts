@@ -3,8 +3,11 @@ import { Order, Prisma } from '@prisma/client'
 import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
+import { MemberCardsService } from '../member-cards/member-cards.service'
+import { MEMBER_CARD_TYPE } from '../member-cards/constants/member-card'
 import { ORDER_ACTION } from './constants/order-action'
 import { ORDER_STATUS } from './constants/order-status'
+import { ORDER_TYPE, isStaffVisibleOrderType } from './constants/order-type'
 import type { AutoAssignOrderDto } from './dto/auto-assign-order.dto'
 import type { AdminOrderRemarkDto } from './dto/admin-order-remark.dto'
 import type { AdminQueryOrdersDto } from './dto/admin-query-orders.dto'
@@ -15,6 +18,7 @@ import type { CreateOrderDto } from './dto/create-order.dto'
 import type { PricePreviewDto } from './dto/price-preview.dto'
 import type { QueryOrdersDto } from './dto/query-orders.dto'
 import type { RejectOrderDto } from './dto/reject-order.dto'
+import type { RescheduleOrderDto } from './dto/reschedule-order.dto'
 import type { TransitionVersionDto } from './dto/transition-version.dto'
 import type { UpdateStaffProfileDto } from './dto/update-staff-profile.dto'
 import { OrderTransitionService } from './order-transition.service'
@@ -29,7 +33,7 @@ import {
 import { OrderDetailRecord, OrdersRepository } from './orders.repository'
 import { ObjectStorageService } from '../storage/storage.service'
 
-type AutoAssignSource = 'payment_success' | 'admin_retry' | 'job_retry'
+type AutoAssignSource = 'admin_retry' | 'job_retry'
 type AutoAssignSkipReason = 'order_not_pending_dispatch' | 'already_assigned' | 'no_available_staff'
 
 export interface AutoAssignSystemOptions {
@@ -52,11 +56,16 @@ export class OrdersService {
     @Inject(OrderTransitionService) private readonly transitions: OrderTransitionService,
     @Inject(AdminAuditService) private readonly adminAudit: AdminAuditService,
     @Inject(ObjectStorageService) private readonly storage: ObjectStorageService,
+    @Inject(MemberCardsService) private readonly memberCards: MemberCardsService,
   ) {}
 
   async getPricePreview(query: PricePreviewDto) {
     const service = await this.resolveActiveService(query)
-    return presentPricePreview(service.basePrice.toNumber())
+    const serviceCardType = this.memberCards.calculateServiceCardType(service)
+    return presentPricePreview(service.basePrice.toNumber(), {
+      consultationRequired: serviceCardType === MEMBER_CARD_TYPE.CONSULTATION,
+      cardType: serviceCardType,
+    })
   }
 
   async listUserOrders(userId: number, query: QueryOrdersDto) {
@@ -93,6 +102,12 @@ export class OrdersService {
     }
 
     const appointment = this.parseAppointment(dto.appointmentDate, dto.appointmentTimeSlot)
+    const serviceCardType = this.memberCards.calculateServiceCardType(service)
+    const isConsultationOrder = serviceCardType === MEMBER_CARD_TYPE.CONSULTATION
+    const isMemberCardOrder = Boolean(dto.memberCardId)
+    if (isConsultationOrder && isMemberCardOrder) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'consultation service cannot use member card', 400)
+    }
     const orderNo = this.createOrderNo()
     const serviceSnapshot = {
       id: Number(service.id),
@@ -103,6 +118,9 @@ export class OrdersService {
       coverImage: service.coverImage || '',
       basePrice: service.basePrice.toNumber(),
       priceUnit: service.priceUnit,
+      durationMinutes: service.durationMinutes || 0,
+      cardType: serviceCardType,
+      consultationRequired: isConsultationOrder,
       status: service.status,
       sortOrder: service.sortOrder,
     }
@@ -128,34 +146,74 @@ export class OrdersService {
       mapProvider: address.mapProvider || '',
     }
 
+    const initialStatus = isMemberCardOrder || isConsultationOrder
+      ? ORDER_STATUS.PENDING_DISPATCH
+      : ORDER_STATUS.PENDING_PAYMENT
+    const payableAmount = isMemberCardOrder || isConsultationOrder
+      ? new Prisma.Decimal(0)
+      : service.basePrice
+
     const created = await this.repository.client.$transaction(async (tx) => {
       const order = await tx.order.create({
         data: {
           orderNo,
           userId: BigInt(userId),
           serviceId: service.id,
-          status: ORDER_STATUS.PENDING_PAYMENT,
+          orderType: isConsultationOrder ? ORDER_TYPE.CONSULTATION : ORDER_TYPE.SERVICE_BOOKING,
+          status: initialStatus,
           serviceSnapshot: serviceSnapshot as Prisma.InputJsonObject,
           addressSnapshot: addressSnapshot as Prisma.InputJsonObject,
           appointmentStartTime: appointment.start,
           appointmentEndTime: appointment.end,
           originalAmount: service.basePrice,
           discountAmount: 0,
-          payableAmount: service.basePrice,
+          payableAmount,
           paidAmount: 0,
           couponId: dto.couponId ? BigInt(dto.couponId) : null,
           memberCardId: dto.memberCardId ? BigInt(dto.memberCardId) : null,
           remark: dto.remark || null,
+          source: this.normalizeOrderSource(dto.source),
           cityCode: service.cityCode,
         },
       })
+
+      if (isMemberCardOrder && dto.memberCardId) {
+        const freeze = await this.memberCards.freezeForOrder({
+          tx,
+          userId,
+          userMemberCardId: dto.memberCardId,
+          orderId: order.id,
+          service,
+        })
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            memberCardConsumeUnits: freeze.consumeUnits,
+            discountAmount: service.basePrice,
+          },
+        })
+      }
 
       await this.transitions.createInitialStatusLog({
         tx,
         orderId: order.id,
         operatorType: 'user',
         operatorId: BigInt(userId),
+        toStatus: initialStatus,
         requestId,
+        remark: isMemberCardOrder
+          ? 'member card appointment created'
+          : isConsultationOrder
+            ? 'consultation appointment created'
+            : undefined,
+        detail: {
+          orderType: isConsultationOrder ? ORDER_TYPE.CONSULTATION : ORDER_TYPE.SERVICE_BOOKING,
+          memberCardId: dto.memberCardId || null,
+          cardType: serviceCardType,
+          source: this.normalizeOrderSource(dto.source),
+          promotionKey: dto.promotionKey || null,
+          campaignId: dto.campaignId || null,
+        },
       })
 
       return order
@@ -167,23 +225,125 @@ export class OrdersService {
   async cancelOrder(userId: number, orderId: number, dto: TransitionVersionDto, requestId?: string) {
     const current = await this.getOrderDetailOrThrow(orderId)
     this.assertUserOwnsOrder(current, userId)
-    if (current.status === ORDER_STATUS.CANCELLED) {
+    if ([ORDER_STATUS.CANCELLED, ORDER_STATUS.REFUND_PENDING, ORDER_STATUS.REFUNDED].includes(current.status as any)) {
       return this.withSignedOrderImages(presentOrderDetail(current))
     }
+    if (current.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card purchase order cannot be cancelled here', 400)
+    }
+    if (![ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PENDING_DISPATCH].includes(current.status as any)) {
+      throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order cannot be cancelled by user', 409)
+    }
+
+    const reason = dto.reason || 'user cancel appointment'
+
+    if (current.status === ORDER_STATUS.PENDING_DISPATCH && this.isPaidCashBooking(current)) {
+      await this.transitions.transition({
+        orderId: BigInt(orderId),
+        action: ORDER_ACTION.USER_CANCEL_PAID_REFUND,
+        operatorType: 'user',
+        operatorId: BigInt(userId),
+        requestId,
+        version: dto.version,
+        remark: reason,
+        orderData: {
+          cancelledAt: new Date(),
+          cancelReason: reason,
+        },
+        check: (order) => {
+          this.assertOrderUserId(order, userId)
+          if (order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE || order.memberCardId) {
+            throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order cannot enter refund pending here', 409)
+          }
+        },
+        sideEffect: async (tx, order) => {
+          await this.createPendingRefundForPaidOrder(tx, order, reason)
+        },
+      })
+
+      return this.getUserOrderDetail(userId, orderId)
+    }
+
+    const action = current.status === ORDER_STATUS.PENDING_DISPATCH
+      ? ORDER_ACTION.USER_CANCEL_BOOKING
+      : ORDER_ACTION.USER_CANCEL_UNPAID
 
     await this.transitions.transition({
       orderId: BigInt(orderId),
-      action: ORDER_ACTION.USER_CANCEL_UNPAID,
+      action,
       operatorType: 'user',
       operatorId: BigInt(userId),
       requestId,
       version: dto.version,
-      remark: dto.reason || 'user cancel before payment',
+      remark: reason,
       orderData: {
         cancelledAt: new Date(),
-        cancelReason: dto.reason || 'user cancel before payment',
+        cancelReason: reason,
       },
       check: order => this.assertOrderUserId(order, userId),
+      sideEffect: async (tx, order) => {
+        await this.memberCards.releaseFrozenForOrder(tx, order, reason)
+      },
+    })
+
+    return this.getUserOrderDetail(userId, orderId)
+  }
+
+  async rescheduleOrder(userId: number, orderId: number, dto: RescheduleOrderDto, requestId?: string) {
+    const appointment = this.parseAppointment(dto.appointmentDate, dto.appointmentTimeSlot)
+    const orderBigInt = BigInt(orderId)
+
+    await this.repository.client.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({ where: { id: orderBigInt } })
+      if (!order) {
+        throw new BusinessException(ErrorCode.ORDER_NOT_FOUND, 'order not found', 404)
+      }
+      this.assertOrderUserId(order, userId)
+      if (order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE) {
+        throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'member card purchase order cannot be rescheduled', 409)
+      }
+      if (![ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PENDING_DISPATCH].includes(order.status as any)) {
+        throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order cannot be rescheduled by user', 409)
+      }
+      if (dto.version !== undefined && order.version !== dto.version) {
+        throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order version changed, refresh and retry', 409)
+      }
+
+      const updated = await tx.order.updateMany({
+        where: {
+          id: order.id,
+          status: order.status,
+          version: order.version,
+        },
+        data: {
+          appointmentStartTime: appointment.start,
+          appointmentEndTime: appointment.end,
+          version: { increment: 1 },
+        },
+      })
+      if (updated.count !== 1) {
+        throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order status changed, refresh and retry', 409)
+      }
+
+      await tx.orderStatusLog.create({
+        data: {
+          orderId: order.id,
+          fromStatus: order.status,
+          toStatus: order.status,
+          operatorType: 'user',
+          operatorId: BigInt(userId),
+          action: 'user_reschedule',
+          requestId,
+          remark: dto.reason || 'user reschedule appointment',
+          detail: {
+            oldAppointmentStartTime: order.appointmentStartTime.toISOString(),
+            oldAppointmentEndTime: order.appointmentEndTime.toISOString(),
+            appointmentStartTime: appointment.start.toISOString(),
+            appointmentEndTime: appointment.end.toISOString(),
+            appointmentTimeSlot: dto.appointmentTimeSlot,
+          } as Prisma.InputJsonObject,
+        },
+      })
     })
 
     return this.getUserOrderDetail(userId, orderId)
@@ -228,6 +388,8 @@ export class OrdersService {
     const result = await this.repository.findAdminOrders({
       status: query.status,
       keyword: query.keyword || query.keywords,
+      orderType: query.orderType,
+      source: query.source,
       dateStart: this.parseDateStart(query.dateStart || query.startDate),
       dateEnd: this.parseDateEnd(query.dateEnd || query.endDate),
       page,
@@ -278,6 +440,9 @@ export class OrdersService {
     if (nextAppointmentStart >= nextAppointmentEnd) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'appointment start must be before end', 400)
     }
+    if (dto.appointmentStartTime !== undefined || dto.appointmentEndTime !== undefined) {
+      this.assertAppointmentWithinBusinessHours(nextAppointmentStart, nextAppointmentEnd)
+    }
     if (dto.originalAmount !== undefined) data.originalAmount = new Prisma.Decimal(dto.originalAmount)
     if (dto.discountAmount !== undefined) data.discountAmount = new Prisma.Decimal(dto.discountAmount)
     if (dto.payableAmount !== undefined) data.payableAmount = new Prisma.Decimal(dto.payableAmount)
@@ -305,6 +470,14 @@ export class OrdersService {
         where: { id: BigInt(orderId) },
         data,
       })
+      if (current.status !== ORDER_STATUS.CANCELLED && data.status === ORDER_STATUS.CANCELLED) {
+        await this.memberCards.releaseFrozenForOrder(
+          tx,
+          current,
+          dto.cancelReason || 'admin cancel order',
+          { operatorType: 'admin', operatorId: BigInt(adminId) },
+        )
+      }
       await this.adminAudit.writeWithClient(tx, {
         adminId,
         action: 'order:update',
@@ -328,6 +501,12 @@ export class OrdersService {
     const orderBigInt = BigInt(orderId)
 
     await this.repository.client.$transaction(async (tx) => {
+      await this.memberCards.releaseFrozenForOrder(
+        tx,
+        current,
+        'admin delete order',
+        { recordOrderId: null, operatorType: 'admin', operatorId: BigInt(adminId) },
+      )
       const payments = await tx.payment.findMany({
         where: { orderId: orderBigInt },
         select: { id: true, paymentNo: true },
@@ -457,6 +636,14 @@ export class OrdersService {
   async autoAssignOrderBySystem(orderId: number, options: AutoAssignSystemOptions = {}): Promise<AutoAssignSystemResult> {
     const current = await this.getOrderDetailOrThrow(orderId)
     if (current.status !== ORDER_STATUS.PENDING_DISPATCH) {
+      return {
+        assigned: false,
+        reason: 'order_not_pending_dispatch',
+        staffId: current.staffId ? Number(current.staffId) : undefined,
+        orderStatus: current.status,
+      }
+    }
+    if (!isStaffVisibleOrderType(current.orderType)) {
       return {
         assigned: false,
         reason: 'order_not_pending_dispatch',
@@ -660,7 +847,9 @@ export class OrdersService {
     await this.assertStaffCanTakeOrder(staffId)
 
     const order = await this.getOrderDetailOrThrow(orderId)
-    if (order.status !== ORDER_STATUS.PENDING_DISPATCH || order.staffId) {
+    if (order.status !== ORDER_STATUS.PENDING_DISPATCH
+      || order.staffId
+      || !isStaffVisibleOrderType(order.orderType)) {
       throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'order is not available', 409)
     }
 
@@ -720,7 +909,7 @@ export class OrdersService {
 
     if (dto.avatar !== undefined) {
       const avatar = dto.avatar.trim()
-      this.storage.assertPermanentOssUrl(avatar)
+      this.storage.assertPermanentOssUrl(avatar, { force: true })
       data.avatarUrl = avatar
     }
 
@@ -900,6 +1089,14 @@ export class OrdersService {
       detail: { photoCount: dto.photoUrls?.length || 0 },
       check: order => this.assertOrderStaffId(order, staffId),
       sideEffect: async (tx, order) => {
+        await this.memberCards.consumeForCompletedOrder({
+          tx,
+          order,
+          actualMinutes: dto.actualMinutes,
+          operatorType: 'staff',
+          operatorId: BigInt(staffId),
+          remark: dto.remark,
+        })
         await tx.serviceCheckin.create({
           data: {
             orderId: order.id,
@@ -1024,7 +1221,69 @@ export class OrdersService {
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid appointment time', 400)
     }
+    this.assertAppointmentWithinBusinessHours(start, end)
+    if (start.getTime() <= Date.now()) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'appointment time must be later than current time', 400)
+    }
     return { start, end }
+  }
+
+  private assertAppointmentWithinBusinessHours(start: Date, end: Date) {
+    if (start.toDateString() !== end.toDateString()) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'appointment must be in the same day', 400)
+    }
+    const startMinutes = start.getHours() * 60 + start.getMinutes()
+    const endMinutes = end.getHours() * 60 + end.getMinutes()
+    const businessStart = 8 * 60
+    const businessEnd = 17 * 60
+    if (startMinutes < businessStart || endMinutes > businessEnd) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'appointment time must be between 08:00 and 17:00', 400)
+    }
+  }
+
+  private isPaidCashBooking(order: OrderDetailRecord) {
+    return !order.memberCardId
+      && order.orderType !== ORDER_TYPE.MEMBER_CARD_PURCHASE
+      && (Boolean(order.paidAt)
+        || order.paidAmount.gt(0)
+        || order.payableAmount.gt(0) && order.payments.some(payment => payment.status === 'success'))
+  }
+
+  private async createPendingRefundForPaidOrder(
+    tx: Prisma.TransactionClient,
+    order: Order,
+    reason: string,
+  ) {
+    const existing = await tx.refund.findFirst({
+      where: {
+        orderId: order.id,
+        status: 'pending',
+      },
+    })
+    if (existing) return existing
+
+    const payment = await tx.payment.findFirst({
+      where: {
+        orderId: order.id,
+        status: 'success',
+      },
+      orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+    })
+    if (!payment) {
+      throw new BusinessException(ErrorCode.PAYMENT_NOT_FOUND, 'paid payment not found', 404)
+    }
+
+    return tx.refund.create({
+      data: {
+        refundNo: this.createRefundNo(),
+        orderId: order.id,
+        paymentId: payment.id,
+        amount: payment.amount,
+        reason,
+        status: 'pending',
+        operatedBy: BigInt(0),
+      },
+    })
   }
 
   private parseDateStart(value?: string) {
@@ -1080,6 +1339,11 @@ export class OrdersService {
     const parsed = Number(value)
     if (!Number.isInteger(parsed) || parsed < 1) return fallback
     return max ? Math.min(parsed, max) : parsed
+  }
+
+  private normalizeOrderSource(source?: string) {
+    const value = (source || 'miniapp').trim()
+    return /^[a-zA-Z0-9_-]{1,16}$/.test(value) ? value : 'miniapp'
   }
 
   private withSignedOrderImages<T extends Record<string, any>>(payload: T): T {
@@ -1183,5 +1447,21 @@ export class OrdersService {
     ].join('')
     const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
     return `LA${date}${time}${random}`
+  }
+
+  private createRefundNo() {
+    const now = new Date()
+    const date = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0'),
+    ].join('')
+    const time = [
+      String(now.getHours()).padStart(2, '0'),
+      String(now.getMinutes()).padStart(2, '0'),
+      String(now.getSeconds()).padStart(2, '0'),
+    ].join('')
+    const random = Math.floor(Math.random() * 100000).toString().padStart(5, '0')
+    return `RF${date}${time}${random}`
   }
 }

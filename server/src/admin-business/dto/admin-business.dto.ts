@@ -41,6 +41,26 @@ export class AdminPageQueryDto {
   @IsOptional()
   @IsString()
   @Transform(({ value }) => trimOptional(value))
+  recordType?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  cardType?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  source?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  targetType?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
   dateStart?: string
 
   @IsOptional()

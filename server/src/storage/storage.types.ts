@@ -17,6 +17,7 @@ export interface PutImageInput {
 export interface PutImageResult {
   url: string
   signedUrl: string
+  displayUrl?: string
   storageKey: string
   mimeType: string
   size: number

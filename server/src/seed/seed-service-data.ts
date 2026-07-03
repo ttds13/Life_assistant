@@ -28,10 +28,13 @@ export async function seedServiceData(prisma: PrismaClient, options: SeedOptions
     if (!categoryId) throw new Error(`missing category seed: ${seed.categoryKey}`)
     await upsertSingleService(prisma, categoryId, seed)
   }
+  await disableLegacySeedCatalog(prisma)
 
   const user = await ensureTestUser(prisma)
   await ensureTestUserAddress(prisma, user.id)
   await ensureSeedStaff(prisma)
+  await ensureDefaultMemberCards(prisma)
+  await ensureDefaultHomeBanners(prisma)
 
   const after = await getCounts(prisma)
   return {
@@ -42,10 +45,158 @@ export async function seedServiceData(prisma: PrismaClient, options: SeedOptions
       users: 1,
       userAddresses: 1,
       staff: 1,
+      memberCards: 2,
+      homeBanners: 3,
     },
     before,
     after,
   }
+}
+
+async function ensureDefaultMemberCards(prisma: PrismaClient) {
+  const cards = [
+    {
+      name: '日常保洁季卡',
+      applicableServices: [
+        '日常保洁 2 小时',
+        'svc_jijie_daily_cleaning_3',
+      ],
+      totalTimes: 6,
+      cardType: 'time',
+      unitName: '分钟',
+      unitMinutes: 120,
+      totalUnits: 720,
+      serviceRules: {},
+      allowHalfDeduct: true,
+      minConsumeUnits: 60,
+      price: '399',
+      validityDays: 90,
+      status: 1,
+    },
+    {
+      name: '日常保洁年卡',
+      applicableServices: [
+        '日常保洁 2 小时',
+        'svc_jijie_daily_cleaning_3',
+      ],
+      totalTimes: 12,
+      cardType: 'time',
+      unitName: '分钟',
+      unitMinutes: 120,
+      totalUnits: 1440,
+      serviceRules: {
+        shareAcrossFamilies: true,
+      },
+      allowHalfDeduct: true,
+      minConsumeUnits: 60,
+      price: '699',
+      validityDays: 365,
+      status: 1,
+    },
+  ]
+
+  const legacyCardNames = [
+    '日常保洁 10 小时卡',
+    '厨房深度清洁 10 次卡',
+  ]
+
+  for (const legacyName of legacyCardNames) {
+    await prisma.memberCard.updateMany({
+      where: { name: legacyName },
+      data: { status: 0 },
+    })
+  }
+
+  for (const card of cards) {
+    const existing = await prisma.memberCard.findFirst({
+      where: { name: card.name },
+      orderBy: { id: 'asc' },
+    })
+    if (existing) {
+      await prisma.memberCard.update({
+        where: { id: existing.id },
+        data: card,
+      })
+    }
+    else {
+      await prisma.memberCard.create({ data: card })
+    }
+  }
+}
+
+async function ensureDefaultHomeBanners(prisma: PrismaClient) {
+  const banners = [
+    {
+      title: '吉喆家政',
+      subtitle: '家居保洁、家电清洗、水电维修',
+      imageUrl: 'https://gym-face-bucket.oss-cn-shenzhen.aliyuncs.com/life-assitant/brand.png',
+      linkType: 'none',
+      linkValue: '',
+      sortOrder: 1,
+      status: 1,
+    },
+    {
+      title: '特惠体验活动',
+      subtitle: '日常保洁 2 小时 67 元，热水器深度清洗 39 元',
+      imageUrl: 'https://gym-face-bucket.oss-cn-shenzhen.aliyuncs.com/life-assitant/promo.png',
+      linkType: 'service',
+      linkValue: 'svc_jijie_campaign_1',
+      sortOrder: 2,
+      status: 1,
+    },
+    {
+      title: '会员卡活动',
+      subtitle: '季卡 399 元，年卡 699 元',
+      imageUrl: 'https://gym-face-bucket.oss-cn-shenzhen.aliyuncs.com/life-assitant/member-card.png',
+      linkType: 'none',
+      linkValue: '',
+      sortOrder: 3,
+      status: 1,
+    },
+  ]
+
+  for (const banner of banners) {
+    const existing = await prisma.homeBanner.findFirst({
+      where: { title: banner.title },
+      orderBy: { id: 'asc' },
+    })
+    if (existing) {
+      await prisma.homeBanner.update({
+        where: { id: existing.id },
+        data: banner,
+      })
+    }
+    else {
+      await prisma.homeBanner.create({ data: banner })
+    }
+  }
+}
+
+async function disableLegacySeedCatalog(prisma: PrismaClient) {
+  const activeServiceCodes = serviceSeeds.map(seed => seedServiceCode(seed))
+  const activeCategoryNames = categorySeeds.map(seed => seed.name)
+
+  await prisma.service.updateMany({
+    where: {
+      code: {
+        startsWith: 'svc_',
+        notIn: activeServiceCodes,
+      },
+    },
+    data: { status: 0 },
+  })
+
+  await prisma.serviceCategory.updateMany({
+    where: {
+      name: { notIn: activeCategoryNames },
+      services: {
+        some: {
+          code: { startsWith: 'svc_' },
+        },
+      },
+    },
+    data: { status: 0 },
+  })
 }
 
 async function getCounts(prisma: PrismaClient) {
@@ -146,6 +297,10 @@ async function upsertSingleService(
     basePrice: seed.basePrice,
     minPrice: seed.basePrice,
     priceUnit: seed.priceUnit,
+    durationMinutes: seedDurationMinutes(seed),
+    cardType: seedCardType(seed),
+    consumeUnit: seedConsumeUnit(seed),
+    consultationRequired: seed.consultationRequired ?? seedCardType(seed) === 'consultation',
     sortOrder: seed.sortOrder,
     status: 1,
     deletedAt: null,
@@ -161,7 +316,26 @@ async function upsertSingleService(
 }
 
 function seedServiceCode(seed: typeof serviceSeeds[number]) {
-  return `svc_${seed.categoryKey}_${seed.sortOrder}`
+  return `svc_jijie_${seed.categoryKey}_${seed.sortOrder}`
+}
+
+function seedDurationMinutes(seed: typeof serviceSeeds[number]) {
+  return seed.durationMinutes ?? null
+}
+
+function seedCardType(seed: typeof serviceSeeds[number]) {
+  if (seed.cardType) return seed.cardType
+  if (seed.priceUnit === '咨询' || Number(seed.basePrice) <= 0) return 'consultation'
+  if (seed.durationMinutes) return 'time'
+  if (['次', '台', '张'].includes(seed.priceUnit)) return 'times'
+  return 'none'
+}
+
+function seedConsumeUnit(seed: typeof serviceSeeds[number]) {
+  if (seed.consumeUnit !== undefined) return seed.consumeUnit
+  const duration = seedDurationMinutes(seed)
+  if (duration) return duration
+  return seedCardType(seed) === 'times' ? 1 : null
 }
 
 async function ensureTestUser(prisma: PrismaClient) {

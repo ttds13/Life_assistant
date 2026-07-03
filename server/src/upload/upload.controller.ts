@@ -18,13 +18,6 @@ export class UploadController {
   @UseInterceptors(FileInterceptor('file', {
     storage: memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024 },
-    fileFilter: (_req, file, cb) => {
-      if (!file.mimetype.startsWith('image/')) {
-        cb(new Error('only image files are allowed'), false)
-        return
-      }
-      cb(null, true)
-    },
   }))
   uploadImage(
     @Req() request: RequestWithContext,
@@ -35,6 +28,27 @@ export class UploadController {
     return this.uploadService.saveImage(file, {
       bizType,
       bizId,
+      user: request.user,
+    })
+  }
+
+  @Post('image-base64')
+  uploadImageBase64(
+    @Req() request: RequestWithContext,
+    @Body() body: {
+      imageBase64?: string
+      mimeType?: string
+      fileName?: string
+      bizType?: string
+      bizId?: string
+    },
+  ) {
+    return this.uploadService.saveImageBase64({
+      imageBase64: body?.imageBase64,
+      mimeType: body?.mimeType,
+      fileName: body?.fileName,
+      bizType: body?.bizType,
+      bizId: body?.bizId,
       user: request.user,
     })
   }

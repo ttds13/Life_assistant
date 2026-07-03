@@ -2,6 +2,7 @@ import 'reflect-metadata'
 import { ValidationPipe } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { Reflector } from '@nestjs/core'
+import { NestExpressApplication } from '@nestjs/platform-express'
 import { NestFactory } from '@nestjs/core'
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger'
 import { AppModule } from './app.module'
@@ -11,12 +12,18 @@ import { ResponseTransformInterceptor } from './common/interceptors/response-tra
 import { AppLoggerService } from './common/logger/app-logger.service'
 
 export async function createConfiguredApp() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true })
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+    rawBody: true,
+    bodyParser: false,
+  })
   const config = app.get(ConfigService)
   const logger = app.get(AppLoggerService)
   const reflector = app.get(Reflector)
 
   app.useLogger(logger)
+  app.useBodyParser('json', { limit: '8mb' })
+  app.useBodyParser('urlencoded', { extended: true, limit: '8mb' })
 
   const apiPrefix = config.get<string>('API_PREFIX', '/api').replace(/^\/?/, '').replace(/\/$/, '')
   app.setGlobalPrefix(apiPrefix)

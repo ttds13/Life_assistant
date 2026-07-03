@@ -9,9 +9,11 @@ definePage({
 })
 
 const orderId = ref('')
+const orderType = ref('')
 const status = ref<'pending' | 'success' | 'fail'>('pending')
 const amount = ref(0)
 const paying = ref(false)
+const promptedReserve = ref(false)
 
 const resultConfig = computed(() => {
   if (status.value === 'success') {
@@ -39,6 +41,10 @@ const resultConfig = computed(() => {
 })
 
 function onDetail() {
+  if (orderType.value === 'member_card_purchase') {
+    uni.redirectTo({ url: '/pages/card/index' })
+    return
+  }
   uni.redirectTo({ url: `/pages/order/detail?id=${orderId.value || 101}` })
 }
 
@@ -51,8 +57,30 @@ async function refreshOrderStatus() {
   if (!id)
     return
   const detail = await getOrderDetail(id)
-  if (detail.status !== 'pending_payment')
+  if (detail.status !== 'pending_payment') {
     status.value = 'success'
+    promptReserveAfterCardPurchase()
+  }
+}
+
+function promptReserveAfterCardPurchase() {
+  if (orderType.value !== 'member_card_purchase' || status.value !== 'success' || promptedReserve.value)
+    return
+  promptedReserve.value = true
+  uni.showModal({
+    title: '会员卡已入卡包',
+    content: '是否现在预约服务？也可以暂不预约，后续在卡包中继续使用。',
+    confirmText: '立即预约',
+    cancelText: '暂不预约',
+    success: (result) => {
+      if (result.confirm) {
+        uni.switchTab({ url: '/pages/home/index' })
+      }
+      else {
+        uni.redirectTo({ url: '/pages/card/index' })
+      }
+    },
+  })
 }
 
 async function runWechatPay() {
@@ -64,13 +92,16 @@ async function runWechatPay() {
     const payment = await payOrder(id)
     if (payment.status !== 'pending' || !payment.paymentParams) {
       await refreshOrderStatus()
-      uni.showToast({ icon: 'none', title: '订单状态已刷新' })
+      status.value = 'success'
+      promptReserveAfterCardPurchase()
+      uni.showToast({ icon: 'success', title: '支付完成' })
       return
     }
     const params = getWechatPaymentParams(payment)
     await requestWechatPayment(params)
     status.value = 'success'
     uni.showToast({ icon: 'success', title: '支付完成' })
+    promptReserveAfterCardPurchase()
     setTimeout(() => {
       void refreshOrderStatus()
     }, 1200)
@@ -92,8 +123,11 @@ async function runWechatPay() {
 
 onLoad((query) => {
   orderId.value = String(query?.orderId || '')
+  orderType.value = String(query?.orderType || '')
   status.value = ['success', 'fail', 'pending'].includes(String(query?.status)) ? query?.status as any : 'pending'
   amount.value = Number(query?.amount || 0)
+  if (status.value === 'success')
+    promptReserveAfterCardPurchase()
 })
 </script>
 
@@ -128,7 +162,7 @@ onLoad((query) => {
         立即支付
       </button>
       <button class="h-[88rpx] rounded-full bg-white text-[#1677FF] text-[30rpx] flex items-center justify-center" @tap="onDetail">
-        查看订单
+        {{ orderType === 'member_card_purchase' ? '查看卡包' : '查看订单' }}
       </button>
       <button class="h-[88rpx] rounded-full bg-white text-gray-600 text-[30rpx] flex items-center justify-center mt-3" @tap="onHome">
         返回首页
