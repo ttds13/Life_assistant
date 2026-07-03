@@ -4,13 +4,6 @@ import { customTabbarEnable, needHideNativeTabbar, tabbarCacheEnable } from './c
 import { tabbarList, tabbarStore } from './store'
 import TabbarItem from './TabbarItem.vue'
 
-// #ifdef MP-WEIXIN
-// 将自定义节点设置成虚拟的（去掉自定义组件包裹层），更加接近Vue组件的表现，能更好的使用flex属性
-defineOptions({
-  virtualHost: true,
-})
-// #endif
-
 /**
  * 中间的鼓包tabbarItem的点击事件
  */
@@ -18,6 +11,18 @@ function handleClickBulge() {
   uni.showToast({
     title: '点击了中间的鼓包tabbarItem',
     icon: 'none',
+  })
+}
+
+function switchTabbar(url: string) {
+  const previousIndex = tabbarStore.curIdx
+  tabbarStore.setAutoCurIdx(url)
+  uni.switchTab({
+    url,
+    fail(err) {
+      tabbarStore.setCurIdx(previousIndex)
+      console.error('switchTab fail:', err)
+    },
   })
 }
 
@@ -35,11 +40,11 @@ function handleClick(index: number) {
     return
   }
   const url = list[index].pagePath
-  tabbarStore.setCurIdx(index)
   if (tabbarCacheEnable) {
-    uni.switchTab({ url })
+    switchTabbar(url)
   }
   else {
+    tabbarStore.setCurIdx(index)
     uni.navigateTo({ url })
   }
 }

@@ -25,6 +25,10 @@ interface ImportMetaEnv {
   readonly VITE_AUTH_MODE: 'single' | 'double'
   /** 是否清除console */
   readonly VITE_DELETE_CONSOLE: string
+  readonly VITE_LOCAL_DEBUG_LOGIN?: 'true' | 'false'
+  readonly VITE_LOCAL_DEBUG_AUTO_LOGIN?: 'true' | 'false'
+  readonly VITE_LOCAL_DEBUG_LOGIN_PHONE?: string
+  readonly VITE_LOCAL_DEBUG_PAYMENT?: 'true' | 'false'
   // 更多环境变量...
 }
 

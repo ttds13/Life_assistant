@@ -13,6 +13,6 @@ export function getServices(params?: QueryServicesParams) {
 }
 
 // 获取服务详情
-export function getServiceDetail(id: number) {
-  return http.get<Service>(`/services/${id}`)
+export function getServiceDetail(identifier: number | string) {
+  return http.get<Service>(`/services/${encodeURIComponent(String(identifier))}`)
 }

@@ -3,15 +3,19 @@
  * 路由拦截，通常也是登录拦截
  * 黑、白名单的配置，请看 config.ts 文件， EXCLUDE_LOGIN_PATH_LIST
  */
-import { tabbarStore } from '@/tabbar/store'
+import { isPageTabbar, tabbarStore } from '@/tabbar/store'
 import { getLastPage, parseUrlToObj } from '@/utils/index'
+import { isOrderListFilter, saveOrderListFilter } from '@/utils/orderListFilter'
 
 export const FG_LOG_ENABLE = false
 
-export const navigateToInterceptor = {
-  // 注意，这里的url是 '/' 开头的，如 '/pages/index/index'，跟 'pages.json' 里面的 path 不同
-  // 增加对相对路径的处理，BY 网友 @ideal
-  invoke({ url, query }: { url: string, query?: Record<string, string> }) {
+interface RouteInvokeOptions {
+  url: string
+  query?: Record<string, string>
+  method?: 'navigateTo' | 'redirectTo' | 'reLaunch' | 'switchTab' | 'appShow'
+}
+
+function handleRouteInvoke({ url, query, method = 'appShow' }: RouteInvokeOptions) {
     if (url === undefined) {
       return
     }
@@ -44,16 +48,48 @@ export const navigateToInterceptor = {
     //   path = url
     // }
 
+    if (path === '/pages/order/list' && typeof myQuery.status === 'string' && isOrderListFilter(myQuery.status))
+      saveOrderListFilter(myQuery.status)
+
+    const isInvalidTabbarNavigation = (method === 'navigateTo' || method === 'redirectTo') && isPageTabbar(path)
+    if (isInvalidTabbarNavigation) {
+      console.warn(`${method} can not open a tabbar page, use switchTab instead: ${path}`)
+      return false
+    }
+
     // 处理直接进入路由非首页时，tabbarIndex 不正确的问题
     tabbarStore.setAutoCurIdx(path)
+}
+
+export const navigateToInterceptor = {
+  // 注意，这里的url是 '/' 开头的，如 '/pages/index/index'，跟 'pages.json' 里面的 path 不同
+  // 增加对相对路径的处理，BY 网友 @ideal
+  invoke(options: { url: string, query?: Record<string, string> }) {
+    return handleRouteInvoke(options)
   },
 }
 
 export const routeInterceptor = {
   install() {
-    uni.addInterceptor('navigateTo', navigateToInterceptor)
-    uni.addInterceptor('reLaunch', navigateToInterceptor)
-    uni.addInterceptor('redirectTo', navigateToInterceptor)
-    uni.addInterceptor('switchTab', navigateToInterceptor)
+    uni.addInterceptor('navigateTo', {
+      invoke(options: { url: string, query?: Record<string, string> }) {
+        return handleRouteInvoke({ ...options, method: 'navigateTo' })
+      },
+    })
+    uni.addInterceptor('reLaunch', {
+      invoke(options: { url: string, query?: Record<string, string> }) {
+        return handleRouteInvoke({ ...options, method: 'reLaunch' })
+      },
+    })
+    uni.addInterceptor('redirectTo', {
+      invoke(options: { url: string, query?: Record<string, string> }) {
+        return handleRouteInvoke({ ...options, method: 'redirectTo' })
+      },
+    })
+    uni.addInterceptor('switchTab', {
+      invoke(options: { url: string, query?: Record<string, string> }) {
+        return handleRouteInvoke({ ...options, method: 'switchTab' })
+      },
+    })
   },
 }

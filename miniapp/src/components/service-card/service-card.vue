@@ -5,13 +5,13 @@ defineProps<{
   service: Service
 }>()
 
-function onTap(id: number) {
-  uni.navigateTo({ url: `/pages/service/detail?id=${id}` })
-}
+const emit = defineEmits<{
+  tap: [service: Service]
+}>()
 </script>
 
 <template>
-  <view class="bg-white rounded-[16rpx] overflow-hidden mb-3 mx-4" @tap="onTap(service.id)">
+  <view class="bg-white rounded-[16rpx] overflow-hidden mb-3 mx-4" @tap="emit('tap', service)">
     <image
       v-if="service.coverImage"
       :src="service.coverImage"

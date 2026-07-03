@@ -12,6 +12,8 @@ export interface UserProfile {
   phone: string
   nickname: string
   avatar: string
+  avatarOssUrl?: string
+  avatarDisplayUrl?: string
   role: 'user' | 'staff'
 }
 
@@ -21,7 +23,7 @@ export interface WechatLoginParams {
 }
 
 export interface MockLoginParams {
-  phone: string
+  phone?: string
 }
 
 export interface UpdateProfileParams {

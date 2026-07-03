@@ -1,6 +1,8 @@
 <script lang="ts" setup>
-import type { SaveAddressPayload, UserAddress } from '@/api/types/address'
-import { getMockAddresses, saveMockAddresses } from '@/utils/mockDay4'
+import type { SaveAddressPayload } from '@/api/types/address'
+import { createUserAddress, deleteUserAddress, getUserAddress, updateUserAddress } from '@/api/address'
+import { clearSelectedAddress, getSelectedAddress } from '@/utils/addressSelection'
+import { chooseAddressLocation, locateCurrentAddress } from '@/utils/location'
 
 definePage({
   style: {
@@ -9,26 +11,54 @@ definePage({
 })
 
 const addressId = ref<number | null>(null)
+const loading = ref(false)
 const saving = ref(false)
+const deleting = ref(false)
 const form = reactive<SaveAddressPayload>({
   contactName: '',
   contactPhone: '',
+  provinceName: '',
   cityName: '',
   districtName: '',
+  streetName: '',
+  addressTitle: '',
   detailAddress: '',
   houseNumber: '',
+  addressType: 'service',
   isDefault: false,
   latitude: null,
   longitude: null,
+  coordinateType: 'gcj02',
 })
 
 const isEdit = computed(() => !!addressId.value)
 
-function loadAddress(id: number) {
-  const address = getMockAddresses().find(item => item.id === id)
-  if (!address)
-    return
-  Object.assign(form, address)
+async function loadAddress(id: number) {
+  loading.value = true
+  try {
+    const address = await getUserAddress(id)
+    Object.assign(form, {
+      contactName: address.contactName,
+      contactPhone: address.contactPhone,
+      provinceName: address.provinceName || '',
+      cityName: address.cityName || '',
+      districtName: address.districtName || '',
+      streetName: address.streetName || '',
+      addressTitle: address.addressTitle || '',
+      detailAddress: address.detailAddress,
+      houseNumber: address.houseNumber || '',
+      addressType: address.addressType || 'service',
+      isDefault: address.isDefault,
+      latitude: address.latitude ?? null,
+      longitude: address.longitude ?? null,
+      coordinateType: address.coordinateType || 'gcj02',
+      poiId: address.poiId || undefined,
+      mapProvider: address.mapProvider || undefined,
+    })
+  }
+  finally {
+    loading.value = false
+  }
 }
 
 function validate() {
@@ -41,22 +71,28 @@ function validate() {
   return ''
 }
 
-function normalizeAddress(id: number): UserAddress {
+function payload(): SaveAddressPayload {
   return {
-    id,
     contactName: form.contactName.trim(),
     contactPhone: form.contactPhone.trim(),
-    cityName: form.cityName?.trim() || '城市待选择',
-    districtName: form.districtName?.trim() || '',
+    provinceName: form.provinceName?.trim() || undefined,
+    cityName: form.cityName?.trim() || undefined,
+    districtName: form.districtName?.trim() || undefined,
+    streetName: form.streetName?.trim() || undefined,
+    addressTitle: form.addressTitle?.trim() || undefined,
     detailAddress: form.detailAddress.trim(),
-    houseNumber: form.houseNumber?.trim() || '',
+    houseNumber: form.houseNumber?.trim() || undefined,
+    addressType: 'service',
     isDefault: !!form.isDefault,
     latitude: form.latitude ?? null,
     longitude: form.longitude ?? null,
+    coordinateType: form.coordinateType || 'gcj02',
+    poiId: form.poiId,
+    mapProvider: form.mapProvider,
   }
 }
 
-function onSave() {
+async function onSave() {
   const message = validate()
   if (message) {
     uni.showToast({ icon: 'none', title: message })
@@ -64,26 +100,38 @@ function onSave() {
   }
 
   saving.value = true
-  const list = getMockAddresses()
-  const id = addressId.value || Date.now()
-  const nextAddress = normalizeAddress(id)
-  const nextList = list.filter(item => item.id !== id)
-
-  if (nextAddress.isDefault) {
-    nextList.forEach((item) => {
-      item.isDefault = false
-    })
-  }
-  else if (nextList.length === 0) {
-    nextAddress.isDefault = true
-  }
-
-  saveMockAddresses([nextAddress, ...nextList])
-  setTimeout(() => {
-    saving.value = false
+  try {
+    if (addressId.value) {
+      await updateUserAddress(addressId.value, payload())
+    }
+    else {
+      await createUserAddress(payload())
+    }
     uni.showToast({ icon: 'success', title: '已保存' })
     uni.navigateBack()
-  }, 300)
+  }
+  finally {
+    saving.value = false
+  }
+}
+
+async function applyLocation(patch: Partial<SaveAddressPayload> | null) {
+  if (!patch) {
+    uni.showToast({ icon: 'none', title: '未获取到地址' })
+    return
+  }
+  Object.assign(form, {
+    ...patch,
+    detailAddress: patch.detailAddress || form.detailAddress,
+  })
+}
+
+async function onLocateCurrent() {
+  await applyLocation(await locateCurrentAddress())
+}
+
+async function onChooseLocation() {
+  await applyLocation(await chooseAddressLocation())
 }
 
 function onDelete() {
@@ -92,15 +140,20 @@ function onDelete() {
   uni.showModal({
     title: '删除地址',
     content: '确定删除这个地址吗？',
-    success: (res) => {
-      if (!res.confirm)
+    success: async (res) => {
+      if (!res.confirm || !addressId.value)
         return
-      const nextList = getMockAddresses().filter(item => item.id !== addressId.value)
-      if (nextList.length > 0 && !nextList.some(item => item.isDefault))
-        nextList[0].isDefault = true
-      saveMockAddresses(nextList)
-      uni.showToast({ icon: 'success', title: '已删除' })
-      uni.navigateBack()
+      deleting.value = true
+      try {
+        await deleteUserAddress(addressId.value)
+        if (getSelectedAddress()?.id === addressId.value)
+          clearSelectedAddress()
+        uni.showToast({ icon: 'success', title: '已删除' })
+        uni.navigateBack()
+      }
+      finally {
+        deleting.value = false
+      }
     },
   })
 }
@@ -109,56 +162,83 @@ onLoad((query) => {
   const id = Number(query?.id)
   if (id) {
     addressId.value = id
-    loadAddress(id)
+    void loadAddress(id)
   }
 })
 </script>
 
 <template>
   <view class="min-h-screen bg-[#F5F7FA] pb-[160rpx] pt-1">
-    <form-section title="联系人信息" required>
-      <view class="flex items-center py-3 border-b border-[#F3F4F6]">
-        <text class="w-[160rpx] text-[28rpx] text-gray-700">联系人</text>
-        <input v-model="form.contactName" class="flex-1 text-[28rpx]" placeholder="请填写联系人" />
-      </view>
-      <view class="flex items-center py-3">
-        <text class="w-[160rpx] text-[28rpx] text-gray-700">手机号</text>
-        <input v-model="form.contactPhone" class="flex-1 text-[28rpx]" type="number" :maxlength="11" placeholder="请填写手机号" />
-      </view>
-    </form-section>
+    <loading-state :loading="loading">
+      <form-section title="联系人信息" required>
+        <view class="flex items-center py-3 border-b border-[#F3F4F6]">
+          <text class="w-[160rpx] text-[28rpx] text-gray-700">联系人</text>
+          <input v-model="form.contactName" class="flex-1 text-[28rpx]" placeholder="请填写联系人" />
+        </view>
+        <view class="flex items-center py-3">
+          <text class="w-[160rpx] text-[28rpx] text-gray-700">手机号</text>
+          <input v-model="form.contactPhone" class="flex-1 text-[28rpx]" type="number" :maxlength="11" placeholder="请填写手机号" />
+        </view>
+      </form-section>
 
-    <form-section title="服务地址" required subtitle="城市/区域后续接入选择器">
-      <view class="flex items-center py-3 border-b border-[#F3F4F6]">
-        <text class="w-[160rpx] text-[28rpx] text-gray-700">城市</text>
-        <input v-model="form.cityName" class="flex-1 text-[28rpx]" placeholder="城市待选择" />
-      </view>
-      <view class="flex items-center py-3 border-b border-[#F3F4F6]">
-        <text class="w-[160rpx] text-[28rpx] text-gray-700">区域</text>
-        <input v-model="form.districtName" class="flex-1 text-[28rpx]" placeholder="区域待选择" />
-      </view>
-      <view class="py-3 border-b border-[#F3F4F6]">
-        <text class="text-[28rpx] text-gray-700 block mb-2">详细地址</text>
-        <textarea v-model="form.detailAddress" class="w-full min-h-[120rpx] text-[28rpx]" placeholder="请输入街道、小区、楼栋等" />
-      </view>
-      <view class="flex items-center py-3">
-        <text class="w-[160rpx] text-[28rpx] text-gray-700">门牌号</text>
-        <input v-model="form.houseNumber" class="flex-1 text-[28rpx]" placeholder="例：8 栋 1201" />
-      </view>
-    </form-section>
+      <form-section title="服务地址" required>
+        <view class="grid grid-cols-2 gap-2 pb-3 border-b border-[#F3F4F6]">
+          <button class="h-[72rpx] rounded-[12rpx] bg-[#EAF3FF] text-[#1677FF] text-[26rpx]" @tap="onLocateCurrent">
+            定位当前地址
+          </button>
+          <button class="h-[72rpx] rounded-[12rpx] bg-[#F3F4F6] text-[#374151] text-[26rpx]" @tap="onChooseLocation">
+            地图选点
+          </button>
+        </view>
+        <view class="flex items-center py-3 border-b border-[#F3F4F6]">
+          <text class="w-[160rpx] text-[28rpx] text-gray-700">省份</text>
+          <input v-model="form.provinceName" class="flex-1 text-[28rpx]" placeholder="例如：山东省" />
+        </view>
+        <view class="flex items-center py-3 border-b border-[#F3F4F6]">
+          <text class="w-[160rpx] text-[28rpx] text-gray-700">城市</text>
+          <input v-model="form.cityName" class="flex-1 text-[28rpx]" placeholder="例如：青岛市" />
+        </view>
+        <view class="flex items-center py-3 border-b border-[#F3F4F6]">
+          <text class="w-[160rpx] text-[28rpx] text-gray-700">区县</text>
+          <input v-model="form.districtName" class="flex-1 text-[28rpx]" placeholder="例如：黄岛区" />
+        </view>
+        <view class="flex items-center py-3 border-b border-[#F3F4F6]">
+          <text class="w-[160rpx] text-[28rpx] text-gray-700">街道</text>
+          <input v-model="form.streetName" class="flex-1 text-[28rpx]" placeholder="街道/道路" />
+        </view>
+        <view class="flex items-center py-3 border-b border-[#F3F4F6]">
+          <text class="w-[160rpx] text-[28rpx] text-gray-700">位置</text>
+          <input v-model="form.addressTitle" class="flex-1 text-[28rpx]" placeholder="小区/写字楼/学校" />
+        </view>
+        <view class="py-3 border-b border-[#F3F4F6]">
+          <text class="text-[28rpx] text-gray-700 block mb-2">详细地址</text>
+          <textarea v-model="form.detailAddress" class="w-full min-h-[120rpx] text-[28rpx]" placeholder="请输入楼栋、单元、楼层等" />
+        </view>
+        <view class="flex items-center py-3">
+          <text class="w-[160rpx] text-[28rpx] text-gray-700">门牌号</text>
+          <input v-model="form.houseNumber" class="flex-1 text-[28rpx]" placeholder="例如：8 栋 1201" />
+        </view>
+      </form-section>
 
-    <view class="bg-white rounded-[16rpx] mx-4 mt-3 p-4 flex items-center justify-between">
-      <view>
-        <text class="text-[30rpx] font-600 text-gray-800 block">设为默认地址</text>
-        <text class="text-[24rpx] text-gray-400 block mt-1">下单时优先使用该地址</text>
+      <view class="bg-white rounded-[16rpx] mx-4 mt-3 p-4 flex items-center justify-between">
+        <view>
+          <text class="text-[30rpx] font-600 text-gray-800 block">设为默认地址</text>
+          <text class="text-[24rpx] text-gray-400 block mt-1">下单时优先使用该地址</text>
+        </view>
+        <switch :checked="form.isDefault" color="#1677FF" @change="form.isDefault = $event.detail.value" />
       </view>
-      <switch :checked="form.isDefault" color="#1677FF" @change="form.isDefault = $event.detail.value" />
-    </view>
 
-    <view v-if="isEdit" class="mx-4 mt-6">
-      <button class="h-[80rpx] rounded-[16rpx] bg-white text-[#EF4444] text-[28rpx] flex items-center justify-center" @tap="onDelete">
-        删除地址
-      </button>
-    </view>
+      <view v-if="isEdit" class="mx-4 mt-6">
+        <button
+          class="h-[80rpx] rounded-[16rpx] bg-white text-[#EF4444] text-[28rpx] flex items-center justify-center"
+          :loading="deleting"
+          :disabled="deleting"
+          @tap="onDelete"
+        >
+          删除地址
+        </button>
+      </view>
+    </loading-state>
 
     <bottom-action-bar primary-text="保存地址" :loading="saving" @primary="onSave" />
   </view>

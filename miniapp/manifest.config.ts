@@ -119,6 +119,12 @@ export default defineManifestConfig({
   /* 小程序特有相关 */
   'mp-weixin': {
     appid: VITE_WX_APPID,
+    permission: {
+      'scope.userLocation': {
+        desc: '用于定位服务地址和选择地图位置',
+      },
+    },
+    requiredPrivateInfos: ['getLocation', 'chooseLocation'],
     setting: {
       urlCheck: false,
       // 是否启用 ES6 转 ES5
@@ -128,9 +134,8 @@ export default defineManifestConfig({
     optimization: {
       subPackages: true,
     },
-    // 是否合并组件虚拟节点外层属性，uni-app 3.5.1+ 开始支持。目前仅支持 style、class 属性。
-    // 默认不开启（undefined），这里设置为开启。
-    mergeVirtualHostAttributes: true,
+    // 微信开发者工具 3.15.x 下合并虚拟节点属性可能触发渲染层 FLOW_CREATE_NODE 错误。
+    mergeVirtualHostAttributes: false,
     // styleIsolation: 'shared',
     usingComponents: true,
     // __usePrivacyCheck__: true,

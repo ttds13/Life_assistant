@@ -5,7 +5,7 @@ export function wechatLogin(params: WechatLoginParams) {
   return http.post<LoginResult>('/auth/wechat-login', params)
 }
 
-export function mockLogin(params: MockLoginParams) {
+export function mockLogin(params?: MockLoginParams) {
   return http.post<LoginResult>('/auth/mock-login', params)
 }
 
@@ -28,6 +28,11 @@ export function getMe() {
   return http.get<UserProfile>('/auth/me')
 }
 
-export function updateProfile(params: UpdateProfileParams) {
-  return http.put<UserProfile>('/auth/profile', params)
+export function updateProfile(params: UpdateProfileParams, header?: Record<string, string>) {
+  return http.put<UserProfile>(
+    '/auth/profile',
+    params,
+    undefined,
+    header,
+  )
 }

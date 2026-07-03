@@ -12,11 +12,24 @@ definePage({
 const tokenStore = useTokenStore()
 const service = ref<Service | null>(null)
 const loading = ref(true)
+const memberCardId = ref<number | undefined>()
+const memberCardName = ref('')
+const source = ref('')
+const promotionKey = ref('')
+const campaignId = ref('')
 
-onLoad((query) => {
+onLoad(async (query) => {
+  const code = typeof query?.code === 'string' ? decodeURIComponent(query.code) : ''
   const id = Number(query?.id)
-  if (id) {
-    getServiceDetail(id)
+  const cardId = Number(query?.memberCardId)
+  memberCardId.value = Number.isInteger(cardId) && cardId > 0 ? cardId : undefined
+  memberCardName.value = typeof query?.memberCardName === 'string' ? decodeURIComponent(query.memberCardName) : ''
+  source.value = typeof query?.source === 'string' ? decodeURIComponent(query.source) : ''
+  promotionKey.value = typeof query?.promotionKey === 'string' ? decodeURIComponent(query.promotionKey) : ''
+  campaignId.value = typeof query?.campaignId === 'string' ? decodeURIComponent(query.campaignId) : ''
+  const identifier = code || (Number.isInteger(id) && id > 0 ? id : '')
+  if (identifier) {
+    getServiceDetail(identifier)
       .then((res) => { service.value = res })
       .catch(() => {})
       .finally(() => { loading.value = false })
@@ -27,13 +40,42 @@ onLoad((query) => {
 })
 
 function onBook() {
-  if (!tokenStore.hasLogin) {
-    uni.navigateTo({ url: `/pages/login/index?redirect=${encodeURIComponent(`/pages/order/create?serviceId=${service.value?.id || ''}`)}` })
-    return
-  }
   if (!service.value)
     return
-  uni.navigateTo({ url: `/pages/order/create?serviceId=${service.value.id}` })
+
+  const params = [
+    service.value.code ? `serviceCode=${encodeURIComponent(service.value.code)}` : '',
+    `serviceId=${service.value.id}`,
+    `serviceName=${encodeURIComponent(service.value.name)}`,
+    memberCardId.value ? `memberCardId=${encodeURIComponent(String(memberCardId.value))}` : '',
+    memberCardName.value ? `memberCardName=${encodeURIComponent(memberCardName.value)}` : '',
+    source.value ? `source=${encodeURIComponent(source.value)}` : '',
+    promotionKey.value ? `promotionKey=${encodeURIComponent(promotionKey.value)}` : '',
+    campaignId.value ? `campaignId=${encodeURIComponent(campaignId.value)}` : '',
+  ].filter(Boolean).join('&')
+  const bookingQuery = `/pages/order/create?${params}`
+
+  if (!tokenStore.hasLogin) {
+    uni.navigateTo({ url: `/pages/login/index?redirect=${encodeURIComponent(bookingQuery)}` })
+    return
+  }
+
+  uni.navigateTo({ url: bookingQuery })
+}
+
+function onSkipBook() {
+  const pages = getCurrentPages()
+  if (pages.length > 1) {
+    uni.navigateBack()
+    return
+  }
+
+  if (memberCardId.value) {
+    uni.redirectTo({ url: '/pages/card/index' })
+    return
+  }
+
+  uni.switchTab({ url: '/pages/home/index' })
 }
 </script>
 
@@ -58,7 +100,7 @@ function onBook() {
 
         <form-section title="服务范围">
           <text class="text-[28rpx] text-gray-700 leading-[42rpx]">
-            服务范围待补充。当前可先按服务项目说明展示，后续由后台配置具体服务边界、不可服务内容和加价规则。
+            请以服务项目说明和下单页展示的信息为准。
           </text>
         </form-section>
 
@@ -77,13 +119,13 @@ function onBook() {
 
         <form-section title="服务须知">
           <text class="text-[28rpx] text-gray-700 leading-[42rpx]">
-            服务须知待补充。后续可补充预约改期、取消规则、上门准备事项和售后说明。
+            下单前请确认服务地址、预约时间和服务项目。订单提交后可在订单详情中查看进度。
           </text>
         </form-section>
 
-        <form-section title="用户评价" subtitle="后续接入">
+        <form-section title="用户评价">
           <view class="rounded-[12rpx] bg-[#F9FAFB] p-3">
-            <text class="text-[26rpx] text-gray-500">评价摘要待接入，当前先保留入口。</text>
+            <text class="text-[26rpx] text-gray-500">暂无评价</text>
           </view>
         </form-section>
       </view>
@@ -97,7 +139,9 @@ function onBook() {
       :price="service.basePrice"
       price-label="起步价"
       primary-text="立即预约"
+      secondary-text="暂不预约"
       @primary="onBook"
+      @secondary="onSkipBook"
     />
   </view>
 </template>

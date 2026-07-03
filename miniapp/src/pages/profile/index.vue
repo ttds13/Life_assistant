@@ -1,7 +1,11 @@
 <script lang="ts" setup>
+import { logoutSession } from '@/api/auth'
+import { getMyMemberCards } from '@/api/memberCards'
+import { getOrders } from '@/api/orders'
+import type { OrderStatus } from '@/api/types/orders'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
-import { logoutSession } from '@/api/auth'
+import { saveOrderListFilter } from '@/utils/orderListFilter'
 
 definePage({
   style: {
@@ -13,10 +17,11 @@ definePage({
 
 const tokenStore = useTokenStore()
 const userStore = useUserStore()
+const staffEntering = ref(false)
 
-type StatAction = 'wallet' | 'card' | 'coupon'
+type StatAction = 'card' | 'coupon'
 type OrderAction = 'all' | 'pendingPayment' | 'pendingDispatch' | 'pendingConfirm' | 'pendingReview' | 'afterSales'
-type AppAction = 'address' | 'applyStaff' | 'applyPartner' | 'faq' | 'customerService' | 'feedback' | 'settings'
+type AppAction = 'address' | 'staffWorkbench' | 'applyStaff' | 'applyPartner' | 'faq' | 'customerService' | 'feedback' | 'settings'
 
 interface StatEntry {
   label: string
@@ -39,21 +44,23 @@ interface AppEntry {
   auth: boolean
 }
 
-const mockProfileStats = {
-  walletBalance: 0,
+const emptyProfileStats = {
   cardCount: 0,
   couponCount: 0,
 }
 
-const mockOrderStats = {
-  pendingPayment: 1,
-  pendingDispatch: 1,
-  pendingConfirm: 1,
-  pendingReview: 1,
+type OrderStats = Record<Exclude<OrderAction, 'all'>, number>
+
+const emptyOrderStats: OrderStats = {
+  pendingPayment: 0,
+  pendingDispatch: 0,
+  pendingConfirm: 0,
+  pendingReview: 0,
   afterSales: 0,
 }
 
-const profileStats = computed(() => mockProfileStats)
+const profileStats = ref({ ...emptyProfileStats })
+const orderStats = ref<OrderStats>({ ...emptyOrderStats })
 
 const displayName = computed(() => {
   if (!tokenStore.hasLogin)
@@ -64,15 +71,10 @@ const displayName = computed(() => {
 const displayPhone = computed(() => {
   if (!tokenStore.hasLogin)
     return '点击登录后查看个人信息'
-  return formatPhone(userStore.userInfo.phone) || '未绑定手机号'
+  return userStore.userInfo.phone || '未绑定手机号'
 })
 
 const statEntries = computed<StatEntry[]>(() => [
-  {
-    label: '钱包余额',
-    action: 'wallet',
-    value: tokenStore.hasLogin ? formatMoney(profileStats.value.walletBalance) : '--',
-  },
   {
     label: '我的卡包',
     action: 'card',
@@ -86,15 +88,16 @@ const statEntries = computed<StatEntry[]>(() => [
 ])
 
 const orderEntries = computed<OrderEntry[]>(() => [
-  { label: '待付款', action: 'pendingPayment', icon: 'i-carbon-wallet', count: mockOrderStats.pendingPayment },
-  { label: '待接单', action: 'pendingDispatch', icon: 'i-carbon-time', count: mockOrderStats.pendingDispatch },
-  { label: '待验收', action: 'pendingConfirm', icon: 'i-carbon-document-tasks', count: mockOrderStats.pendingConfirm },
-  { label: '待评价', action: 'pendingReview', icon: 'i-carbon-chat', count: mockOrderStats.pendingReview },
-  { label: '售后', action: 'afterSales', icon: 'i-carbon-shopping-bag', count: mockOrderStats.afterSales },
+  { label: '待付款', action: 'pendingPayment', icon: 'i-carbon-wallet', count: orderStats.value.pendingPayment },
+  { label: '待接单', action: 'pendingDispatch', icon: 'i-carbon-time', count: orderStats.value.pendingDispatch },
+  { label: '待验收', action: 'pendingConfirm', icon: 'i-carbon-document-tasks', count: orderStats.value.pendingConfirm },
+  { label: '待评价', action: 'pendingReview', icon: 'i-carbon-chat', count: orderStats.value.pendingReview },
+  { label: '售后', action: 'afterSales', icon: 'i-carbon-shopping-bag', count: orderStats.value.afterSales },
 ])
 
 const appEntries: AppEntry[] = [
   { label: '我的地址', action: 'address', icon: 'i-carbon-location', color: '#1677FF', auth: true },
+  { label: '师傅端', action: 'staffWorkbench', icon: 'i-carbon-user-certification', color: '#FF373D', auth: true },
   { label: '申请师傅', action: 'applyStaff', icon: 'i-carbon-user-role', color: '#20C997', auth: true },
   { label: '申请合作商', action: 'applyPartner', icon: 'i-carbon-store', color: '#FF7A59', auth: true },
   { label: '常见问题', action: 'faq', icon: 'i-carbon-help', color: '#4D8DFF', auth: false },
@@ -102,6 +105,14 @@ const appEntries: AppEntry[] = [
   { label: '问题反馈', action: 'feedback', icon: 'i-carbon-user-feedback', color: '#EC4899', auth: true },
   { label: '设置', action: 'settings', icon: 'i-carbon-settings', color: '#8B5CF6', auth: true },
 ]
+
+const displayAppEntries = computed(() => {
+  return appEntries.filter((item) => {
+    if (item.action !== 'staffWorkbench')
+      return true
+    return userStore.userInfo.role === 'staff'
+  })
+})
 
 function onLogin() {
   uni.navigateTo({ url: '/pages/login/index' })
@@ -115,36 +126,30 @@ function requireLogin(next: () => void) {
   next()
 }
 
+function goSettings() {
+  requireLogin(() => {
+    uni.navigateTo({ url: '/pages/settings/index' })
+  })
+}
+
 function onLogout() {
   uni.showModal({
     title: '提示',
     content: '确定退出登录？',
     success: async (res) => {
-      if (res.confirm) {
-        const refreshToken = tokenStore.tokenInfo.refreshToken
-        if (refreshToken) {
-          logoutSession(refreshToken).catch(() => {})
-        }
-        tokenStore.logout()
-        uni.showToast({ icon: 'success', title: '已退出' })
-      }
+      if (!res.confirm)
+        return
+
+      const refreshToken = tokenStore.tokenInfo.refreshToken
+      if (refreshToken)
+        logoutSession(refreshToken).catch(() => {})
+
+      tokenStore.logout()
+      profileStats.value = { ...emptyProfileStats }
+      orderStats.value = { ...emptyOrderStats }
+      uni.showToast({ icon: 'success', title: '已退出' })
     },
   })
-}
-
-function formatPhone(phone: string) {
-  if (!phone)
-    return ''
-  if (phone.length < 7)
-    return phone
-  return `${phone.slice(0, 3)}****${phone.slice(-4)}`
-}
-
-function formatMoney(value: number) {
-  const amount = Number(value)
-  if (Number.isNaN(amount))
-    return '0.00'
-  return amount.toFixed(2)
 }
 
 function formatBadge(count: number) {
@@ -157,41 +162,115 @@ function showPendingToast(title: string) {
   uni.showToast({ icon: 'none', title })
 }
 
-function onProfileTap() {
-  if (!tokenStore.hasLogin)
-    onLogin()
+async function loadOrderStats() {
+  if (!tokenStore.hasLogin) {
+    orderStats.value = { ...emptyOrderStats }
+    return
+  }
+
+  try {
+    const result = await getOrders({ page: 1, pageSize: 100 })
+    const count = (statuses: OrderStatus[]) => result.items.filter(item => statuses.includes(item.status)).length
+    orderStats.value = {
+      pendingPayment: count(['pending_payment']),
+      pendingDispatch: count(['pending_dispatch']),
+      pendingConfirm: count(['pending_confirm']),
+      pendingReview: count(['completed']),
+      afterSales: count(['after_sales', 'refund_pending', 'refunded']),
+    }
+  }
+  catch {
+    orderStats.value = { ...emptyOrderStats }
+  }
 }
 
-function onStatTap(action: StatAction) {
-  requireLogin(() => {
-    const titleMap: Record<StatAction, string> = {
-      wallet: '钱包功能待完善',
-      card: '卡包功能待完善',
-      coupon: '优惠券功能待完善',
+async function loadProfileStats() {
+  if (!tokenStore.hasLogin) {
+    profileStats.value = { ...emptyProfileStats }
+    return
+  }
+
+  try {
+    const cards = await getMyMemberCards()
+    profileStats.value = {
+      ...profileStats.value,
+      cardCount: cards.length,
     }
-    showPendingToast(titleMap[action])
+  }
+  catch {
+    profileStats.value = {
+      ...profileStats.value,
+      cardCount: 0,
+    }
+  }
+}
+
+async function refreshUserProfile() {
+  if (!tokenStore.hasLogin)
+    return
+
+  try {
+    await userStore.fetchUserInfo()
+  }
+  catch {
+  }
+}
+
+function onProfileTap() {
+  goSettings()
+}
+
+function goCardPage() {
+  requireLogin(() => {
+    uni.navigateTo({ url: '/pages/card/index' })
   })
+}
+
+function goCouponPage() {
+  requireLogin(() => {
+    uni.navigateTo({ url: '/pages/coupon/index' })
+  })
+}
+
+function onStatEntryTap(action: StatAction) {
+  if (action === 'card') {
+    goCardPage()
+    return
+  }
+  goCouponPage()
 }
 
 function goOrderList(action: OrderAction = 'all') {
   requireLogin(() => {
-    const statusMap: Partial<Record<OrderAction, string>> = {
+    const statusMap: Partial<Record<OrderAction, OrderStatus>> = {
       pendingPayment: 'pending_payment',
       pendingDispatch: 'pending_dispatch',
       pendingConfirm: 'pending_confirm',
       pendingReview: 'completed',
+      afterSales: 'after_sales',
     }
 
-    if (action === 'afterSales') {
-      showPendingToast('售后功能待完善')
-      return
-    }
-
-    const status = statusMap[action]
-    uni.navigateTo({
-      url: status ? `/pages/order/list?status=${status}` : '/pages/order/list',
+    saveOrderListFilter(statusMap[action] || 'all')
+    uni.switchTab({
+      url: '/pages/order/list',
+      fail: (err) => {
+        console.error('跳转订单页失败:', err)
+        uni.showToast({ icon: 'none', title: '订单页跳转失败' })
+      },
     })
   })
+}
+
+async function enterStaffWorkbench() {
+  if (staffEntering.value)
+    return
+  staffEntering.value = true
+  try {
+    uni.navigateTo({ url: '/pages/staff/home' })
+  }
+  finally {
+    staffEntering.value = false
+  }
 }
 
 function onAppTap(item: AppEntry) {
@@ -205,24 +284,43 @@ function onAppTap(item: AppEntry) {
     return
   }
 
-  const titleMap: Record<Exclude<AppAction, 'address'>, string> = {
-    applyStaff: '申请师傅功能待完善',
-    applyPartner: '申请合作商功能待完善',
+  if (item.action === 'staffWorkbench') {
+    if (userStore.userInfo.role !== 'staff') {
+      showPendingToast('当前账号暂未开通师傅端')
+      return
+    }
+    enterStaffWorkbench()
+    return
+  }
+
+  if (item.action === 'settings') {
+    uni.navigateTo({ url: '/pages/settings/index' })
+    return
+  }
+
+  const titleMap: Record<Exclude<AppAction, 'address' | 'staffWorkbench' | 'settings'>, string> = {
+    applyStaff: '请联系客服申请',
+    applyPartner: '请联系客服申请',
     faq: '常见问题待配置',
     customerService: '客服信息待配置',
-    feedback: '问题反馈功能待完善',
-    settings: '设置功能待完善',
+    feedback: '请联系客服反馈',
   }
   showPendingToast(titleMap[item.action])
 }
+
+onShow(() => {
+  refreshUserProfile()
+  loadProfileStats()
+  loadOrderStats()
+})
 </script>
 
 <template>
   <view class="min-h-screen bg-[#F5F7FA] pb-[150rpx]">
     <view class="pt-safe px-4 pt-4">
       <view class="bg-white rounded-[28rpx] px-4 pt-5 pb-4 shadow-sm">
-        <view class="flex items-center" @tap="onProfileTap">
-          <view class="w-[128rpx] h-[128rpx] rounded-full bg-[#EAF3FF] center overflow-hidden shrink-0">
+        <view class="flex items-center">
+          <view class="w-[128rpx] h-[128rpx] rounded-full bg-[#EAF3FF] center overflow-hidden shrink-0" @tap="onProfileTap">
             <image
               v-if="tokenStore.hasLogin && userStore.userInfo.avatar"
               :src="userStore.userInfo.avatar"
@@ -235,9 +333,12 @@ function onAppTap(item: AppEntry) {
           </view>
 
           <view class="ml-4 min-w-0 flex-1">
-            <text class="block truncate text-[42rpx] leading-[52rpx] text-[#1F2937] font-700">
-              {{ displayName }}
-            </text>
+            <view class="flex items-center gap-2" @tap="goSettings">
+              <text class="block truncate text-[42rpx] leading-[52rpx] text-[#1F2937] font-700">
+                {{ displayName }}
+              </text>
+              <text v-if="tokenStore.hasLogin" class="i-carbon-chevron-right text-[32rpx] text-[#9CA3AF] shrink-0" />
+            </view>
             <view class="mt-2 flex items-center min-w-0">
               <text class="i-carbon-phone text-[28rpx] text-[#9CA3AF] mr-2 shrink-0" />
               <text class="truncate text-[28rpx] leading-[36rpx] text-[#6B7280]">
@@ -252,7 +353,7 @@ function onAppTap(item: AppEntry) {
             v-for="(item, index) in statEntries"
             :key="item.action"
             class="relative flex-1 center flex-col min-w-0"
-            @tap="onStatTap(item.action)"
+            @tap="onStatEntryTap(item.action)"
           >
             <view v-if="index > 0" class="absolute left-0 top-[24rpx] w-[1rpx] h-[56rpx] bg-[#E5E7EB]" />
             <text class="max-w-full truncate text-[40rpx] leading-[50rpx] text-[#1677FF] font-700">
@@ -304,7 +405,7 @@ function onAppTap(item: AppEntry) {
 
         <view class="mt-5 flex flex-wrap">
           <view
-            v-for="item in appEntries"
+            v-for="item in displayAppEntries"
             :key="item.action"
             class="w-1/4 h-[156rpx] center flex-col"
             @tap="onAppTap(item)"

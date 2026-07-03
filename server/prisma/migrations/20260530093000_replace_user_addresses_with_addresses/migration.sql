@@ -1,0 +1,38 @@
+DROP TABLE IF EXISTS `user_addresses`;
+
+CREATE TABLE `addresses` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `uuid` VARCHAR(36) NOT NULL,
+    `owner_type` VARCHAR(16) NOT NULL,
+    `owner_id` BIGINT NOT NULL,
+    `address_type` VARCHAR(32) NOT NULL DEFAULT 'service',
+    `contact_name` VARCHAR(64) NOT NULL,
+    `contact_phone` VARCHAR(20) NOT NULL,
+    `country` VARCHAR(32) NULL,
+    `province` VARCHAR(32) NULL,
+    `city` VARCHAR(32) NULL,
+    `district` VARCHAR(32) NULL,
+    `street` VARCHAR(64) NULL,
+    `address_title` VARCHAR(128) NULL,
+    `detail_address` VARCHAR(256) NOT NULL,
+    `house_number` VARCHAR(64) NULL,
+    `formatted_address` VARCHAR(512) NOT NULL,
+    `latitude` DECIMAL(10, 7) NULL,
+    `longitude` DECIMAL(10, 7) NULL,
+    `coordinate_type` VARCHAR(16) NULL,
+    `poi_id` VARCHAR(128) NULL,
+    `map_provider` VARCHAR(16) NULL,
+    `is_default` BOOLEAN NOT NULL DEFAULT false,
+    `source` VARCHAR(16) NOT NULL DEFAULT 'manual',
+    `status` SMALLINT NOT NULL DEFAULT 1,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at` DATETIME(3) NOT NULL,
+    `deleted_at` DATETIME(3) NULL,
+
+    UNIQUE INDEX `addresses_uuid_key`(`uuid`),
+    INDEX `addresses_owner_type_owner_id_idx`(`owner_type`, `owner_id`),
+    INDEX `addresses_owner_type_owner_id_address_type_idx`(`owner_type`, `owner_id`, `address_type`),
+    INDEX `addresses_city_district_idx`(`city`, `district`),
+    INDEX `addresses_latitude_longitude_idx`(`latitude`, `longitude`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

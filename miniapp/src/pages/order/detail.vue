@@ -1,7 +1,9 @@
 <script lang="ts" setup>
+import { cancelOrder, confirmOrder, getOrderDetail, payOrder, rescheduleOrder } from '@/api/orders'
 import type { OrderDetail } from '@/api/types/orders'
-import { getMockOrderDetail } from '@/utils/mockDay4'
+import { availableAppointmentSlots, buildAppointmentDateOptions, formatAppointmentDate, formatAppointmentTimeSlot } from '@/utils/appointmentSlots'
 import { ensureChineseStatusLabel, getOrderStatusText } from '@/utils/orderStatus'
+import { getWechatPaymentParams, requestWechatPayment } from '@/utils/wechatPayment'
 
 definePage({
   style: {
@@ -13,6 +15,11 @@ const orderId = ref(0)
 const order = ref<OrderDetail | null>(null)
 const loading = ref(true)
 const actionLoading = ref(false)
+const payLoading = ref(false)
+const rescheduleVisible = ref(false)
+const rescheduleLoading = ref(false)
+const selectedDate = ref('')
+const selectedTimeSlot = ref('')
 
 const statusInfo = computed(() => {
   const status = order.value?.status
@@ -34,6 +41,8 @@ const statusInfo = computed(() => {
       return { title: '已完成', desc: '感谢使用生活助手服务', next: '可评价或申请售后' }
     case 'cancelled':
       return { title: '已取消', desc: '该订单已取消', next: '可再次预约服务' }
+    case 'refund_pending':
+      return { title: '退款审核中', desc: '已提交退款审核，请等待后台处理', next: '下一步：等待退款审核' }
     default:
       return { title: getOrderStatusText(status), desc: '订单状态待刷新', next: '请稍后查看' }
   }
@@ -44,6 +53,8 @@ const actionConfig = computed(() => {
   switch (status) {
     case 'pending_payment':
       return { primary: '去支付', secondary: '取消订单' }
+    case 'pending_dispatch':
+      return { primary: '查看进度', secondary: '取消预约' }
     case 'pending_confirm':
       return { primary: '确认完成', secondary: '申请售后' }
     case 'completed':
@@ -55,65 +66,170 @@ const actionConfig = computed(() => {
   }
 })
 
-function loadOrder() {
+const canReschedule = computed(() =>
+  !!order.value
+  && ['pending_payment', 'pending_dispatch'].includes(order.value.status)
+  && order.value.orderType !== 'member_card_purchase',
+)
+const dateOptions = computed(() => buildAppointmentDateOptions())
+const timeSlots = computed(() => availableAppointmentSlots(selectedDate.value))
+const isPaidCashBooking = computed(() =>
+  !!order.value
+  && order.value.status === 'pending_dispatch'
+  && !order.value.memberCardId
+  && (Boolean(order.value.paidAt) || order.value.paidAmount > 0 || order.value.payableAmount > 0),
+)
+
+async function loadOrder() {
   loading.value = true
-  // TODO: 接入 GET /orders/:id
-  order.value = getMockOrderDetail(orderId.value || 101)
-  loading.value = false
+  try {
+    order.value = await getOrderDetail(orderId.value)
+  }
+  finally {
+    loading.value = false
+  }
+}
+
+function openReschedulePanel() {
+  if (!order.value || !canReschedule.value)
+    return
+  const start = order.value.appointmentStartTime ? new Date(order.value.appointmentStartTime) : null
+  const end = order.value.appointmentEndTime ? new Date(order.value.appointmentEndTime) : null
+  selectedDate.value = start && !Number.isNaN(start.getTime())
+    ? formatAppointmentDate(start)
+    : dateOptions.value[0]?.value || ''
+  selectedTimeSlot.value = start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())
+    ? formatAppointmentTimeSlot(start, end)
+    : ''
+  if (!timeSlots.value.includes(selectedTimeSlot.value)) {
+    selectedTimeSlot.value = timeSlots.value[0] || ''
+  }
+  rescheduleVisible.value = true
+}
+
+function closeReschedulePanel() {
+  if (rescheduleLoading.value)
+    return
+  rescheduleVisible.value = false
+}
+
+async function submitReschedule() {
+  if (!order.value || rescheduleLoading.value)
+    return
+  if (!selectedDate.value || !selectedTimeSlot.value) {
+    uni.showToast({ icon: 'none', title: '请选择新的预约时间' })
+    return
+  }
+  rescheduleLoading.value = true
+  try {
+    order.value = await rescheduleOrder(order.value.id, {
+      appointmentDate: selectedDate.value,
+      appointmentTimeSlot: selectedTimeSlot.value,
+      version: order.value.version,
+    })
+    rescheduleVisible.value = false
+    uni.showToast({ icon: 'success', title: '已修改时间' })
+  }
+  finally {
+    rescheduleLoading.value = false
+  }
+}
+
+function cancelModalContent() {
+  if (order.value?.memberCardId)
+    return '取消后将释放本次冻结的会员卡额度，确认继续吗？'
+  if (isPaidCashBooking.value)
+    return '订单已支付，取消后将进入退款审核，确认继续吗？'
+  return '确定取消该订单吗？'
+}
+
+async function runWechatPay() {
+  if (!order.value || payLoading.value)
+    return
+  payLoading.value = true
+  try {
+    const payment = await payOrder(order.value.id)
+    if (payment.status !== 'pending' || !payment.paymentParams) {
+      await loadOrder()
+      uni.showToast({ icon: 'none', title: '订单状态已刷新' })
+      return
+    }
+    const params = getWechatPaymentParams(payment)
+    await requestWechatPayment(params)
+    uni.showToast({ icon: 'success', title: '支付完成' })
+    setTimeout(() => {
+      void loadOrder()
+    }, 1200)
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    uni.showToast({ icon: 'none', title: message.includes('cancel') ? '已取消支付' : '支付未完成' })
+  }
+  finally {
+    payLoading.value = false
+  }
 }
 
 function onPrimary() {
   if (!order.value)
     return
   if (order.value.status === 'pending_payment') {
-    uni.navigateTo({ url: `/pages/payment/result?orderId=${order.value.id}&status=pending&amount=${order.value.payableAmount}` })
+    void runWechatPay()
     return
   }
   if (order.value.status === 'pending_confirm') {
     uni.showModal({
       title: '确认完成',
       content: '确认服务已经完成吗？',
-      success: (res) => {
+      success: async (res) => {
         if (res.confirm) {
           actionLoading.value = true
-          setTimeout(() => {
-            actionLoading.value = false
-            order.value = getMockOrderDetail(105)
+          try {
+            order.value = await confirmOrder(order.value!.id, { version: order.value!.version })
             uni.showToast({ icon: 'success', title: '已确认' })
-          }, 400)
+          }
+          finally {
+            actionLoading.value = false
+          }
         }
       },
     })
     return
   }
   if (order.value.status === 'completed') {
-    uni.showToast({ icon: 'none', title: '评价功能待完善' })
+    uni.showToast({ icon: 'none', title: '当前暂无评价入口' })
     return
   }
   if (order.value.status === 'cancelled') {
     uni.switchTab({ url: '/pages/home/index' })
     return
   }
-  uni.showToast({ icon: 'none', title: '进度功能待完善' })
+  uni.showToast({ icon: 'none', title: '请查看当前订单状态' })
 }
 
 function onSecondary() {
   if (!order.value)
     return
-  if (order.value.status === 'pending_payment') {
+  if (['pending_payment', 'pending_dispatch'].includes(order.value.status)) {
     uni.showModal({
       title: '取消订单',
-      content: '确定取消该订单吗？',
-      success: (res) => {
+      content: cancelModalContent(),
+      success: async (res) => {
         if (res.confirm) {
-          order.value = { ...order.value!, status: 'cancelled' }
-          uni.showToast({ icon: 'success', title: '已取消' })
+          actionLoading.value = true
+          try {
+            order.value = await cancelOrder(order.value!.id, { version: order.value!.version })
+            uni.showToast({ icon: 'success', title: order.value.status === 'refund_pending' ? '已进入退款审核' : '已取消' })
+          }
+          finally {
+            actionLoading.value = false
+          }
         }
       },
     })
     return
   }
-  uni.showToast({ icon: 'none', title: '售后功能待完善' })
+  uni.showToast({ icon: 'none', title: '如需帮助请联系客服' })
 }
 
 function onCallStaff() {
@@ -125,8 +241,21 @@ function onCallStaff() {
 }
 
 onLoad((query) => {
-  orderId.value = Number(query?.id || 101)
-  loadOrder()
+  orderId.value = Number(query?.id || 0)
+  if (orderId.value)
+    void loadOrder()
+})
+
+onShow(() => {
+  if (orderId.value)
+    void loadOrder()
+})
+
+watch(timeSlots, (slots) => {
+  if (selectedTimeSlot.value && !slots.includes(selectedTimeSlot.value))
+    selectedTimeSlot.value = ''
+  if (!selectedTimeSlot.value && slots.length)
+    selectedTimeSlot.value = slots[0]
 })
 </script>
 
@@ -158,7 +287,7 @@ onLoad((query) => {
           <view class="flex">
             <view class="w-[120rpx] h-[120rpx] rounded-[12rpx] bg-[#EAF3FF] flex items-center justify-center overflow-hidden mr-3">
               <image v-if="order.serviceImage" :src="order.serviceImage" class="w-full h-full" mode="aspectFill" />
-              <text v-else class="text-[42rpx]">🧹</text>
+              <text v-else class="text-[42rpx]">家</text>
             </view>
             <view class="flex-1">
               <text class="text-[30rpx] font-600 text-gray-800 block">{{ order.serviceName }}</text>
@@ -174,6 +303,15 @@ onLoad((query) => {
           <view class="flex py-2">
             <text class="w-[140rpx] text-[26rpx] text-gray-400">预约时间</text>
             <text class="flex-1 text-[26rpx] text-gray-700">{{ order.appointmentTime }}</text>
+          </view>
+          <view v-if="canReschedule" class="mt-2 flex justify-end">
+            <button
+              class="h-[64rpx] px-4 rounded-full bg-[#EAF3FF] text-[#1677FF] text-[26rpx] flex items-center justify-center"
+              :disabled="rescheduleLoading"
+              @tap="openReschedulePanel"
+            >
+              修改时间
+            </button>
           </view>
           <view class="flex py-2">
             <text class="w-[140rpx] text-[26rpx] text-gray-400">服务地址</text>
@@ -225,11 +363,68 @@ onLoad((query) => {
       <empty-state v-else title="订单不存在" />
     </loading-state>
 
+    <view
+      v-if="rescheduleVisible"
+      class="fixed inset-0 z-50 flex items-end"
+      style="background: rgba(0,0,0,0.4)"
+    >
+      <view class="w-full bg-white rounded-t-[32rpx] px-5 pb-[calc(env(safe-area-inset-bottom)+40rpx)] pt-5">
+        <view class="flex items-center justify-between mb-4">
+          <text class="text-[32rpx] text-[#1F2937] font-600">修改预约时间</text>
+          <text class="i-carbon-close text-[40rpx] text-[#9CA3AF]" @tap="closeReschedulePanel" />
+        </view>
+        <view class="flex flex-wrap gap-2">
+          <view
+            v-for="item in dateOptions"
+            :key="item.value"
+            class="px-4 h-[64rpx] rounded-full flex items-center justify-center border"
+            :class="selectedDate === item.value ? 'bg-[#EAF3FF] border-[#1677FF]' : 'bg-white border-[#E5E7EB]'"
+            @tap="selectedDate = item.value"
+          >
+            <text class="text-[26rpx]" :class="selectedDate === item.value ? 'text-[#1677FF]' : 'text-gray-600'">
+              {{ item.label }}
+            </text>
+          </view>
+        </view>
+        <view class="flex flex-wrap gap-2 mt-3">
+          <view
+            v-for="slot in timeSlots"
+            :key="slot"
+            class="px-4 h-[64rpx] rounded-full flex items-center justify-center border"
+            :class="selectedTimeSlot === slot ? 'bg-[#EAF3FF] border-[#1677FF]' : 'bg-white border-[#E5E7EB]'"
+            @tap="selectedTimeSlot = slot"
+          >
+            <text class="text-[26rpx]" :class="selectedTimeSlot === slot ? 'text-[#1677FF]' : 'text-gray-600'">
+              {{ slot }}
+            </text>
+          </view>
+        </view>
+        <view v-if="!timeSlots.length" class="mt-3 rounded-[12rpx] bg-[#FFF7E6] px-3 py-2">
+          <text class="text-[24rpx] text-[#AD6800]">
+            今天已无可预约时间段，请选择明天或更晚日期
+          </text>
+        </view>
+        <button
+          class="mt-5 w-full h-[88rpx] bg-[#1677FF] text-white text-[30rpx] rounded-[20rpx] flex items-center justify-center"
+          :disabled="rescheduleLoading || !selectedDate || !selectedTimeSlot"
+          @tap="submitReschedule"
+        >
+          {{ rescheduleLoading ? '提交中...' : '确认修改' }}
+        </button>
+        <view
+          class="mt-3 w-full h-[80rpx] bg-white text-[#6B7280] text-[28rpx] rounded-[20rpx] flex items-center justify-center"
+          @tap="closeReschedulePanel"
+        >
+          取消
+        </view>
+      </view>
+    </view>
+
     <bottom-action-bar
       v-if="order"
       :primary-text="actionConfig.primary"
       :secondary-text="actionConfig.secondary"
-      :loading="actionLoading"
+      :loading="actionLoading || payLoading"
       @primary="onPrimary"
       @secondary="onSecondary"
     />

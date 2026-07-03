@@ -6,12 +6,14 @@ const props = withDefaults(defineProps<{
   secondaryText?: string
   primaryDisabled?: boolean
   loading?: boolean
+  primaryColor?: 'blue' | 'red'
 }>(), {
   price: undefined,
   priceLabel: '合计',
   secondaryText: '',
   primaryDisabled: false,
   loading: false,
+  primaryColor: 'blue',
 })
 
 const emit = defineEmits<{
@@ -55,7 +57,7 @@ function onPrimary() {
         class="h-[88rpx] rounded-full text-[30rpx] flex items-center justify-center"
         :class="[
           price !== undefined || secondaryText ? 'min-w-[220rpx] px-6' : 'flex-1',
-          primaryDisabled || loading ? 'bg-gray-300 text-white' : 'bg-[#1677FF] text-white',
+          primaryDisabled || loading ? 'bg-gray-300 text-white' : primaryColor === 'red' ? 'bg-[#FF373D] text-white' : 'bg-[#1677FF] text-white',
         ]"
         @tap="onPrimary"
       >

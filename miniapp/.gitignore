@@ -21,6 +21,7 @@ cert
 *.pem
 *.key
 *.p12
+env/.env
 Thumbs.db
 
 # Editor directories and files

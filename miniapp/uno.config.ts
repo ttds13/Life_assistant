@@ -92,6 +92,19 @@ export default defineConfig({
     'i-carbon-headset',
     'i-carbon-user-feedback',
     'i-carbon-settings',
+    // 首页新增图标
+    'i-carbon-search',
+    'i-carbon-shopping-cart',
+    'i-carbon-chevron-down',
+    'i-carbon-checkmark-outline',
+    'i-carbon-security',
+    'i-carbon-clean',
+    'i-carbon-pet-image-b',
+    'i-carbon-tools',
+    'i-carbon-delivery',
+    'i-carbon-star',
+    'i-carbon-ticket',
+    'i-carbon-arrow-right',
   ],
   rules: [
     [
