@@ -119,20 +119,48 @@ export const lifeAdminRoutes: RouteItem[] = [
         meta: { title: "工作状态", icon: "monitor", keepAlive: true, params: { module: "staffStatus" } },
         children: [],
       },
+      {
+        path: "notifications",
+        component: "life/staff/notifications",
+        name: "LifeStaffNotifications",
+        meta: { title: "师傅通知", icon: "message", keepAlive: true, params: {} },
+        children: [],
+      },
+      {
+        path: "profile-changes",
+        component: "life/staff/profile-changes",
+        name: "LifeStaffProfileChanges",
+        meta: { title: "资料变更复核", icon: "todo", keepAlive: true, params: {} },
+        children: [],
+      },
     ],
   },
   {
     path: "/finance",
     component: "Layout",
-    redirect: "/finance/payments",
+    redirect: "/finance/statistics",
     name: "LifeFinance",
     meta: { title: "财务管理", icon: "monitor", alwaysShow: true, hidden: false, params: {} },
     children: [
+      {
+        path: "statistics",
+        component: "life/finance/statistics",
+        name: "LifeFinanceStatistics",
+        meta: { title: "财务统计", icon: "monitor", keepAlive: true, params: {} },
+        children: [],
+      },
       {
         path: "payments",
         component: "life/resource/index",
         name: "LifePayments",
         meta: { title: "支付记录", icon: "monitor", keepAlive: true, params: { module: "payments" } },
+        children: [],
+      },
+      {
+        path: "points",
+        component: "life/resource/index",
+        name: "LifePointLedgers",
+        meta: { title: "积分流水", icon: "document", keepAlive: true, params: { module: "pointLedgers" } },
         children: [],
       },
       {
@@ -230,6 +258,13 @@ export const lifeAdminRoutes: RouteItem[] = [
         component: "life/resource/index",
         name: "LifeCoupons",
         meta: { title: "优惠券", icon: "bell", keepAlive: true, params: { module: "coupons" } },
+        children: [],
+      },
+      {
+        path: "user-coupons",
+        component: "life/resource/index",
+        name: "LifeUserCoupons",
+        meta: { title: "用户券明细", icon: "document", keepAlive: true, params: { module: "userCoupons" } },
         children: [],
       },
       {

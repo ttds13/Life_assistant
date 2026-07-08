@@ -38,6 +38,19 @@ export class AdminBusinessController {
     return this.service.getUser(this.parseId(idText))
   }
 
+  @Get('users/:id/points')
+  @RequireAdminPermissions(ADMIN_PERMISSION.FINANCE_POINT_LIST)
+  getUserPoints(@Param('id') idText: string) {
+    return this.service.getAdminUserPoints(this.parseId(idText))
+  }
+
+  @Post('users/:id/points/adjust')
+  @RequireAdminPermissions(ADMIN_PERMISSION.FINANCE_POINT_ADJUST)
+  @HttpCode(200)
+  adjustUserPoints(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
+    return this.service.adjustUserPoints(this.parseId(idText), body, this.context(request))
+  }
+
   @Put('users/:id')
   @RequireAdminPermissions(ADMIN_PERMISSION.USER_UPDATE)
   @HttpCode(200)
@@ -220,6 +233,18 @@ export class AdminBusinessController {
     return this.service.listPayments(query)
   }
 
+  @Get('finance/summary')
+  @RequireAdminPermissions(ADMIN_PERMISSION.FINANCE_SUMMARY_VIEW)
+  getFinanceSummary(@Query() query: AdminPageQueryDto) {
+    return this.service.getFinanceSummary(query)
+  }
+
+  @Get('points/ledgers')
+  @RequireAdminPermissions(ADMIN_PERMISSION.FINANCE_POINT_LIST)
+  listPointLedgers(@Query() query: AdminPageQueryDto) {
+    return this.service.listPointLedgers(query)
+  }
+
   @Get('reviews')
   @RequireAdminPermissions(ADMIN_PERMISSION.REVIEW_LIST)
   listReviews(@Query() query: AdminPageQueryDto) {
@@ -237,6 +262,12 @@ export class AdminBusinessController {
   @RequireAdminPermissions(ADMIN_PERMISSION.MARKETING_COUPON_LIST)
   listCoupons(@Query() query: AdminPageQueryDto) {
     return this.service.listCoupons(query)
+  }
+
+  @Get('user-coupons')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MARKETING_USER_COUPON_LIST)
+  listUserCoupons(@Query() query: AdminPageQueryDto) {
+    return this.service.listUserCouponsAdmin(query)
   }
 
   @Post('coupons')
@@ -258,6 +289,13 @@ export class AdminBusinessController {
   @HttpCode(200)
   updateCouponStatus(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminStatusDto) {
     return this.service.updateCouponStatus(this.parseId(idText), dto, this.context(request))
+  }
+
+  @Post('coupons/:id/grant')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MARKETING_COUPON_GRANT)
+  @HttpCode(200)
+  grantCoupon(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
+    return this.service.grantCoupon(this.parseId(idText), body, this.context(request))
   }
 
   @Get('member-cards')

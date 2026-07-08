@@ -25,6 +25,17 @@
             <el-option label="全部订单" value="all" />
           </el-select>
         </el-form-item>
+        <el-form-item label="来源">
+          <el-select v-model="queryParams.source" clearable style="width: 140px">
+            <el-option label="全部" value="" />
+            <el-option label="小程序" value="miniapp" />
+            <el-option label="后台录入" value="admin" />
+            <el-option label="电话订单" value="phone" />
+            <el-option label="线下订单" value="offline" />
+            <el-option label="推广订单" value="promotion" />
+            <el-option label="视频号" value="channels" />
+          </el-select>
+        </el-form-item>
         <el-form-item>
           <el-button type="primary" icon="search" @click="fetchOrders">搜索</el-button>
           <el-button icon="refresh" @click="handleReset">重置</el-button>
@@ -299,15 +310,6 @@
         <el-form-item label="订单号">
           <el-text>{{ currentOrder?.orderNo }}</el-text>
         </el-form-item>
-        <el-form-item label="订单状态">
-          <el-select v-model="editForm.status" style="width: 100%">
-            <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="师傅ID">
-          <el-input-number v-model="editForm.staffId" :min="1" :step="1" clearable style="width: 100%" />
-          <div class="form-tip">清空后保存，会解除订单当前师傅绑定。</div>
-        </el-form-item>
         <el-row :gutter="12">
           <el-col :span="12">
             <el-form-item label="预约开始">
@@ -320,30 +322,9 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="下单时间">
-              <el-date-picker v-model="editForm.createdAt" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="完成时间">
-              <el-date-picker v-model="editForm.completedAt" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" clearable style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="应付金额">
-              <el-input-number v-model="editForm.payableAmount" :min="0" :precision="2" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="实付金额">
-              <el-input-number v-model="editForm.paidAmount" :min="0" :precision="2" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
+        <el-form-item label="下单时间">
+          <el-date-picker v-model="editForm.createdAt" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width: 100%" />
+        </el-form-item>
         <el-form-item label="用户备注">
           <el-input v-model="editForm.remark" type="textarea" :rows="2" maxlength="512" show-word-limit />
         </el-form-item>
@@ -398,6 +379,7 @@ const queryParams = reactive({
   keywords: "",
   status: "",
   orderType: "bookings",
+  source: "",
 });
 const assignForm = reactive({
   staffId: "",
@@ -426,14 +408,9 @@ const createForm = reactive({
   adminRemark: "",
 });
 const editForm = reactive({
-  status: "",
-  staffId: undefined as number | undefined,
   appointmentStartTime: "",
   appointmentEndTime: "",
   createdAt: "",
-  completedAt: "",
-  payableAmount: 0,
-  paidAmount: 0,
   remark: "",
   adminRemark: "",
 });
@@ -479,6 +456,7 @@ function handleReset() {
   queryParams.keywords = "";
   queryParams.status = initialStatus.value;
   queryParams.orderType = initialOrderType.value;
+  queryParams.source = "";
   fetchOrders();
 }
 
@@ -534,14 +512,9 @@ async function submitCreateOrder() {
 function openEdit(row: OrderListItem) {
   if (!canUpdateOrders.value) return;
   currentOrder.value = row;
-  editForm.status = row.status;
-  editForm.staffId = row.staffId ?? undefined;
   editForm.appointmentStartTime = toPickerDate(row.appointmentStartTime);
   editForm.appointmentEndTime = toPickerDate(row.appointmentEndTime);
   editForm.createdAt = toPickerDate(row.createdAt);
-  editForm.completedAt = row.completedAt ? toPickerDate(row.completedAt) : "";
-  editForm.payableAmount = row.payableAmount;
-  editForm.paidAmount = row.paidAmount;
   editForm.remark = row.remark || "";
   editForm.adminRemark = row.adminRemark || "";
   editVisible.value = true;
@@ -550,14 +523,9 @@ function openEdit(row: OrderListItem) {
 async function submitEdit() {
   if (!currentOrder.value) return;
   const payload: UpdateOrderPayload = {
-    status: editForm.status,
-    staffId: editForm.staffId ?? null,
     appointmentStartTime: editForm.appointmentStartTime,
     appointmentEndTime: editForm.appointmentEndTime,
     createdAt: editForm.createdAt,
-    completedAt: editForm.completedAt || null,
-    payableAmount: editForm.payableAmount,
-    paidAmount: editForm.paidAmount,
     remark: editForm.remark || null,
     adminRemark: editForm.adminRemark || null,
   };

@@ -7,6 +7,7 @@ export type LifeModuleKey =
   | "staff"
   | "staffStatus"
   | "payments"
+  | "pointLedgers"
   | "reviews"
   | "feedbacks"
   | "faqs"
@@ -14,6 +15,7 @@ export type LifeModuleKey =
   | "homeBanners"
   | "promotionLinks"
   | "coupons"
+  | "userCoupons"
   | "memberCards"
   | "userMemberCards"
   | "memberCardRecords";
@@ -31,7 +33,18 @@ export interface LifeQueryParams {
   recordType?: string;
   cardType?: string;
   source?: string;
+  channel?: string;
+  startDate?: string;
+  endDate?: string;
+  userId?: string;
+  couponId?: string;
   targetType?: string;
+  staffId?: string;
+  orderId?: string;
+  orderNo?: string;
+  sendStatus?: string;
+  isRead?: string;
+  changeType?: string;
 }
 
 export interface LifeColumn {
@@ -136,6 +149,155 @@ export interface DispatchCheckResult {
   requiredFields: string[];
 }
 
+export interface OrderAccountingResult {
+  orderId: number;
+  orderNo: string;
+  status: string;
+  historicalPaidAmount?: number;
+  refundedAmount?: number;
+  netPaidAmount?: number;
+  couponRecord?: {
+    id: number;
+    status: string;
+    usedOrderId?: number | null;
+    receivedAt: string;
+    usedAt?: string | null;
+    expireAt: string;
+  } | null;
+  passed: boolean;
+  checks: Array<{
+    key: string;
+    passed: boolean;
+    message: string;
+  }>;
+  payments: Array<{
+    id: number;
+    paymentNo: string;
+    channel: string;
+    status: string;
+    amount: number;
+    refundedAmount: number;
+    paidAt?: string | null;
+  }>;
+  pointLedgers: Array<{
+    id: number;
+    type: string;
+    points: number;
+    amount: number;
+    balanceAfter: number;
+    createdAt: string;
+  }>;
+  incomeRecords: Array<{
+    id: number;
+    staffId: number;
+    amount: number;
+    type: string;
+    status: string;
+    settlementStatus: string;
+    withdrawStatus: string;
+  }>;
+  refunds: Array<{
+    id: number;
+    refundNo: string;
+    amount: number;
+    status: string;
+    refundedAt?: string | null;
+  }>;
+}
+
+export interface AdminNotificationItem {
+  id: number;
+  receiverType: string;
+  receiverId: number;
+  type: string;
+  title: string;
+  content: string;
+  bizType: string;
+  bizId: number | null;
+  isRead: boolean;
+  channel: string;
+  sendStatus: string;
+  createdAt: string;
+}
+
+export interface AdminStaffNotificationItem extends AdminNotificationItem {
+  sentAt?: string | null;
+  readAt?: string | null;
+  retryCount: number;
+  lastRetriedAt?: string | null;
+  failureReason: string;
+  staffId: number;
+  staffName: string;
+  staffPhone: string;
+  staffStatus?: number | null;
+  staffWorkStatus?: number | null;
+  orderId?: number | null;
+  orderNo: string;
+  orderStatus: string;
+  orderStaffId?: number | null;
+}
+
+export interface StaffProfileSnapshot {
+  name: string;
+  avatarUrl?: string | null;
+  cityCode?: string | null;
+  skills: string[];
+  idCard?: string | null;
+  applicationNote?: string | null;
+  applicationImages: string[];
+}
+
+export interface StaffProfileChangeRequestItem {
+  id: number;
+  requestNo: string;
+  staffId: number;
+  userId?: number | null;
+  staffName: string;
+  staffPhone: string;
+  staffStatus?: number | null;
+  staffWorkStatus?: number | null;
+  changeType: string;
+  status: string;
+  beforeSnapshot: StaffProfileSnapshot;
+  afterSnapshot: StaffProfileSnapshot;
+  changedFields: string[];
+  submitNote: string;
+  rejectReason: string;
+  submittedBy?: number | null;
+  reviewedBy?: number | null;
+  reviewedAt?: string | null;
+  appliedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  beforeAvatarDisplayUrl?: string;
+  afterAvatarDisplayUrl?: string;
+  beforeApplicationImageUrls?: string[];
+  afterApplicationImageUrls?: string[];
+}
+
+export interface StaffProfileHistory {
+  staff: {
+    id: number;
+    name: string;
+    phone: string;
+    avatarUrl: string;
+    avatarDisplayUrl: string;
+    cityCode: string;
+    status: number;
+    workStatus: number;
+  };
+  requests: StaffProfileChangeRequestItem[];
+  auditLogs: Array<{
+    id: number;
+    action: string;
+    module: string;
+    operatorType: string;
+    operatorId: number;
+    detail: unknown;
+    createdAt: string;
+  }>;
+}
+
 export interface LifeFormItem {
   prop: string;
   label: string;
@@ -210,6 +372,84 @@ export interface DashboardData {
   }>;
   todos: DashboardTodo[];
   audits: DashboardAuditItem[];
+}
+
+export interface FinanceSummaryGroup {
+  status?: string;
+  label?: string;
+  source?: string;
+  channel?: string;
+  type?: string;
+  count: number;
+  amount?: number;
+  grossAmount?: number;
+  discountAmount?: number;
+  payableAmount?: number;
+  paidAmount?: number;
+  refundedAmount?: number;
+  netAmount?: number;
+  points?: number;
+}
+
+export interface FinanceSummaryData {
+  filters: {
+    startDate?: string | null;
+    endDate?: string | null;
+    source: string;
+    channel: string;
+  };
+  summary: {
+    orderCount: number;
+    grossAmount: number;
+    discountAmount: number;
+    couponOrderCount: number;
+    couponDiscount: number;
+    payableAmount: number;
+    orderPaidAmount: number;
+    paymentCount: number;
+    paidAmount: number;
+    paymentRefundedAmount: number;
+    refundCount: number;
+    refundAmount: number;
+    netRevenue: number;
+    incomeCount: number;
+    incomeAmount: number;
+    pointsEarned: number;
+    pointsDeducted: number;
+    pointsNet: number;
+  };
+  breakdowns: {
+    ordersBySource: FinanceSummaryGroup[];
+    ordersByStatus: FinanceSummaryGroup[];
+    paymentsByChannel: FinanceSummaryGroup[];
+    refundsByStatus: FinanceSummaryGroup[];
+    incomeByStatus: FinanceSummaryGroup[];
+    incomeBySettlement: FinanceSummaryGroup[];
+    incomeByWithdraw: FinanceSummaryGroup[];
+    withdrawsByStatus: FinanceSummaryGroup[];
+    pointsByType: FinanceSummaryGroup[];
+  };
+}
+
+export interface AdminUserPointsSummary {
+  userId: number;
+  userName: string;
+  userPhone: string;
+  totalPoints: number;
+  availablePoints: number;
+  totalAmount: number;
+  ledgerCount: number;
+  recentLedgers: Array<{
+    id: number;
+    orderId?: number | null;
+    orderNo: string;
+    type: string;
+    points: number;
+    amount: number;
+    balanceAfter: number;
+    remark: string;
+    createdAt: string;
+  }>;
 }
 
 export interface OrderListItem {
@@ -325,6 +565,32 @@ export interface OrderDetail extends OrderListItem {
     assignedAt: string;
     acceptedAt?: string | null;
     rejectedAt?: string | null;
+  }>;
+  assignmentNotification?: {
+    id: number;
+    type: string;
+    title: string;
+    sendStatus: string;
+    isRead: boolean;
+    sentAt?: string | null;
+    readAt?: string | null;
+    retryCount: number;
+    lastRetriedAt?: string | null;
+    failureReason: string;
+    createdAt: string;
+  } | null;
+  assignmentNotifications?: Array<{
+    id: number;
+    type: string;
+    title: string;
+    sendStatus: string;
+    isRead: boolean;
+    sentAt?: string | null;
+    readAt?: string | null;
+    retryCount: number;
+    lastRetriedAt?: string | null;
+    failureReason: string;
+    createdAt: string;
   }>;
   servicePhotos?: string[];
   photos: string[];

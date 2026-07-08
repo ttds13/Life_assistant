@@ -56,6 +56,21 @@ export class AdminPageQueryDto {
   @IsOptional()
   @IsString()
   @Transform(({ value }) => trimOptional(value))
+  channel?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  couponId?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  userId?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
   targetType?: string
 
   @IsOptional()
@@ -67,6 +82,16 @@ export class AdminPageQueryDto {
   @IsString()
   @Transform(({ value }) => trimOptional(value))
   dateEnd?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  startDate?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  endDate?: string
 
   @IsOptional()
   @IsInt()

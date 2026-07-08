@@ -93,6 +93,7 @@ model Staff {
   incomeRecords StaffIncomeRecord[]
   withdrawRequests WithdrawRequest[]
   reviews       Review[]
+  profileChangeRequests StaffProfileChangeRequest[]
   user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([phone])
@@ -780,11 +781,49 @@ model Notification {
   isRead       Boolean  @default(false) @map("is_read")
   channel      String   @db.VarChar(16)
   sendStatus   String   @map("send_status") @db.VarChar(16)
+  sentAt       DateTime? @map("sent_at")
+  readAt       DateTime? @map("read_at")
+  retryCount   Int      @default(0) @map("retry_count")
+  lastRetriedAt DateTime? @map("last_retried_at")
+  failureReason String? @map("failure_reason") @db.VarChar(512)
+  createdByType String? @map("created_by_type") @db.VarChar(16)
+  createdById   BigInt? @map("created_by_id")
   createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@index([receiverType, receiverId])
+  @@index([receiverType, receiverId, createdAt])
+  @@index([bizType, bizId])
   @@index([isRead])
+  @@index([sendStatus])
   @@map("notifications")
+}
+
+model StaffProfileChangeRequest {
+  id             BigInt    @id @default(autoincrement())
+  requestNo      String    @unique @map("request_no") @db.VarChar(32)
+  staffId        BigInt    @map("staff_id")
+  userId         BigInt?   @map("user_id")
+  changeType     String    @map("change_type") @db.VarChar(32)
+  status         String    @default("pending") @db.VarChar(16)
+  beforeSnapshot Json      @map("before_snapshot")
+  afterSnapshot  Json      @map("after_snapshot")
+  changedFields  Json?     @map("changed_fields")
+  submitNote     String?   @map("submit_note") @db.Text
+  rejectReason   String?   @map("reject_reason") @db.Text
+  submittedBy    BigInt?   @map("submitted_by")
+  reviewedBy     BigInt?   @map("reviewed_by")
+  reviewedAt     DateTime? @map("reviewed_at")
+  appliedAt      DateTime? @map("applied_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  staff Staff @relation(fields: [staffId], references: [id])
+
+  @@index([staffId, status])
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("staff_profile_change_requests")
 }
 
 model PointLedger {

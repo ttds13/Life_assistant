@@ -11,6 +11,15 @@
       <div class="order-summary__actions">
         <el-button @click="router.back()">返回</el-button>
         <el-button v-if="order && canUpdateOrders" type="primary" @click="openEdit">编辑订单</el-button>
+        <el-button v-if="order" :loading="accountingLoading" @click="loadAccounting">账务检查</el-button>
+        <el-button
+          v-if="canConfirmOfflinePayment"
+          type="warning"
+          :loading="offlineSubmitting"
+          @click="openOfflinePayment"
+        >
+          确认线下收款
+        </el-button>
         <el-button
           v-if="order?.status === 'pending_dispatch' && canAssignOrders"
           type="success"
@@ -142,6 +151,38 @@
         </el-card>
 
         <el-card shadow="never" class="mb-4">
+          <template #header>
+            <div class="card-header-row">
+              <span>账务闭环检查</span>
+              <el-button text type="primary" size="small" :loading="accountingLoading" @click="loadAccounting">刷新</el-button>
+            </div>
+          </template>
+          <template v-if="accounting">
+            <el-alert
+              :type="accounting.passed ? 'success' : 'warning'"
+              :title="accounting.passed ? '账务闭环已通过' : '账务闭环存在待处理项'"
+              show-icon
+              :closable="false"
+              class="mb-3"
+            />
+            <div v-for="item in accounting.checks" :key="item.key" class="accounting-check">
+              <el-tag :type="item.passed ? 'success' : 'danger'" size="small">
+                {{ item.passed ? '通过' : '异常' }}
+              </el-tag>
+              <span>{{ item.message }}</span>
+            </div>
+            <el-divider />
+            <div class="accounting-summary">
+              <span>支付 {{ accounting.payments.length }}</span>
+              <span>积分 {{ accounting.pointLedgers.length }}</span>
+              <span>收入 {{ accounting.incomeRecords.length }}</span>
+              <span>退款 {{ accounting.refunds.length }}</span>
+            </div>
+          </template>
+          <el-empty v-else description="点击账务检查加载结果" />
+        </el-card>
+
+        <el-card shadow="never" class="mb-4">
           <template #header>服务照片</template>
           <el-empty v-if="!orderPhotos.length" description="暂无照片" />
           <div v-else class="photo-grid">
@@ -155,6 +196,57 @@
               preview-teleported
             />
           </div>
+        </el-card>
+
+        <el-card shadow="never" class="mb-4">
+          <template #header>
+            <div class="card-header-row">
+              <span>派单通知</span>
+              <el-button
+                v-if="order?.staffId"
+                text
+                type="primary"
+                :loading="resendNotificationLoading"
+                @click="resendOrderNotification"
+              >
+                补发通知
+              </el-button>
+            </div>
+          </template>
+          <el-empty v-if="!order?.staffId" description="该订单尚未派单，暂无师傅通知" />
+          <template v-else>
+            <el-alert
+              v-if="!order.assignmentNotification"
+              title="当前订单已有师傅，但没有找到派单通知，可点击补发。"
+              type="warning"
+              show-icon
+              :closable="false"
+              class="mb-3"
+            />
+            <el-descriptions v-if="order.assignmentNotification" :column="1" border>
+              <el-descriptions-item label="通知ID">#{{ order.assignmentNotification.id }}</el-descriptions-item>
+              <el-descriptions-item label="发送状态">{{ notificationStatusText(order.assignmentNotification.sendStatus) }}</el-descriptions-item>
+              <el-descriptions-item label="阅读状态">
+                <el-tag :type="order.assignmentNotification.isRead ? 'success' : 'warning'">
+                  {{ order.assignmentNotification.isRead ? "已读" : "未读" }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="发送时间">{{ formatDateTime(order.assignmentNotification.sentAt) }}</el-descriptions-item>
+              <el-descriptions-item label="阅读时间">{{ formatDateTime(order.assignmentNotification.readAt) }}</el-descriptions-item>
+              <el-descriptions-item label="重发次数">{{ order.assignmentNotification.retryCount || 0 }}</el-descriptions-item>
+              <el-descriptions-item v-if="order.assignmentNotification.failureReason" label="失败原因">
+                {{ order.assignmentNotification.failureReason }}
+              </el-descriptions-item>
+            </el-descriptions>
+            <div v-if="(order.assignmentNotifications || []).length > 1" class="notification-history">
+              <div class="notification-history__title">最近通知</div>
+              <div v-for="item in order.assignmentNotifications" :key="item.id" class="notification-history__item">
+                <span>#{{ item.id }} {{ notificationStatusText(item.sendStatus) }}</span>
+                <span>{{ item.isRead ? "已读" : "未读" }}</span>
+                <span>{{ formatDateTime(item.createdAt) }}</span>
+              </div>
+            </div>
+          </template>
         </el-card>
 
         <el-card shadow="never">
@@ -241,19 +333,44 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="offlineVisible" title="确认线下收款" width="520px">
+      <el-alert
+        title="确认后会生成 offline 支付流水、积分流水，并将现金服务订单推进到待派单。"
+        type="warning"
+        show-icon
+        :closable="false"
+        class="mb-4"
+      />
+      <el-form label-width="100px">
+        <el-form-item label="订单号">
+          <el-text>{{ order?.orderNo }}</el-text>
+        </el-form-item>
+        <el-form-item label="收款金额" required>
+          <el-input-number v-model="offlineForm.amount" :min="0.01" :precision="2" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="收款时间">
+          <el-date-picker
+            v-model="offlineForm.paidAt"
+            type="datetime"
+            value-format="YYYY-MM-DD HH:mm:ss"
+            clearable
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="offlineForm.remark" type="textarea" :rows="3" maxlength="256" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="offlineVisible = false">取消</el-button>
+        <el-button type="primary" :loading="offlineSubmitting" @click="submitOfflinePayment">确认收款</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="editVisible" title="编辑订单" width="720px">
       <el-form label-width="100px" class="order-edit-form">
         <el-form-item label="订单号">
           <el-text>{{ order?.orderNo }}</el-text>
-        </el-form-item>
-        <el-form-item label="订单状态">
-          <el-select v-model="editForm.status" style="width: 100%">
-            <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="师傅ID">
-          <el-input-number v-model="editForm.staffId" :min="1" :step="1" style="width: 100%" />
-          <div class="form-tip">清空后保存会解除订单当前师傅绑定。</div>
         </el-form-item>
         <el-row :gutter="12">
           <el-col :span="12">
@@ -277,41 +394,14 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="下单时间">
-              <el-date-picker
-                v-model="editForm.createdAt"
-                type="datetime"
-                value-format="YYYY-MM-DD HH:mm:ss"
-                style="width: 100%"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="完成时间">
-              <el-date-picker
-                v-model="editForm.completedAt"
-                type="datetime"
-                value-format="YYYY-MM-DD HH:mm:ss"
-                clearable
-                style="width: 100%"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="应付金额">
-              <el-input-number v-model="editForm.payableAmount" :min="0" :precision="2" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="实付金额">
-              <el-input-number v-model="editForm.paidAmount" :min="0" :precision="2" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
+        <el-form-item label="下单时间">
+          <el-date-picker
+            v-model="editForm.createdAt"
+            type="datetime"
+            value-format="YYYY-MM-DD HH:mm:ss"
+            style="width: 100%"
+          />
+        </el-form-item>
         <el-form-item label="用户备注">
           <el-input v-model="editForm.remark" type="textarea" :rows="2" maxlength="512" show-word-limit />
         </el-form-item>
@@ -331,7 +421,7 @@
 defineOptions({ name: "LifeOrderDetail" });
 
 import LifeAPI from "@/api/life";
-import type { OrderDetail, StaffOption, UpdateOrderPayload } from "@/api/life";
+import type { OrderAccountingResult, OrderDetail, StaffOption, UpdateOrderPayload } from "@/api/life";
 import { hasPerm } from "@/utils/auth";
 
 type TagType = "primary" | "success" | "warning" | "danger" | "info";
@@ -347,8 +437,13 @@ const staffOptions = ref<StaffOption[]>([]);
 const assignVisible = ref(false);
 const remarkVisible = ref(false);
 const editVisible = ref(false);
+const offlineVisible = ref(false);
 const assignSubmitting = ref(false);
+const accountingLoading = ref(false);
+const offlineSubmitting = ref(false);
+const resendNotificationLoading = ref(false);
 const dispatchWarnings = ref<string[]>([]);
+const accounting = ref<OrderAccountingResult>();
 const assignForm = reactive({
   staffId: "",
   remark: "",
@@ -357,32 +452,17 @@ const remarkForm = reactive({
   remark: "",
 });
 const editForm = reactive({
-  status: "",
-  staffId: undefined as number | undefined,
   appointmentStartTime: "",
   appointmentEndTime: "",
   createdAt: "",
-  completedAt: "",
-  payableAmount: 0,
-  paidAmount: 0,
   remark: "",
   adminRemark: "",
 });
-
-const statusOptions = [
-  { label: "待支付", value: "pending_payment" },
-  { label: "待派单", value: "pending_dispatch" },
-  { label: "已派单", value: "dispatched" },
-  { label: "已接单", value: "accepted" },
-  { label: "已出发", value: "on_the_way" },
-  { label: "服务中", value: "in_service" },
-  { label: "待确认", value: "pending_confirm" },
-  { label: "已完成", value: "completed" },
-  { label: "已取消", value: "cancelled" },
-  { label: "退款中", value: "refund_pending" },
-  { label: "已退款", value: "refunded" },
-  { label: "售后中", value: "after_sales" },
-];
+const offlineForm = reactive({
+  amount: 0,
+  paidAt: "",
+  remark: "",
+});
 
 const orderPhotos = computed(() => order.value?.photos?.length ? order.value.photos : order.value?.servicePhotos || []);
 const assignments = computed(() => order.value?.assignments || []);
@@ -410,11 +490,35 @@ const actualServiceText = computed(() => {
   }
   return "-";
 });
+const canConfirmOfflinePayment = computed(() =>
+  Boolean(
+    order.value
+    && canUpdateOrders.value
+    && !order.value.paidAt
+    && !order.value.memberCardId
+    && order.value.orderType !== "member_card_purchase"
+    && order.value.payableAmount > 0
+    && ["pending_payment", "pending_dispatch"].includes(order.value.status),
+  ),
+);
 
-onMounted(fetchDetail);
+onMounted(async () => {
+  await fetchDetail();
+  await loadAccounting();
+});
 
 async function fetchDetail() {
   order.value = await LifeAPI.getOrderDetail(String(route.params.id));
+}
+
+async function loadAccounting() {
+  if (!order.value) return;
+  accountingLoading.value = true;
+  try {
+    accounting.value = await LifeAPI.getOrderAccounting(order.value.id);
+  } finally {
+    accountingLoading.value = false;
+  }
 }
 
 async function openAssign() {
@@ -448,6 +552,23 @@ async function submitAssign() {
   }
 }
 
+async function resendOrderNotification() {
+  if (!order.value?.staffId) return;
+  await ElMessageBox.confirm(
+    `确认给师傅「${order.value.staffName || `#${order.value.staffId}`}」补发订单 ${order.value.orderNo} 的派单通知吗？`,
+    "补发派单通知",
+    { type: "warning" },
+  );
+  resendNotificationLoading.value = true;
+  try {
+    await LifeAPI.resendOrderStaffNotification(order.value.id);
+    ElMessage.success("派单通知已补发");
+    await fetchDetail();
+  } finally {
+    resendNotificationLoading.value = false;
+  }
+}
+
 function openRemark() {
   if (!canUpdateOrders.value) return;
   remarkForm.remark = order.value?.adminRemark || "";
@@ -456,14 +577,9 @@ function openRemark() {
 
 function openEdit() {
   if (!order.value || !canUpdateOrders.value) return;
-  editForm.status = order.value.status;
-  editForm.staffId = order.value.staffId ?? undefined;
   editForm.appointmentStartTime = toPickerDate(order.value.appointmentStartTime);
   editForm.appointmentEndTime = toPickerDate(order.value.appointmentEndTime);
   editForm.createdAt = toPickerDate(order.value.createdAt);
-  editForm.completedAt = order.value.completedAt ? toPickerDate(order.value.completedAt) : "";
-  editForm.payableAmount = order.value.payableAmount;
-  editForm.paidAmount = order.value.paidAmount;
   editForm.remark = order.value.remark || "";
   editForm.adminRemark = order.value.adminRemark || "";
   editVisible.value = true;
@@ -476,23 +592,48 @@ async function submitRemark() {
   remarkVisible.value = false;
 }
 
+function openOfflinePayment() {
+  if (!order.value || !canConfirmOfflinePayment.value) return;
+  offlineForm.amount = Number(order.value.payableAmount || 0);
+  offlineForm.paidAt = toPickerDate(new Date().toISOString());
+  offlineForm.remark = "";
+  offlineVisible.value = true;
+}
+
+async function submitOfflinePayment() {
+  if (!order.value) return;
+  if (Number(offlineForm.amount.toFixed(2)) !== Number(order.value.payableAmount.toFixed(2))) {
+    ElMessage.warning("线下收款金额必须等于订单应付金额");
+    return;
+  }
+  offlineSubmitting.value = true;
+  try {
+    order.value = await LifeAPI.confirmOfflinePayment(order.value.id, {
+      amount: offlineForm.amount,
+      paidAt: offlineForm.paidAt || undefined,
+      remark: offlineForm.remark || undefined,
+    });
+    ElMessage.success("线下收款已确认，支付、积分和待派单通知已生成");
+    offlineVisible.value = false;
+    await loadAccounting();
+  } finally {
+    offlineSubmitting.value = false;
+  }
+}
+
 async function submitEdit() {
   if (!order.value) return;
   const payload: UpdateOrderPayload = {
-    status: editForm.status,
-    staffId: editForm.staffId ?? null,
     appointmentStartTime: editForm.appointmentStartTime,
     appointmentEndTime: editForm.appointmentEndTime,
     createdAt: editForm.createdAt,
-    completedAt: editForm.completedAt || null,
-    payableAmount: editForm.payableAmount,
-    paidAmount: editForm.paidAmount,
     remark: editForm.remark || null,
     adminRemark: editForm.adminRemark || null,
   };
   order.value = await LifeAPI.updateOrder(order.value.id, payload);
   ElMessage.success("订单已更新");
   editVisible.value = false;
+  await loadAccounting();
 }
 
 async function deleteOrder() {
@@ -568,9 +709,9 @@ function assignmentStatusText(status: string) {
 function notificationStatusText(status?: string | null) {
   const map: Record<string, string> = {
     created: "站内通知已生成",
-    sent: "微信通知已发送",
-    failed: "微信通知发送失败",
-    skipped: "微信通知未配置",
+    sent: "站内通知已发送",
+    failed: "通知发送失败",
+    skipped: "通知未配置",
   };
   return status ? map[status] || status : "未记录";
 }
@@ -642,6 +783,50 @@ function formatUnits(value?: number | null, unitName?: string) {
 
   &--total {
     font-size: 16px;
+  }
+}
+
+.card-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.accounting-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  line-height: 22px;
+}
+
+.accounting-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.notification-history {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+
+  &__title {
+    margin-bottom: 8px;
+    color: var(--el-text-color-primary);
+    font-weight: 600;
+  }
+
+  &__item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 56px 120px;
+    gap: 8px;
+    padding: 6px 0;
+    color: var(--el-text-color-secondary);
+    font-size: 13px;
   }
 }
 

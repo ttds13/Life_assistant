@@ -15,6 +15,7 @@ import { AdminQueryOrdersDto } from './dto/admin-query-orders.dto'
 import { AdminUpdateOrderDto } from './dto/admin-update-order.dto'
 import { AssignOrderDto } from './dto/assign-order.dto'
 import { CompleteServiceDto } from './dto/complete-service.dto'
+import { ConfirmOfflinePaymentDto } from './dto/confirm-offline-payment.dto'
 import { CreateOrderDto } from './dto/create-order.dto'
 import { PricePreviewDto } from './dto/price-preview.dto'
 import { QueryOrdersDto } from './dto/query-orders.dto'
@@ -35,8 +36,8 @@ export class OrdersController {
   ) {}
 
   @Get('orders/price-preview')
-  getPricePreview(@Query() query: PricePreviewDto) {
-    return this.ordersService.getPricePreview(query)
+  getPricePreview(@Req() request: RequestWithContext, @Query() query: PricePreviewDto) {
+    return this.ordersService.getPricePreview(request.user!.userId, query)
   }
 
   @Get('orders')
@@ -100,6 +101,28 @@ export class OrdersController {
   getAdminOrderDispatchCheck(@Req() request: RequestWithContext, @Param('id') idText: string) {
     this.parseAdminId(request)
     return this.ordersService.getAdminOrderDispatchCheck(this.parseId(idText))
+  }
+
+  @Get('admin/orders/:id/accounting')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_DETAIL)
+  getAdminOrderAccounting(@Req() request: RequestWithContext, @Param('id') idText: string) {
+    this.parseAdminId(request)
+    return this.ordersService.getAdminOrderAccounting(this.parseId(idText))
+  }
+
+  @Post('admin/orders/:id/confirm-offline-payment')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_UPDATE)
+  @HttpCode(200)
+  confirmOfflinePayment(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: ConfirmOfflinePaymentDto) {
+    return this.ordersService.confirmOfflinePayment(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
   }
 
   @Get('admin/orders/:id')

@@ -1,5 +1,7 @@
 <script lang="ts" setup>
+import { getUserCoupons } from '@/api/coupons'
 import { getUserPoints } from '@/api/points'
+import type { CouponStatus as ApiCouponStatus, UserCoupon } from '@/api/types/coupons'
 import type { UserPointsSummary } from '@/api/types/points'
 
 definePage({
@@ -10,16 +12,13 @@ definePage({
   },
 })
 
-type CouponStatus = 'unused' | 'used' | 'expired'
+type CouponStatus = ApiCouponStatus
 type CouponTab = 'all' | CouponStatus
-
-interface CouponItem {
-  id: number
-  status: CouponStatus
-}
 
 const activeTab = ref<CouponTab>('all')
 const loadingPoints = ref(false)
+const loadingCoupons = ref(false)
+const coupons = ref<UserCoupon[]>([])
 const pointsSummary = ref<UserPointsSummary>({
   totalPoints: 0,
   availablePoints: 0,
@@ -37,11 +36,16 @@ const pointsSummary = ref<UserPointsSummary>({
 const tabs: Array<{ label: string, value: CouponTab }> = [
   { label: '全部', value: 'all' },
   { label: '未使用', value: 'unused' },
+  { label: '已锁定', value: 'locked' },
   { label: '已使用', value: 'used' },
   { label: '已过期', value: 'expired' },
 ]
 
-const visibleCoupons = computed<CouponItem[]>(() => [])
+const visibleCoupons = computed<UserCoupon[]>(() => {
+  if (activeTab.value === 'all')
+    return coupons.value
+  return coupons.value.filter(item => item.status === activeTab.value)
+})
 const pointsRuleText = computed(() => pointsSummary.value.rule.description || '每实际支付 0.1 元积 1 分，0.01 元不计入积分')
 
 function setActiveTab(tab: CouponTab) {
@@ -54,6 +58,32 @@ function getTabClass(tab: CouponTab) {
 
 function formatAmount(value: number) {
   return value.toFixed(2)
+}
+
+function formatCouponAmount(coupon: UserCoupon) {
+  if (coupon.type === 'discount')
+    return `${coupon.amount}折`
+  return `¥${formatAmount(coupon.amount)}`
+}
+
+function formatCouponCondition(coupon: UserCoupon) {
+  if (!coupon.minAmount || coupon.minAmount <= 0)
+    return '无门槛'
+  return `满 ¥${formatAmount(coupon.minAmount)} 可用`
+}
+
+function formatDate(value: string) {
+  return value ? value.slice(0, 10) : '-'
+}
+
+function couponStatusText(status: CouponStatus) {
+  const map: Record<CouponStatus, string> = {
+    unused: '未使用',
+    locked: '已锁定',
+    used: '已使用',
+    expired: '已过期',
+  }
+  return map[status] || status
 }
 
 async function loadPoints() {
@@ -77,8 +107,22 @@ async function loadPoints() {
   }
 }
 
+async function loadCoupons() {
+  loadingCoupons.value = true
+  try {
+    coupons.value = await getUserCoupons({ status: 'all' })
+  }
+  catch {
+    coupons.value = []
+  }
+  finally {
+    loadingCoupons.value = false
+  }
+}
+
 onShow(() => {
-  loadPoints()
+  void loadPoints()
+  void loadCoupons()
 })
 </script>
 
@@ -127,11 +171,31 @@ onShow(() => {
       </view>
     </view>
 
-    <view v-if="visibleCoupons.length > 0" class="coupon-list"></view>
+    <view v-if="visibleCoupons.length > 0" class="coupon-list">
+      <view
+        v-for="coupon in visibleCoupons"
+        :key="coupon.id"
+        class="coupon-card"
+        :class="coupon.status !== 'unused' ? 'coupon-card-disabled' : ''"
+      >
+        <view class="coupon-value">
+          <text class="coupon-amount">{{ formatCouponAmount(coupon) }}</text>
+          <text class="coupon-condition">{{ formatCouponCondition(coupon) }}</text>
+        </view>
+        <view class="coupon-info">
+          <view class="coupon-title-row">
+            <text class="coupon-name">{{ coupon.name }}</text>
+            <text class="coupon-status">{{ couponStatusText(coupon.status) }}</text>
+          </view>
+          <text class="coupon-time">有效期至 {{ formatDate(coupon.expireAt) }}</text>
+          <text v-if="coupon.usedOrderId" class="coupon-order">关联订单 #{{ coupon.usedOrderId }}</text>
+        </view>
+      </view>
+    </view>
 
     <view v-else class="empty-coupon">
-      <text class="empty-title">暂无优惠券</text>
-      <text class="empty-desc">当前没有可用优惠券</text>
+      <text class="empty-title">{{ loadingCoupons ? '优惠券加载中' : '暂无优惠券' }}</text>
+      <text class="empty-desc">{{ loadingCoupons ? '请稍候' : '当前没有符合条件的优惠券' }}</text>
     </view>
   </view>
 </template>
@@ -299,6 +363,91 @@ onShow(() => {
 
 .coupon-list {
   padding: 22rpx 24rpx 56rpx;
+}
+
+.coupon-card {
+  min-height: 176rpx;
+  margin-bottom: 18rpx;
+  border-radius: 18rpx;
+  background: #ffffff;
+  display: flex;
+  overflow: hidden;
+  box-shadow: 0 8rpx 22rpx rgba(21, 31, 52, 0.06);
+}
+
+.coupon-card-disabled {
+  opacity: 0.58;
+}
+
+.coupon-value {
+  width: 210rpx;
+  padding: 26rpx 12rpx;
+  background: #fff1f0;
+  color: #ff383d;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.coupon-amount {
+  max-width: 100%;
+  font-size: 42rpx;
+  line-height: 50rpx;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.coupon-condition {
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  line-height: 30rpx;
+}
+
+.coupon-info {
+  flex: 1;
+  min-width: 0;
+  padding: 24rpx;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.coupon-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.coupon-name {
+  flex: 1;
+  min-width: 0;
+  color: #20242a;
+  font-size: 30rpx;
+  line-height: 40rpx;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.coupon-status {
+  flex-shrink: 0;
+  color: #ff383d;
+  font-size: 22rpx;
+  line-height: 30rpx;
+  font-weight: 600;
+}
+
+.coupon-time,
+.coupon-order {
+  margin-top: 12rpx;
+  color: #7b8494;
+  font-size: 24rpx;
+  line-height: 34rpx;
 }
 
 .empty-coupon {

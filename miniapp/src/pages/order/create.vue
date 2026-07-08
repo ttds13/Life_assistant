@@ -1,9 +1,11 @@
 <script lang="ts" setup>
 import { getUserAddresses } from '@/api/address'
+import { getUsableCoupons } from '@/api/coupons'
 import { getMyMemberCards } from '@/api/memberCards'
 import { createOrder, getOrderPricePreview } from '@/api/orders'
 import { getServiceDetail, getServices } from '@/api/services'
 import type { UserAddress } from '@/api/types/address'
+import type { UserCoupon } from '@/api/types/coupons'
 import type { UserMemberCard } from '@/api/types/memberCards'
 import type { PricePreview } from '@/api/types/orders'
 import type { Service } from '@/api/types/services'
@@ -37,9 +39,12 @@ const priceLoading = ref(false)
 const pricePreview = ref<PricePreview>({ ...emptyPricePreview })
 const pricePreviewReady = ref(false)
 const memberCards = ref<UserMemberCard[]>([])
+const usableCoupons = ref<UserCoupon[]>([])
 const selectedMemberCardId = ref<number | undefined>()
+const selectedCouponId = ref<number | undefined>()
 const preferredMemberCardId = ref<number | undefined>()
 const memberCardLoading = ref(false)
+const couponLoading = ref(false)
 const source = ref('')
 const promotionKey = ref('')
 const campaignId = ref('')
@@ -50,6 +55,7 @@ const effectiveServiceId = computed(() => serviceId.value)
 const effectiveServiceCode = computed(() => service.value?.code || serviceCode.value)
 const hasServiceIdentifier = computed(() => !!effectiveServiceCode.value || effectiveServiceId.value > 0)
 const selectedMemberCard = computed(() => memberCards.value.find(item => item.id === selectedMemberCardId.value))
+const selectedCoupon = computed(() => usableCoupons.value.find(item => item.couponId === selectedCouponId.value))
 const isConsultationService = computed(() =>
   service.value?.consultationRequired
   || service.value?.cardType === 'consultation'
@@ -114,8 +120,8 @@ async function loadService() {
   loading.value = true
   try {
     service.value = await ensureServiceLoaded()
-    await loadPricePreview()
     await loadMemberCards()
+    await loadPricePreview()
   }
   catch {
     service.value = null
@@ -145,6 +151,10 @@ async function loadMemberCards() {
     if (selectedMemberCardId.value && !memberCards.value.some(item => item.id === selectedMemberCardId.value)) {
       selectedMemberCardId.value = undefined
     }
+    if (selectedMemberCardId.value) {
+      selectedCouponId.value = undefined
+      usableCoupons.value = []
+    }
   }
   catch {
     memberCards.value = []
@@ -163,6 +173,55 @@ function formatCardBalance(card: UserMemberCard) {
 
 function onSelectMemberCard(card?: UserMemberCard) {
   selectedMemberCardId.value = card?.id
+  if (card) {
+    selectedCouponId.value = undefined
+    usableCoupons.value = []
+  }
+  void loadPricePreview()
+}
+
+function formatCouponAmount(coupon: UserCoupon) {
+  if (coupon.type === 'discount')
+    return `${coupon.amount}折`
+  return `¥${coupon.amount.toFixed(2)}`
+}
+
+function formatCouponDesc(coupon: UserCoupon) {
+  const condition = coupon.minAmount > 0 ? `满 ¥${coupon.minAmount.toFixed(2)} 可用` : '无门槛'
+  return `${condition}，有效期至 ${coupon.expireAt.slice(0, 10)}`
+}
+
+function onSelectCoupon(coupon?: UserCoupon) {
+  selectedCouponId.value = coupon?.couponId
+  if (coupon)
+    selectedMemberCardId.value = undefined
+  void loadPricePreview()
+}
+
+async function loadUsableCoupons(amount?: number) {
+  if (!service.value?.id || selectedMemberCard.value || isConsultationService.value) {
+    usableCoupons.value = []
+    selectedCouponId.value = undefined
+    return
+  }
+
+  couponLoading.value = true
+  try {
+    const queryAmount = amount ?? pricePreview.value.serviceAmount ?? service.value.basePrice
+    usableCoupons.value = await getUsableCoupons({
+      serviceId: service.value.id,
+      amount: queryAmount,
+    })
+    if (selectedCouponId.value && !usableCoupons.value.some(item => item.couponId === selectedCouponId.value))
+      selectedCouponId.value = undefined
+  }
+  catch {
+    usableCoupons.value = []
+    selectedCouponId.value = undefined
+  }
+  finally {
+    couponLoading.value = false
+  }
 }
 
 async function loadPricePreview() {
@@ -172,14 +231,17 @@ async function loadPricePreview() {
   priceLoading.value = true
   pricePreviewReady.value = false
   try {
-    pricePreview.value = await getOrderPricePreview({
+    const nextPreview = await getOrderPricePreview({
       serviceCode: effectiveServiceCode.value || undefined,
       serviceId: effectiveServiceCode.value ? undefined : effectiveServiceId.value,
       addressId: selectedAddress.value?.id,
       appointmentDate: selectedDate.value,
       appointmentTimeSlot: selectedTimeSlot.value,
+      couponId: selectedMemberCard.value || isConsultationService.value ? undefined : selectedCouponId.value,
     })
+    pricePreview.value = nextPreview
     pricePreviewReady.value = true
+    await loadUsableCoupons(nextPreview.serviceAmount)
   }
   catch {
     pricePreview.value = { ...emptyPricePreview }
@@ -235,6 +297,7 @@ async function onSubmit() {
       addressId: selectedAddress.value!.id,
       remark: remark.value.trim() || undefined,
       memberCardId: selectedMemberCardId.value,
+      couponId: selectedMemberCard.value || isConsultationService.value ? undefined : selectedCouponId.value,
       source: source.value || undefined,
       promotionKey: promotionKey.value || undefined,
       campaignId: campaignId.value || undefined,
@@ -379,7 +442,42 @@ watch(timeSlots, (slots) => {
       <form-section title="优惠权益">
         <view class="flex items-center justify-between py-3 border-b border-[#F3F4F6]">
           <text class="text-[28rpx] text-gray-700">优惠券</text>
-          <text class="text-[26rpx] text-gray-400">暂无可用</text>
+          <text v-if="couponLoading" class="text-[26rpx] text-gray-400">加载中</text>
+          <text v-else-if="selectedMemberCard || isConsultationService" class="text-[26rpx] text-gray-400">当前订单不可用</text>
+          <text v-else-if="!usableCoupons.length" class="text-[26rpx] text-gray-400">暂无可用</text>
+          <text v-else class="text-[26rpx] text-[#1677FF]">
+            {{ selectedCoupon ? `${selectedCoupon.name} -${formatCouponAmount(selectedCoupon)}` : '请选择' }}
+          </text>
+        </view>
+        <view v-if="!selectedMemberCard && !isConsultationService && usableCoupons.length" class="mt-2">
+          <view
+            class="mb-2 rounded-[12rpx] border px-3 py-2"
+            :class="!selectedCouponId ? 'border-[#1677FF] bg-[#EAF3FF]' : 'border-[#E5E7EB] bg-white'"
+            @tap="onSelectCoupon(undefined)"
+          >
+            <text class="text-[26rpx]" :class="!selectedCouponId ? 'text-[#1677FF]' : 'text-gray-600'">
+              不使用优惠券
+            </text>
+          </view>
+          <view
+            v-for="coupon in usableCoupons"
+            :key="coupon.id"
+            class="mb-2 rounded-[12rpx] border px-3 py-2"
+            :class="selectedCouponId === coupon.couponId ? 'border-[#1677FF] bg-[#EAF3FF]' : 'border-[#E5E7EB] bg-white'"
+            @tap="onSelectCoupon(coupon)"
+          >
+            <view class="flex items-center justify-between">
+              <text class="text-[26rpx] font-600" :class="selectedCouponId === coupon.couponId ? 'text-[#1677FF]' : 'text-gray-700'">
+                {{ coupon.name }}
+              </text>
+              <text class="text-[24rpx] text-[#ff383d]">
+                -{{ formatCouponAmount(coupon) }}
+              </text>
+            </view>
+            <text class="block mt-1 text-[23rpx] text-gray-400">
+              {{ formatCouponDesc(coupon) }}
+            </text>
+          </view>
         </view>
         <view class="flex items-center justify-between py-3">
           <text class="text-[28rpx] text-gray-700">会员卡</text>

@@ -26,6 +26,7 @@ export interface PricePreview {
   serviceAmount: number
   discountAmount: number
   payableAmount: number
+  couponId?: number | null
   consultationRequired?: boolean
   cardType?: string
   items: AmountDetailItem[]
@@ -69,8 +70,10 @@ export interface UserOrder {
   appointmentTime: string
   addressText: string
   totalAmount: number
+  discountAmount?: number
   payableAmount: number
   paidAmount?: number
+  couponId?: number | null
   remark?: string
   staffName?: string
   staffPhone?: string

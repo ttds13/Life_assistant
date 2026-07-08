@@ -25,4 +25,10 @@ export class PricePreviewDto {
   @Matches(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/)
   @Transform(({ value }) => trimOptional(value))
   serviceCode?: string
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Transform(({ value }) => toOptionalNumber(value))
+  couponId?: number
 }

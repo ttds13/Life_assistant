@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import { getStaffProfile, updateStaffProfile } from '@/api/staff'
+import type { StaffProfileChangeRequest } from '@/api/types/staff'
 import { useTokenStore } from '@/store/token'
 import { DEFAULT_AVATAR_URL } from '@/store/user'
 import { assertImageSize, getChooseImageErrorMessage, uploadImage } from '@/utils/uploadImage'
@@ -21,6 +22,7 @@ const verified = ref(false)
 const editingName = ref(false)
 const nameInput = ref('')
 const saving = ref(false)
+const profileChangeRequest = ref<StaffProfileChangeRequest | null>(null)
 
 const serviceEntries = [
   { label: '服务区域', url: '/pages/staff/service-area' },
@@ -39,6 +41,7 @@ function applyProfile(profile: Awaited<ReturnType<typeof getStaffProfile>>) {
   staffPhone.value = profile.staffPhone || profile.regionText || ''
   avatar.value = profile.avatarDisplayUrl || profile.avatar || DEFAULT_AVATAR_URL
   verified.value = profile.verified
+  profileChangeRequest.value = profile.profileChangeRequest || null
 }
 
 async function loadProfile() {
@@ -75,7 +78,7 @@ async function onSaveName() {
     const profile = await updateStaffProfile({ staffName: val })
     applyProfile(profile)
     editingName.value = false
-    uni.showToast({ icon: 'success', title: '保存成功' })
+    uni.showToast({ icon: 'success', title: '已提交审核' })
   }
   catch {
     uni.showToast({ icon: 'none', title: '保存失败，请重试' })
@@ -104,9 +107,7 @@ function onChooseAvatar() {
         const uploaded = await uploadImage({ filePath, bizType: 'staff_avatar' })
         const profile = await updateStaffProfile({ avatar: uploaded.url })
         applyProfile(profile)
-        if (uploaded.displayUrl)
-          avatar.value = uploaded.displayUrl
-        uni.showToast({ icon: 'success', title: '头像已更新' })
+        uni.showToast({ icon: 'success', title: '头像已提交审核' })
       }
       catch {
         uni.showToast({ icon: 'none', title: '头像上传失败，请重试' })
@@ -138,6 +139,39 @@ function onLogout() {
       }
     },
   })
+}
+
+function profileChangeStatusText(status?: string) {
+  const map: Record<string, string> = {
+    pending: '待后台复核',
+    approved: '已通过',
+    rejected: '已驳回',
+    cancelled: '已取消',
+  }
+  return status ? map[status] || status : '暂无'
+}
+
+function profileChangeStatusClass(status?: string) {
+  if (status === 'pending')
+    return 'bg-[#FFF7ED] text-[#F59E0B]'
+  if (status === 'approved')
+    return 'bg-[#ECFDF5] text-[#10B981]'
+  if (status === 'rejected')
+    return 'bg-[#FEF2F2] text-[#EF4444]'
+  return 'bg-[#F3F4F6] text-[#6B7280]'
+}
+
+function changedFieldText(fields?: string[]) {
+  const map: Record<string, string> = {
+    name: '姓名',
+    avatarUrl: '头像',
+    cityCode: '城市',
+    skills: '技能',
+    idCard: '身份证',
+    applicationNote: '认证说明',
+    applicationImages: '认证图片',
+  }
+  return (fields || []).map(field => map[field] || field).join('、') || '资料'
 }
 
 onShow(() => {
@@ -186,6 +220,38 @@ onShow(() => {
           </view>
           <text class="i-carbon-chevron-right text-[32rpx] text-[#C4C8D0]" />
         </view>
+      </view>
+    </view>
+
+    <view v-if="profileChangeRequest" class="mx-4 mt-3 bg-white rounded-[24rpx] shadow-sm overflow-hidden">
+      <view class="px-4 py-3 flex items-center justify-between">
+        <text class="text-[28rpx] text-[#9CA3AF] font-500">资料变更</text>
+        <view
+          class="px-[16rpx] py-[6rpx] rounded-full text-[24rpx]"
+          :class="profileChangeStatusClass(profileChangeRequest.status)"
+        >
+          {{ profileChangeStatusText(profileChangeRequest.status) }}
+        </view>
+      </view>
+      <view class="px-4 py-[24rpx] border-t border-[#F3F4F6]">
+        <text class="block text-[28rpx] text-[#1F2937]">
+          变更项：{{ changedFieldText(profileChangeRequest.changedFields) }}
+        </text>
+        <text class="block mt-[10rpx] text-[24rpx] text-[#8A8F99]">
+          申请编号：{{ profileChangeRequest.requestNo }}
+        </text>
+        <text
+          v-if="profileChangeRequest.status === 'pending'"
+          class="block mt-[10rpx] text-[24rpx] text-[#F59E0B]"
+        >
+          审核通过前，当前展示资料保持不变。
+        </text>
+        <text
+          v-if="profileChangeRequest.status === 'rejected' && profileChangeRequest.rejectReason"
+          class="block mt-[10rpx] text-[24rpx] text-[#EF4444]"
+        >
+          驳回原因：{{ profileChangeRequest.rejectReason }}
+        </text>
       </view>
     </view>
 

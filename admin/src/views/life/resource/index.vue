@@ -456,6 +456,75 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="pointsDialogVisible" title="用户积分" width="780px">
+      <div v-loading="pointsLoading">
+        <el-descriptions v-if="pointsSummary" :column="3" border>
+          <el-descriptions-item label="用户">{{ pointsSummary.userName || pointsSummary.userPhone || pointsSummary.userId }}</el-descriptions-item>
+          <el-descriptions-item label="手机号">{{ pointsSummary.userPhone || "-" }}</el-descriptions-item>
+          <el-descriptions-item label="当前积分">{{ pointsSummary.availablePoints }}</el-descriptions-item>
+          <el-descriptions-item label="累计金额">￥{{ money(pointsSummary.totalAmount) }}</el-descriptions-item>
+          <el-descriptions-item label="流水数">{{ pointsSummary.ledgerCount }}</el-descriptions-item>
+          <el-descriptions-item label="用户ID">{{ pointsSummary.userId }}</el-descriptions-item>
+        </el-descriptions>
+
+        <el-divider content-position="left">人工调整</el-divider>
+        <el-form :model="pointAdjustForm" label-width="90px" class="points-adjust-form">
+          <el-row :gutter="12">
+            <el-col :span="8">
+              <el-form-item label="积分" required>
+                <el-input-number v-model="pointAdjustForm.points" :step="1" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="关联金额">
+                <el-input-number v-model="pointAdjustForm.amount" :min="0" :precision="2" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-button type="primary" :loading="pointsSaving" @click="submitPointAdjust">提交调整</el-button>
+            </el-col>
+          </el-row>
+          <el-form-item label="备注">
+            <el-input v-model="pointAdjustForm.remark" type="textarea" :rows="2" maxlength="256" show-word-limit />
+          </el-form-item>
+        </el-form>
+
+        <el-divider content-position="left">最近流水</el-divider>
+        <el-table :data="pointsSummary?.recentLedgers || []" border size="small">
+          <el-table-column prop="orderNo" label="订单号" min-width="150" />
+          <el-table-column prop="type" label="类型" width="120" />
+          <el-table-column prop="points" label="积分" width="90" />
+          <el-table-column label="金额" width="110">
+            <template #default="{ row }">￥{{ money(row.amount) }}</template>
+          </el-table-column>
+          <el-table-column prop="balanceAfter" label="余额" width="100" />
+          <el-table-column prop="remark" label="备注" min-width="180" />
+          <el-table-column prop="createdAt" label="时间" width="170" />
+        </el-table>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="grantCouponVisible" title="给用户发券" width="520px">
+      <el-form :model="grantCouponForm" label-width="100px">
+        <el-form-item label="优惠券">
+          <el-text>{{ grantCouponRow?.name || grantCouponRow?.couponName || grantCouponRow?.id }}</el-text>
+        </el-form-item>
+        <el-form-item label="用户ID">
+          <el-input v-model="grantCouponForm.userId" placeholder="用户ID，和手机号二选一" />
+        </el-form-item>
+        <el-form-item label="手机号">
+          <el-input v-model="grantCouponForm.phone" maxlength="20" placeholder="手机号，和用户ID二选一" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="grantCouponForm.remark" type="textarea" :rows="3" maxlength="256" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="grantCouponVisible = false">取消</el-button>
+        <el-button type="primary" :loading="grantCouponSaving" @click="submitGrantCoupon">确认发券</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="feedbackDialogVisible" title="问题反馈详情" width="760px">
       <el-descriptions v-if="selectedFeedback" :column="2" border>
         <el-descriptions-item label="反馈编号">{{ selectedFeedback.feedbackNo || "-" }}</el-descriptions-item>
@@ -506,6 +575,7 @@ defineOptions({ name: "LifeResourcePage" });
 import LifeAPI from "@/api/life";
 import type {
   AddressRecord,
+  AdminUserPointsSummary,
   LifeModuleKey,
   LifeResourceConfig,
   LifeResourceRecord,
@@ -514,6 +584,7 @@ import type {
 } from "@/api/life";
 
 const route = useRoute();
+const router = useRouter();
 
 const moduleKey = computed(() => {
   return ((route.meta.params as Record<string, unknown> | undefined)?.module ||
@@ -538,6 +609,14 @@ const customerSaving = ref(false);
 const grantCardVisible = ref(false);
 const grantCardSaving = ref(false);
 const grantCardUser = ref<LifeResourceRecord>();
+const pointsDialogVisible = ref(false);
+const pointsLoading = ref(false);
+const pointsSaving = ref(false);
+const pointsUser = ref<LifeResourceRecord>();
+const pointsSummary = ref<AdminUserPointsSummary>();
+const grantCouponVisible = ref(false);
+const grantCouponSaving = ref(false);
+const grantCouponRow = ref<LifeResourceRecord>();
 const feedbackDialogVisible = ref(false);
 const feedbackSaving = ref(false);
 const selectedFeedback = ref<LifeResourceRecord>();
@@ -581,6 +660,16 @@ const grantCardForm = reactive({
   cardId: 0,
   totalUnits: 0,
   validityDays: 0,
+  remark: "",
+});
+const pointAdjustForm = reactive({
+  points: 0,
+  amount: 0,
+  remark: "",
+});
+const grantCouponForm = reactive({
+  userId: "",
+  phone: "",
   remark: "",
 });
 const queryParams = reactive({
@@ -683,6 +772,18 @@ function handleRowAction(action: string, row: LifeResourceRecord) {
   if (action === "addresses") {
     openOwnerAddresses(row);
   }
+  if (action === "staff_notifications") {
+    router.push({ path: "/staff/notifications", query: { staffId: String(row.id) } });
+  }
+  if (action === "staff_profile_changes") {
+    router.push({ path: "/staff/profile-changes", query: { staffId: String(row.id) } });
+  }
+  if (action === "points") {
+    void openUserPoints(row);
+  }
+  if (action === "grant_coupon") {
+    openGrantCoupon(row);
+  }
   if (action === "feedback_reply") {
     void openFeedbackDetail(row);
   }
@@ -739,6 +840,76 @@ async function submitGrantCard() {
     grantCardVisible.value = false;
   } finally {
     grantCardSaving.value = false;
+  }
+}
+
+async function openUserPoints(row: LifeResourceRecord) {
+  pointsUser.value = row;
+  pointsSummary.value = undefined;
+  pointAdjustForm.points = 0;
+  pointAdjustForm.amount = 0;
+  pointAdjustForm.remark = "";
+  pointsDialogVisible.value = true;
+  pointsLoading.value = true;
+  try {
+    pointsSummary.value = await LifeAPI.getUserPoints(String(row.id));
+  } finally {
+    pointsLoading.value = false;
+  }
+}
+
+async function submitPointAdjust() {
+  if (!pointsUser.value) return;
+  if (!Number.isInteger(pointAdjustForm.points) || pointAdjustForm.points === 0) {
+    ElMessage.warning("请填写非 0 整数积分");
+    return;
+  }
+  pointsSaving.value = true;
+  try {
+    await LifeAPI.adjustUserPoints(String(pointsUser.value.id), {
+      points: pointAdjustForm.points,
+      amount: pointAdjustForm.amount || undefined,
+      remark: pointAdjustForm.remark.trim() || undefined,
+    });
+    ElMessage.success("积分已调整");
+    pointAdjustForm.points = 0;
+    pointAdjustForm.amount = 0;
+    pointAdjustForm.remark = "";
+    pointsSummary.value = await LifeAPI.getUserPoints(String(pointsUser.value.id));
+    await fetchPage();
+  } finally {
+    pointsSaving.value = false;
+  }
+}
+
+function openGrantCoupon(row: LifeResourceRecord) {
+  grantCouponRow.value = row;
+  grantCouponForm.userId = "";
+  grantCouponForm.phone = "";
+  grantCouponForm.remark = "";
+  grantCouponVisible.value = true;
+}
+
+async function submitGrantCoupon() {
+  if (!grantCouponRow.value) return;
+  const userId = grantCouponForm.userId.trim();
+  const phone = grantCouponForm.phone.trim();
+  if (!userId && !phone) {
+    ElMessage.warning("请填写用户ID或手机号");
+    return;
+  }
+  grantCouponSaving.value = true;
+  try {
+    await LifeAPI.grantCoupon(String(grantCouponRow.value.id), {
+      userId: userId || undefined,
+      phone: phone || undefined,
+      remark: grantCouponForm.remark.trim() || undefined,
+    });
+    ElMessage.success("优惠券已发放");
+    grantCouponVisible.value = false;
+    await fetchPage();
+  } finally {
+    grantCouponSaving.value = false;
   }
 }
 
@@ -1237,12 +1408,16 @@ function resolveTagType(value: unknown) {
   if (matched?.tagType) return matched.tagType;
   if (value === true) return "success";
   if (value === false) return "info";
-  if (value === "active" || value === "published" || value === "online" || value === "staff") return "success";
+  if (value === "active" || value === "published" || value === "online" || value === "staff" || value === "available" || value === "earn") return "success";
   if (value === "service" || value === "member_card" || value === "category" || value === "home" || value === "channels") return "primary";
-  if (value === "processing") return "primary";
-  if (value === "pending" || value === "busy" || value === "open") return "warning";
-  if (value === "rejected" || value === "bug") return "danger";
+  if (value === "processing" || value === "released" || value === "admin_adjust") return "primary";
+  if (value === "pending" || value === "busy" || value === "open" || value === "locked" || value === "refund_deduct") return "warning";
+  if (value === "rejected" || value === "bug" || value === "invalid") return "danger";
   return "info";
+}
+
+function money(value: unknown) {
+  return Number(value || 0).toLocaleString("zh-CN");
 }
 
 function formatValue(value: unknown, type?: string) {
@@ -1272,6 +1447,18 @@ function formatValue(value: unknown, type?: string) {
       home: "首页",
       channels: "视频号",
       miniapp: "小程序",
+      admin: "后台",
+      phone: "电话",
+      promotion: "推广",
+      available: "可用",
+      locked: "锁定",
+      used: "已使用",
+      expired: "已过期",
+      released: "已释放",
+      invalid: "已作废",
+      earn: "消费发放",
+      refund_deduct: "退款扣回",
+      admin_adjust: "后台调整",
       pending_payment: "待支付",
       pending_dispatch: "待派单",
       dispatched: "已派单",

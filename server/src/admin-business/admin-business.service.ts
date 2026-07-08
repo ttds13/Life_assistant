@@ -4,8 +4,11 @@ import { hashAdminPassword } from '../admin-auth/admin-password'
 import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
+import { USER_COUPON_STATUS } from '../coupons/coupon-status'
 import { ORDER_STATUS } from '../orders/constants/order-status'
+import { PAYMENT_STATUS } from '../payments/constants/payment-status'
 import { PrismaService } from '../prisma/prisma.service'
+import { REFUND_STATUS } from '../refunds/constants/refund-status'
 import { RefundsService } from '../refunds/refunds.service'
 import { IMAGE_BIZ_TYPE } from '../storage/image-biz-types'
 import { ObjectStorageService } from '../storage/storage.service'
@@ -1362,6 +1365,380 @@ export class AdminBusinessService {
     })), page, total)
   }
 
+  async getFinanceSummary(query: AdminPageQueryDto) {
+    const range = this.dateRangeFromQuery(query)
+    const paidStatuses = [PAYMENT_STATUS.SUCCESS, PAYMENT_STATUS.PARTIAL_REFUNDED, PAYMENT_STATUS.REFUNDED]
+
+    const orderWhere: Prisma.OrderWhereInput = {}
+    if (range) orderWhere.createdAt = range
+    if (query.source) orderWhere.source = query.source
+    if (query.channel) {
+      orderWhere.payments = { some: { channel: query.channel, status: { in: paidStatuses } } }
+    }
+
+    const paymentWhere: Prisma.PaymentWhereInput = { status: { in: paidStatuses } }
+    if (range) paymentWhere.paidAt = range
+    if (query.channel) paymentWhere.channel = query.channel
+    if (query.source) paymentWhere.order = { source: query.source }
+
+    const refundWhere: Prisma.RefundWhereInput = { status: REFUND_STATUS.REFUNDED }
+    if (range) refundWhere.refundedAt = range
+    if (query.source) refundWhere.order = { source: query.source }
+    if (query.channel) refundWhere.payment = { channel: query.channel }
+
+    const incomeWhere: Prisma.StaffIncomeRecordWhereInput = {}
+    if (range) incomeWhere.createdAt = range
+    if (query.source || query.channel) {
+      incomeWhere.order = {
+        ...(query.source ? { source: query.source } : {}),
+        ...(query.channel ? { payments: { some: { channel: query.channel, status: { in: paidStatuses } } } } : {}),
+      }
+    }
+
+    const withdrawWhere: Prisma.WithdrawRequestWhereInput = {}
+    if (range) withdrawWhere.createdAt = range
+    if (query.channel) withdrawWhere.channel = query.channel
+
+    const pointWhere: Prisma.PointLedgerWhereInput = {}
+    if (range) pointWhere.createdAt = range
+    if (query.source || query.channel) {
+      pointWhere.order = {
+        ...(query.source ? { source: query.source } : {}),
+        ...(query.channel ? { payments: { some: { channel: query.channel, status: { in: paidStatuses } } } } : {}),
+      }
+    }
+
+    const couponOrderWhere: Prisma.OrderWhereInput = { ...orderWhere, couponId: { not: null } }
+
+    const [
+      orderAggregate,
+      couponOrderAggregate,
+      paymentAggregate,
+      refundAggregate,
+      incomeAggregate,
+      incomeByStatus,
+      incomeBySettlement,
+      incomeByWithdraw,
+      withdrawByStatus,
+      pointLedgers,
+      ordersBySource,
+      ordersByStatus,
+      paymentsByChannel,
+      refundsByStatus,
+    ] = await Promise.all([
+      this.prisma.order.aggregate({
+        where: orderWhere,
+        _count: { _all: true },
+        _sum: { originalAmount: true, discountAmount: true, payableAmount: true, paidAmount: true },
+      }),
+      this.prisma.order.aggregate({
+        where: couponOrderWhere,
+        _count: { _all: true },
+        _sum: { discountAmount: true },
+      }),
+      this.prisma.payment.aggregate({
+        where: paymentWhere,
+        _count: { _all: true },
+        _sum: { amount: true, refundedAmount: true },
+      }),
+      this.prisma.refund.aggregate({
+        where: refundWhere,
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+      this.prisma.staffIncomeRecord.aggregate({
+        where: incomeWhere,
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+      this.prisma.staffIncomeRecord.groupBy({
+        by: ['status'],
+        where: incomeWhere,
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+      this.prisma.staffIncomeRecord.groupBy({
+        by: ['settlementStatus'],
+        where: incomeWhere,
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+      this.prisma.staffIncomeRecord.groupBy({
+        by: ['withdrawStatus'],
+        where: incomeWhere,
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+      this.prisma.withdrawRequest.groupBy({
+        by: ['status'],
+        where: withdrawWhere,
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+      this.prisma.pointLedger.findMany({
+        where: pointWhere,
+        select: { type: true, points: true, amount: true },
+      }),
+      this.prisma.order.groupBy({
+        by: ['source'],
+        where: orderWhere,
+        _count: { _all: true },
+        _sum: { originalAmount: true, discountAmount: true, payableAmount: true, paidAmount: true },
+      }),
+      this.prisma.order.groupBy({
+        by: ['status'],
+        where: orderWhere,
+        _count: { _all: true },
+        _sum: { payableAmount: true, paidAmount: true },
+      }),
+      this.prisma.payment.groupBy({
+        by: ['channel'],
+        where: paymentWhere,
+        _count: { _all: true },
+        _sum: { amount: true, refundedAmount: true },
+      }),
+      this.prisma.refund.groupBy({
+        by: ['status'],
+        where: {
+          ...(range ? { createdAt: range } : {}),
+          ...(query.source ? { order: { source: query.source } } : {}),
+          ...(query.channel ? { payment: { channel: query.channel } } : {}),
+        },
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+    ])
+
+    const paidAmount = this.decimalToNumber(paymentAggregate._sum.amount)
+    const refundAmount = this.decimalToNumber(refundAggregate._sum.amount)
+    const pointSummary = pointLedgers.reduce((acc, item) => {
+      acc.net += item.points
+      if (item.points > 0) acc.earned += item.points
+      if (item.points < 0) acc.deducted += Math.abs(item.points)
+      const current = acc.byType.get(item.type) || { type: item.type, points: 0, amount: 0, count: 0 }
+      current.points += item.points
+      current.amount += this.decimalToNumber(item.amount)
+      current.count += 1
+      acc.byType.set(item.type, current)
+      return acc
+    }, { earned: 0, deducted: 0, net: 0, byType: new Map<string, { type: string, points: number, amount: number, count: number }>() })
+
+    return {
+      filters: {
+        startDate: range?.gte instanceof Date ? range.gte.toISOString() : null,
+        endDate: range?.lte instanceof Date ? range.lte.toISOString() : null,
+        source: query.source || '',
+        channel: query.channel || '',
+      },
+      summary: {
+        orderCount: orderAggregate._count._all,
+        grossAmount: this.decimalToNumber(orderAggregate._sum.originalAmount),
+        discountAmount: this.decimalToNumber(orderAggregate._sum.discountAmount),
+        couponOrderCount: couponOrderAggregate._count._all,
+        couponDiscount: this.decimalToNumber(couponOrderAggregate._sum.discountAmount),
+        payableAmount: this.decimalToNumber(orderAggregate._sum.payableAmount),
+        orderPaidAmount: this.decimalToNumber(orderAggregate._sum.paidAmount),
+        paymentCount: paymentAggregate._count._all,
+        paidAmount,
+        paymentRefundedAmount: this.decimalToNumber(paymentAggregate._sum.refundedAmount),
+        refundCount: refundAggregate._count._all,
+        refundAmount,
+        netRevenue: paidAmount - refundAmount,
+        incomeCount: incomeAggregate._count._all,
+        incomeAmount: this.decimalToNumber(incomeAggregate._sum.amount),
+        pointsEarned: pointSummary.earned,
+        pointsDeducted: pointSummary.deducted,
+        pointsNet: pointSummary.net,
+      },
+      breakdowns: {
+        ordersBySource: ordersBySource.map(item => ({
+          source: item.source,
+          count: item._count._all,
+          grossAmount: this.decimalToNumber(item._sum.originalAmount),
+          discountAmount: this.decimalToNumber(item._sum.discountAmount),
+          payableAmount: this.decimalToNumber(item._sum.payableAmount),
+          paidAmount: this.decimalToNumber(item._sum.paidAmount),
+        })),
+        ordersByStatus: ordersByStatus.map(item => ({
+          status: item.status,
+          label: this.orderStatusLabel(item.status),
+          count: item._count._all,
+          payableAmount: this.decimalToNumber(item._sum.payableAmount),
+          paidAmount: this.decimalToNumber(item._sum.paidAmount),
+        })),
+        paymentsByChannel: paymentsByChannel.map(item => ({
+          channel: item.channel,
+          count: item._count._all,
+          amount: this.decimalToNumber(item._sum.amount),
+          refundedAmount: this.decimalToNumber(item._sum.refundedAmount),
+          netAmount: this.decimalToNumber(item._sum.amount) - this.decimalToNumber(item._sum.refundedAmount),
+        })),
+        refundsByStatus: refundsByStatus.map(item => ({
+          status: item.status,
+          count: item._count._all,
+          amount: this.decimalToNumber(item._sum.amount),
+        })),
+        incomeByStatus: incomeByStatus.map(item => ({
+          status: item.status,
+          count: item._count._all,
+          amount: this.decimalToNumber(item._sum.amount),
+        })),
+        incomeBySettlement: incomeBySettlement.map(item => ({
+          status: item.settlementStatus,
+          count: item._count._all,
+          amount: this.decimalToNumber(item._sum.amount),
+        })),
+        incomeByWithdraw: incomeByWithdraw.map(item => ({
+          status: item.withdrawStatus,
+          count: item._count._all,
+          amount: this.decimalToNumber(item._sum.amount),
+        })),
+        withdrawsByStatus: withdrawByStatus.map(item => ({
+          status: item.status,
+          count: item._count._all,
+          amount: this.decimalToNumber(item._sum.amount),
+        })),
+        pointsByType: Array.from(pointSummary.byType.values()),
+      },
+    }
+  }
+
+  async listPointLedgers(query: AdminPageQueryDto) {
+    const page = this.getPage(query)
+    const where: Prisma.PointLedgerWhereInput = {}
+    const type = query.type || query.status
+    if (type && type !== 'all') where.type = type
+    if (query.userId) where.userId = BigInt(Number(query.userId))
+    const range = this.dateRangeFromQuery(query)
+    if (range) where.createdAt = range
+    if (page.keyword) {
+      where.OR = [
+        { type: { contains: page.keyword } },
+        { remark: { contains: page.keyword } },
+        { user: { nickname: { contains: page.keyword } } },
+        { user: { phone: { contains: page.keyword } } },
+        { order: { orderNo: { contains: page.keyword } } },
+      ]
+    }
+
+    const [total, ledgers] = await this.prisma.$transaction([
+      this.prisma.pointLedger.count({ where }),
+      this.prisma.pointLedger.findMany({
+        where,
+        include: { user: true, order: { select: { id: true, orderNo: true, source: true, status: true } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: this.skip(page),
+        take: page.pageSize,
+      }),
+    ])
+
+    return this.pageResult(ledgers.map(item => ({
+      id: String(item.id),
+      userId: String(item.userId),
+      userName: item.user.nickname || '',
+      userPhone: item.user.phone || '',
+      orderId: item.orderId ? String(item.orderId) : '',
+      orderNo: item.order?.orderNo || '',
+      orderSource: item.order?.source || '',
+      orderStatus: item.order?.status || '',
+      type: item.type,
+      points: item.points,
+      amount: this.decimalToNumber(item.amount),
+      balanceAfter: item.balanceAfter,
+      remark: item.remark || '',
+      createdAt: this.formatDateTime(item.createdAt),
+    })), page, total)
+  }
+
+  async getAdminUserPoints(id: number) {
+    const user = await this.prisma.user.findFirst({ where: { id: BigInt(id), deletedAt: null } })
+    if (!user) throw this.notFound('user not found')
+    const [summary, recentLedgers] = await Promise.all([
+      this.prisma.pointLedger.aggregate({
+        where: { userId: user.id },
+        _sum: { points: true, amount: true },
+        _count: { _all: true },
+      }),
+      this.prisma.pointLedger.findMany({
+        where: { userId: user.id },
+        include: { order: { select: { id: true, orderNo: true } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 10,
+      }),
+    ])
+
+    return {
+      userId: Number(user.id),
+      userName: user.nickname || '',
+      userPhone: user.phone || '',
+      totalPoints: summary._sum.points || 0,
+      availablePoints: summary._sum.points || 0,
+      totalAmount: this.decimalToNumber(summary._sum.amount),
+      ledgerCount: summary._count._all,
+      recentLedgers: recentLedgers.map(item => ({
+        id: Number(item.id),
+        orderId: item.orderId ? Number(item.orderId) : null,
+        orderNo: item.order?.orderNo || '',
+        type: item.type,
+        points: item.points,
+        amount: this.decimalToNumber(item.amount),
+        balanceAfter: item.balanceAfter,
+        remark: item.remark || '',
+        createdAt: this.formatDateTime(item.createdAt),
+      })),
+    }
+  }
+
+  async adjustUserPoints(id: number, body: JsonRecord, context: AdminWriteContext) {
+    const points = Number(body.points)
+    if (!Number.isInteger(points) || points === 0) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'points must be non-zero integer', 400)
+    }
+    const remark = this.optionalString(body.remark) || 'admin point adjustment'
+    const amount = this.optionalDecimal(body.amount)
+    const created = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.findFirst({ where: { id: BigInt(id), deletedAt: null } })
+      if (!user) throw this.notFound('user not found')
+      const summary = await tx.pointLedger.aggregate({
+        where: { userId: user.id },
+        _sum: { points: true },
+      })
+      const balanceAfter = (summary._sum.points || 0) + points
+      const ledger = await tx.pointLedger.create({
+        data: {
+          userId: user.id,
+          type: 'admin_adjust',
+          points,
+          amount,
+          balanceAfter,
+          remark,
+        },
+      })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'points:adjust',
+        module: 'finance',
+        targetType: 'user',
+        targetId: id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { points, balanceAfter, remark },
+      })
+      return ledger
+    })
+
+    return {
+      id: Number(created.id),
+      userId: id,
+      type: created.type,
+      points: created.points,
+      amount: this.decimalToNumber(created.amount),
+      balanceAfter: created.balanceAfter,
+      remark: created.remark || '',
+      createdAt: this.formatDateTime(created.createdAt),
+    }
+  }
+
   async listReviews(query: AdminPageQueryDto) {
     const page = this.getPage(query)
     const where: Prisma.ReviewWhereInput = {}
@@ -1435,20 +1812,192 @@ export class AdminBusinessService {
         take: page.pageSize,
       }),
     ])
+    const couponIds = coupons.map(coupon => coupon.id)
+    const statusCounts = couponIds.length
+      ? await this.prisma.userCoupon.groupBy({
+          by: ['couponId', 'status'],
+          where: { couponId: { in: couponIds } },
+          _count: { _all: true },
+        })
+      : []
+    const statusCountMap = new Map<string, Record<string, number>>()
+    for (const item of statusCounts) {
+      const key = String(item.couponId)
+      const current = statusCountMap.get(key) || {}
+      current[item.status] = item._count._all
+      statusCountMap.set(key, current)
+    }
 
-    return this.pageResult(coupons.map(coupon => ({
-      id: String(coupon.id),
-      name: coupon.name,
-      type: coupon.type,
-      amount: this.decimalToNumber(coupon.amount),
-      minAmount: this.decimalToNumber(coupon.minAmount),
-      totalCount: coupon.totalCount,
-      issuedCount: coupon.issuedCount,
-      receivedCount: coupon._count.userCoupons,
-      status: this.publishStatus(coupon.status),
-      startTime: this.formatDateTime(coupon.startTime),
-      endTime: this.formatDateTime(coupon.endTime),
-    })), page, total)
+    return this.pageResult(coupons.map((coupon) => {
+      const counts = statusCountMap.get(String(coupon.id)) || {}
+      return {
+        id: String(coupon.id),
+        name: coupon.name,
+        type: coupon.type,
+        amount: this.decimalToNumber(coupon.amount),
+        minAmount: this.decimalToNumber(coupon.minAmount),
+        totalCount: coupon.totalCount,
+        issuedCount: coupon.issuedCount,
+        receivedCount: coupon._count.userCoupons,
+        availableCount: counts[USER_COUPON_STATUS.AVAILABLE] || 0,
+        lockedCount: counts[USER_COUPON_STATUS.LOCKED] || 0,
+        usedCount: counts[USER_COUPON_STATUS.USED] || 0,
+        expiredCount: counts[USER_COUPON_STATUS.EXPIRED] || 0,
+        releasedCount: counts[USER_COUPON_STATUS.RELEASED] || 0,
+        invalidCount: counts[USER_COUPON_STATUS.INVALID] || 0,
+        status: this.publishStatus(coupon.status),
+        startTime: this.formatDateTime(coupon.startTime),
+        endTime: this.formatDateTime(coupon.endTime),
+      }
+    }), page, total)
+  }
+
+  async listUserCouponsAdmin(query: AdminPageQueryDto) {
+    const page = this.getPage(query)
+    const where: Prisma.UserCouponWhereInput = {}
+    if (query.status && query.status !== 'all') where.status = query.status
+    if (query.couponId) where.couponId = BigInt(Number(query.couponId))
+    if (query.userId) where.userId = BigInt(Number(query.userId))
+    if (page.keyword) {
+      const matchedOrders = await this.prisma.order.findMany({
+        where: { orderNo: { contains: page.keyword } },
+        select: { id: true },
+        take: 100,
+      })
+      where.OR = [
+        { coupon: { name: { contains: page.keyword } } },
+        { user: { nickname: { contains: page.keyword } } },
+        { user: { phone: { contains: page.keyword } } },
+        ...(matchedOrders.length ? [{ usedOrderId: { in: matchedOrders.map(order => order.id) } }] : []),
+      ]
+    }
+
+    const [total, userCoupons] = await this.prisma.$transaction([
+      this.prisma.userCoupon.count({ where }),
+      this.prisma.userCoupon.findMany({
+        where,
+        include: { coupon: true, user: true },
+        orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
+        skip: this.skip(page),
+        take: page.pageSize,
+      }),
+    ])
+    const usedOrderIds = userCoupons.map(item => item.usedOrderId).filter((id): id is bigint => Boolean(id))
+    const orders = usedOrderIds.length
+      ? await this.prisma.order.findMany({
+          where: { id: { in: this.uniqueBigInts(usedOrderIds) } },
+          select: { id: true, orderNo: true, status: true, source: true },
+        })
+      : []
+    const orderMap = new Map(orders.map(order => [String(order.id), order]))
+
+    return this.pageResult(userCoupons.map((item) => {
+      const order = item.usedOrderId ? orderMap.get(String(item.usedOrderId)) : undefined
+      return {
+        id: String(item.id),
+        couponId: String(item.couponId),
+        couponName: item.coupon.name,
+        couponType: item.coupon.type,
+        couponAmount: this.decimalToNumber(item.coupon.amount),
+        couponMinAmount: this.decimalToNumber(item.coupon.minAmount),
+        userId: String(item.userId),
+        userName: item.user.nickname || '',
+        userPhone: item.user.phone || '',
+        status: item.status,
+        usedOrderId: item.usedOrderId ? String(item.usedOrderId) : '',
+        usedOrderNo: order?.orderNo || '',
+        usedOrderStatus: order?.status || '',
+        usedOrderSource: order?.source || '',
+        receivedAt: this.formatDateTime(item.receivedAt),
+        usedAt: item.usedAt ? this.formatDateTime(item.usedAt) : '',
+        expireAt: this.formatDateTime(item.expireAt),
+      }
+    }), page, total)
+  }
+
+  async grantCoupon(id: number, body: JsonRecord, context: AdminWriteContext) {
+    const userIdFromBody = this.optionalNumber(body.userId)
+    const phone = this.optionalString(body.phone)
+    if (!userIdFromBody && !phone) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'userId or phone required', 400)
+    }
+    const remark = this.optionalString(body.remark) || 'admin grant coupon'
+    const now = new Date()
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const coupon = await tx.coupon.findUnique({ where: { id: BigInt(id) } })
+      if (!coupon) throw this.notFound('coupon not found')
+      if (coupon.status !== 1 || coupon.startTime > now || coupon.endTime <= now) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'coupon is not grantable', 409)
+      }
+      const user = userIdFromBody
+        ? await tx.user.findFirst({ where: { id: BigInt(userIdFromBody), deletedAt: null } })
+        : await tx.user.findFirst({ where: { phone, deletedAt: null }, orderBy: { id: 'desc' } })
+      if (!user) throw this.notFound('user not found')
+
+      const existing = await tx.userCoupon.findFirst({
+        where: {
+          couponId: coupon.id,
+          userId: user.id,
+          status: { in: [USER_COUPON_STATUS.AVAILABLE, USER_COUPON_STATUS.LOCKED] },
+        },
+        include: { coupon: true, user: true },
+        orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
+      })
+      if (existing) return existing
+
+      if (coupon.totalCount > 0) {
+        const updated = await tx.coupon.updateMany({
+          where: {
+            id: coupon.id,
+            status: 1,
+            startTime: { lte: now },
+            endTime: { gt: now },
+            issuedCount: { lt: coupon.totalCount },
+          },
+          data: { issuedCount: { increment: 1 } },
+        })
+        if (updated.count !== 1) {
+          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'coupon sold out', 409)
+        }
+      }
+      else {
+        await tx.coupon.update({ where: { id: coupon.id }, data: { issuedCount: { increment: 1 } } })
+      }
+
+      const userCoupon = await tx.userCoupon.create({
+        data: {
+          couponId: coupon.id,
+          userId: user.id,
+          status: USER_COUPON_STATUS.AVAILABLE,
+          expireAt: coupon.endTime,
+        },
+        include: { coupon: true, user: true },
+      })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'coupon:grant',
+        module: 'marketing',
+        targetType: 'coupon',
+        targetId: id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { userId: Number(user.id), userCouponId: Number(userCoupon.id), remark },
+      })
+      return userCoupon
+    })
+
+    return {
+      id: String(created.id),
+      couponId: String(created.couponId),
+      couponName: created.coupon.name,
+      userId: String(created.userId),
+      userName: created.user.nickname || '',
+      userPhone: created.user.phone || '',
+      status: created.status,
+      receivedAt: this.formatDateTime(created.receivedAt),
+      expireAt: this.formatDateTime(created.expireAt),
+    }
   }
 
   async createCoupon(body: JsonRecord, context: AdminWriteContext) {
@@ -2910,6 +3459,25 @@ export class AdminBusinessService {
       ...(start ? { gte: start } : {}),
       ...(end ? { lte: end } : {}),
     }
+  }
+
+  private dateRangeFromQuery(query: AdminPageQueryDto): Prisma.DateTimeFilter | undefined {
+    const startRaw = query.dateStart || query.startDate
+    const endRaw = query.dateEnd || query.endDate
+    const start = this.optionalDate(startRaw)
+    const end = this.optionalDate(endRaw)
+    if (end && this.isDateOnly(endRaw)) {
+      end.setHours(23, 59, 59, 999)
+    }
+    if (!start && !end) return undefined
+    return {
+      ...(start ? { gte: start } : {}),
+      ...(end ? { lte: end } : {}),
+    }
+  }
+
+  private isDateOnly(value: unknown) {
+    return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.trim())
   }
 
   private normalizeUserMemberCardStatus(value: string) {

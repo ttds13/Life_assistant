@@ -92,6 +92,8 @@ export interface StaffNotification {
   isRead: boolean
   channel: string
   sendStatus: string
+  sentAt?: string | null
+  readAt?: string | null
   createdAt: string
 }
 
@@ -110,6 +112,33 @@ export interface StaffProfileStats {
   bonusAmount: number
 }
 
+export interface StaffProfileSnapshot {
+  name: string
+  avatarUrl?: string | null
+  cityCode?: string | null
+  skills: string[]
+  idCard?: string | null
+  applicationNote?: string | null
+  applicationImages: string[]
+}
+
+export interface StaffProfileChangeRequest {
+  id: number
+  requestNo: string
+  staffId: number
+  changeType: 'basic' | 'certification' | 'mixed' | string
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled' | string
+  beforeSnapshot: StaffProfileSnapshot
+  afterSnapshot: StaffProfileSnapshot
+  changedFields: string[]
+  submitNote?: string
+  rejectReason?: string
+  reviewedAt?: string | null
+  appliedAt?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export interface StaffProfile {
   staffId?: number
   staffName: string
@@ -123,6 +152,8 @@ export interface StaffProfile {
   workStatusText?: string
   rating?: number
   stats: Record<StaffStatsPeriod, StaffProfileStats>
+  pendingProfileChange?: boolean
+  profileChangeRequest?: StaffProfileChangeRequest | null
 }
 
 export interface UpdateStaffProfileParams {

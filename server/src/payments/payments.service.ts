@@ -3,7 +3,9 @@ import { ConfigService } from '@nestjs/config'
 import { Prisma } from '@prisma/client'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
+import { CouponsService } from '../coupons/coupons.service'
 import { MemberCardsService } from '../member-cards/member-cards.service'
+import { NotificationsService } from '../notifications/notifications.service'
 import { ORDER_ACTION } from '../orders/constants/order-action'
 import { ORDER_STATUS } from '../orders/constants/order-status'
 import { ORDER_TYPE } from '../orders/constants/order-type'
@@ -29,6 +31,8 @@ export class PaymentsService {
     @Inject(WechatPayClient) private readonly wechatPay: WechatPayClient,
     @Inject(MemberCardsService) private readonly memberCards: MemberCardsService,
     @Inject(UsersService) private readonly users: UsersService,
+    @Inject(CouponsService) private readonly coupons: CouponsService,
+    @Inject(NotificationsService) private readonly notifications: NotificationsService,
   ) {}
 
   async createPayment(userId: number, orderId: number, requestId?: string) {
@@ -336,10 +340,24 @@ export class PaymentsService {
             processResult: 'success',
           },
         })
+        await this.coupons.markCouponUsedForOrder(tx, order.id, now)
+        await this.users.ensureEarnedPointsForPaidOrder(tx, order, payment.amount)
+        await this.notifications.createAdminOrderNotification({
+          tx,
+          orderId: order.id,
+          orderNo: order.orderNo,
+          serviceName: this.serviceNameFromSnapshot(order.serviceSnapshot),
+          appointmentStartTime: order.appointmentStartTime,
+          type: 'admin_pending_dispatch',
+        })
       },
     })
+  }
 
-    await this.users.ensureEarnedPointsForOrder(payment.orderId)
+  private serviceNameFromSnapshot(value: Prisma.JsonValue) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+    const name = (value as Prisma.JsonObject).name
+    return typeof name === 'string' ? name : ''
   }
 
   private async markMemberCardPurchasePaymentSuccess(

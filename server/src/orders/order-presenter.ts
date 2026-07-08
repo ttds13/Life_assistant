@@ -57,16 +57,25 @@ function addressText(snapshot: JsonRecord) {
   ].filter(Boolean).join('')
 }
 
-export function presentPricePreview(amount: number, options?: { consultationRequired?: boolean, cardType?: string }) {
+export function presentPricePreview(amount: number, options?: {
+  consultationRequired?: boolean
+  cardType?: string
+  discountAmount?: number
+  payableAmount?: number
+  couponId?: number | null
+}) {
+  const discountAmount = options?.discountAmount || 0
+  const payableAmount = options?.payableAmount ?? Math.max(0, amount - discountAmount)
   return {
     serviceAmount: amount,
-    discountAmount: 0,
-    payableAmount: amount,
+    discountAmount,
+    payableAmount,
+    couponId: options?.couponId || null,
     consultationRequired: options?.consultationRequired || false,
     cardType: options?.cardType || '',
     items: [
       { label: 'Service amount', amount },
-      { label: 'Discount', amount: 0, type: 'discount' as const },
+      { label: 'Discount', amount: discountAmount, type: 'discount' as const },
     ],
   }
 }
@@ -100,7 +109,9 @@ export function presentUserOrder(order: OrderDetailRecord) {
     appointmentTime: formatAppointment(order),
     addressText: addressText(addressSnapshot),
     totalAmount,
+    discountAmount: decimalToNumber(order.discountAmount),
     payableAmount,
+    couponId: order.couponId ? Number(order.couponId) : null,
     remark: order.remark || '',
     staffName: order.staff?.name || '',
     staffPhone: order.staff?.phone || '',

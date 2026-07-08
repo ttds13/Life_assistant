@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common'
 import { AuthModule } from '../auth/auth.module'
+import { CouponsModule } from '../coupons/coupons.module'
 import { MemberCardsModule } from '../member-cards/member-cards.module'
+import { NotificationsModule } from '../notifications/notifications.module'
 import { OrdersModule } from '../orders/orders.module'
 import { UsersModule } from '../users/users.module'
 import { PaymentsController } from './payments.controller'
@@ -10,7 +12,7 @@ import { WechatPayClient } from './wechat-pay.client'
 import { WechatPayConfig } from './wechat-pay.config'
 
 @Module({
-  imports: [AuthModule, OrdersModule, MemberCardsModule, UsersModule],
+  imports: [AuthModule, OrdersModule, MemberCardsModule, UsersModule, CouponsModule, NotificationsModule],
   controllers: [PaymentsController],
   providers: [
     PaymentsService,

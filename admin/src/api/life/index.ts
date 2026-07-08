@@ -5,10 +5,14 @@ import type {
   AddressRecord,
   AfterSalesTicket,
   AdminCreateOrderPayload,
+  AdminNotificationItem,
+  AdminStaffNotificationItem,
+  AdminUserPointsSummary,
   AdminWithdrawDetail,
   AdminWithdrawRequest,
   DashboardData,
   DispatchCheckResult,
+  FinanceSummaryData,
   LifeFormItem,
   LifeModuleKey,
   LifeQueryParams,
@@ -18,7 +22,10 @@ import type {
   LifeSelectOption,
   LifeStatusOption,
   OrderDetail,
+  OrderAccountingResult,
   OrderListItem,
+  StaffProfileChangeRequestItem,
+  StaffProfileHistory,
   StaffOption,
   UpdateOrderPayload,
 } from "./types";
@@ -152,6 +159,23 @@ const memberCardRecordTypeOptions = [
   { label: "核销", value: "consume", tagType: "danger" },
 ] satisfies LifeStatusOption[];
 
+const pointLedgerTypeOptions = [
+  { label: "全部", value: "" },
+  { label: "消费发放", value: "earn", tagType: "success" },
+  { label: "退款扣回", value: "refund_deduct", tagType: "warning" },
+  { label: "后台调整", value: "admin_adjust", tagType: "primary" },
+] satisfies LifeStatusOption[];
+
+const userCouponStatusOptions = [
+  { label: "全部", value: "" },
+  { label: "可用", value: "available", tagType: "success" },
+  { label: "锁定", value: "locked", tagType: "warning" },
+  { label: "已使用", value: "used", tagType: "info" },
+  { label: "已过期", value: "expired", tagType: "info" },
+  { label: "已释放", value: "released", tagType: "primary" },
+  { label: "已作废", value: "invalid", tagType: "danger" },
+] satisfies LifeStatusOption[];
+
 const promotionTargetTypeOptions = [
   { label: "服务商品", value: "service" },
   { label: "会员卡商品", value: "member_card" },
@@ -175,7 +199,10 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
     primaryAction: "新增客户",
     editable: true,
     deletable: true,
-    rowActions: [{ key: "addresses", label: "地址", type: "success" }],
+    rowActions: [
+      { key: "addresses", label: "地址", type: "success" },
+      { key: "points", label: "积分", type: "primary" },
+    ],
     statusOptions: statusOptions.active,
     columns: [
       { prop: "nickname", label: "用户昵称", minWidth: 140 },
@@ -325,7 +352,11 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
     primaryAction: "新增师傅",
     editable: true,
     deletable: true,
-    rowActions: [{ key: "addresses", label: "地址", type: "success" }],
+    rowActions: [
+      { key: "addresses", label: "地址", type: "success" },
+      { key: "staff_notifications", label: "通知", type: "primary" },
+      { key: "staff_profile_changes", label: "资料历史", type: "warning" },
+    ],
     statusOptions: statusOptions.staff,
     columns: [
       { prop: "userId", label: "用户ID", width: 90 },
@@ -381,6 +412,25 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "amount", label: "金额", width: 120, type: "money" },
       { prop: "status", label: "状态", width: 100, type: "tag" },
       { prop: "paidAt", label: "支付时间", width: 170, type: "datetime" },
+    ],
+  },
+  pointLedgers: {
+    module: "pointLedgers",
+    title: "积分流水",
+    description: "查看用户消费发放、退款扣回和后台调整的积分明细。",
+    searchPlaceholder: "用户 / 手机号 / 订单号 / 备注",
+    statusOptions: pointLedgerTypeOptions,
+    columns: [
+      { prop: "userName", label: "用户", minWidth: 120 },
+      { prop: "userPhone", label: "手机号", width: 130 },
+      { prop: "orderNo", label: "订单号", minWidth: 150 },
+      { prop: "orderSource", label: "来源", width: 90, type: "tag" },
+      { prop: "type", label: "类型", width: 120, type: "tag" },
+      { prop: "points", label: "积分变动", width: 100 },
+      { prop: "amount", label: "关联金额", width: 110, type: "money" },
+      { prop: "balanceAfter", label: "变动后余额", width: 120 },
+      { prop: "remark", label: "备注", minWidth: 220 },
+      { prop: "createdAt", label: "创建时间", width: 170, type: "datetime" },
     ],
   },
   reviews: {
@@ -558,6 +608,7 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
     searchPlaceholder: "优惠券名称",
     primaryAction: "新增优惠券",
     editable: true,
+    rowActions: [{ key: "grant_coupon", label: "发券", type: "success" }],
     statusOptions: statusOptions.publish,
     columns: [
       { prop: "name", label: "优惠券名称", minWidth: 160 },
@@ -565,6 +616,12 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "amount", label: "面额", width: 100, type: "money" },
       { prop: "minAmount", label: "门槛", width: 100, type: "money" },
       { prop: "issuedCount", label: "已发放", width: 100 },
+      { prop: "receivedCount", label: "领取数", width: 90 },
+      { prop: "availableCount", label: "可用", width: 80 },
+      { prop: "lockedCount", label: "锁定", width: 80 },
+      { prop: "usedCount", label: "已用", width: 80 },
+      { prop: "expiredCount", label: "过期", width: 80 },
+      { prop: "releasedCount", label: "释放", width: 80 },
       { prop: "status", label: "状态", width: 90, type: "tag" },
     ],
     formItems: [
@@ -574,6 +631,27 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "minAmount", label: "使用门槛", type: "number" },
       { prop: "totalCount", label: "总数量", type: "number" },
       { prop: "status", label: "状态", type: "select", options: publishStatusOptions },
+    ],
+  },
+  userCoupons: {
+    module: "userCoupons",
+    title: "用户券明细",
+    description: "按用户、手机号、订单号查询优惠券领取、锁定、核销和退款释放状态。",
+    searchPlaceholder: "优惠券 / 用户 / 手机号 / 订单号",
+    statusOptions: userCouponStatusOptions,
+    columns: [
+      { prop: "couponName", label: "优惠券", minWidth: 160 },
+      { prop: "couponType", label: "类型", width: 90, type: "tag" },
+      { prop: "couponAmount", label: "面额", width: 100, type: "money" },
+      { prop: "userName", label: "用户", minWidth: 120 },
+      { prop: "userPhone", label: "手机号", width: 130 },
+      { prop: "status", label: "状态", width: 100, type: "tag" },
+      { prop: "usedOrderNo", label: "使用订单", minWidth: 150 },
+      { prop: "usedOrderStatus", label: "订单状态", width: 110, type: "tag" },
+      { prop: "usedOrderSource", label: "订单来源", width: 100, type: "tag" },
+      { prop: "receivedAt", label: "领取时间", width: 170, type: "datetime" },
+      { prop: "usedAt", label: "使用时间", width: 170, type: "datetime" },
+      { prop: "expireAt", label: "过期时间", width: 170, type: "datetime" },
     ],
   },
   memberCards: {
@@ -665,6 +743,7 @@ const moduleEndpointMap: Record<LifeModuleKey, string> = {
   staff: "staff",
   staffStatus: "staff/status",
   payments: "payments",
+  pointLedgers: "points/ledgers",
   reviews: "reviews",
   feedbacks: "feedbacks",
   faqs: "faqs",
@@ -672,6 +751,7 @@ const moduleEndpointMap: Record<LifeModuleKey, string> = {
   homeBanners: "home-banners",
   promotionLinks: "promotion-links",
   coupons: "coupons",
+  userCoupons: "user-coupons",
   memberCards: "member-cards",
   userMemberCards: "user-member-cards",
   memberCardRecords: "member-card-records",
@@ -695,7 +775,18 @@ function toAdminQuery(queryParams: LifeQueryParams) {
     recordType: queryParams.recordType || undefined,
     cardType: queryParams.cardType || undefined,
     source: queryParams.source || undefined,
+    channel: queryParams.channel || undefined,
+    startDate: queryParams.startDate || undefined,
+    endDate: queryParams.endDate || undefined,
+    userId: queryParams.userId || undefined,
+    couponId: queryParams.couponId || undefined,
     targetType: queryParams.targetType || undefined,
+    staffId: queryParams.staffId || undefined,
+    orderId: queryParams.orderId || undefined,
+    orderNo: queryParams.orderNo || undefined,
+    sendStatus: queryParams.sendStatus || undefined,
+    isRead: queryParams.isRead || undefined,
+    changeType: queryParams.changeType || undefined,
   };
 }
 
@@ -720,6 +811,37 @@ const LifeAPI = {
     return request<unknown, DashboardData>({
       url: `${ADMIN_BASE_URL}/dashboard`,
       method: "get",
+    });
+  },
+
+  getFinanceSummary(params?: { startDate?: string; endDate?: string; source?: string; channel?: string }) {
+    return request<unknown, FinanceSummaryData>({
+      url: `${ADMIN_BASE_URL}/finance/summary`,
+      method: "get",
+      params,
+    });
+  },
+
+  getUserPoints(id: string | number) {
+    return request<unknown, AdminUserPointsSummary>({
+      url: `${ADMIN_BASE_URL}/users/${id}/points`,
+      method: "get",
+    });
+  },
+
+  adjustUserPoints(id: string | number, data: { points: number; amount?: number; remark?: string }) {
+    return request({
+      url: `${ADMIN_BASE_URL}/users/${id}/points/adjust`,
+      method: "post",
+      data,
+    });
+  },
+
+  grantCoupon(id: string | number, data: { userId?: number | string; phone?: string; remark?: string }) {
+    return request({
+      url: `${ADMIN_BASE_URL}/coupons/${id}/grant`,
+      method: "post",
+      data,
     });
   },
 
@@ -844,6 +966,105 @@ const LifeAPI = {
       url: `${ADMIN_BASE_URL}/orders/${id}/dispatch-check`,
       method: "get",
       params: staffId ? { staffId } : undefined,
+    });
+  },
+
+  getOrderAccounting(id: string) {
+    return request<unknown, OrderAccountingResult>({
+      url: `${ADMIN_BASE_URL}/orders/${id}/accounting`,
+      method: "get",
+    });
+  },
+
+  confirmOfflinePayment(id: string, data?: { amount?: number; paidAt?: string; remark?: string }) {
+    return request<unknown, OrderDetail>({
+      url: `${ADMIN_BASE_URL}/orders/${id}/confirm-offline-payment`,
+      method: "post",
+      data: data || {},
+    });
+  },
+
+  async getAdminNotifications(params?: { page?: number; pageSize?: number; isRead?: boolean }) {
+    const data = await request<unknown, ServerPageResult<AdminNotificationItem>>({
+      url: `${ADMIN_BASE_URL}/notifications`,
+      method: "get",
+      params,
+    });
+    return data;
+  },
+
+  getAdminNotificationUnreadCount() {
+    return request<unknown, { count: number; unreadCount: number }>({
+      url: `${ADMIN_BASE_URL}/notifications/unread-count`,
+      method: "get",
+    });
+  },
+
+  markAdminNotificationRead(id: string | number) {
+    return request<unknown, { id: number; isRead: boolean }>({
+      url: `${ADMIN_BASE_URL}/notifications/${id}/read`,
+      method: "post",
+    });
+  },
+
+  async getStaffNotifications(queryParams: Partial<LifeQueryParams>) {
+    const data = await request<unknown, ServerPageResult<AdminStaffNotificationItem>>({
+      url: `${ADMIN_BASE_URL}/staff-notifications`,
+      method: "get",
+      params: toAdminQuery({ pageNum: 1, pageSize: 20, ...queryParams } as LifeQueryParams),
+    });
+    return toPageResult(data);
+  },
+
+  getStaffNotificationDetail(id: string | number) {
+    return request<unknown, AdminStaffNotificationItem>({
+      url: `${ADMIN_BASE_URL}/staff-notifications/${id}`,
+      method: "get",
+    });
+  },
+
+  resendStaffNotification(id: string | number) {
+    return request<unknown, AdminStaffNotificationItem>({
+      url: `${ADMIN_BASE_URL}/staff-notifications/${id}/resend`,
+      method: "post",
+    });
+  },
+
+  resendOrderStaffNotification(id: string | number) {
+    return request<unknown, AdminStaffNotificationItem>({
+      url: `${ADMIN_BASE_URL}/orders/${id}/resend-staff-notification`,
+      method: "post",
+    });
+  },
+
+  async getStaffProfileChangeRequests(queryParams: Partial<LifeQueryParams>) {
+    const data = await request<unknown, ServerPageResult<StaffProfileChangeRequestItem>>({
+      url: `${ADMIN_BASE_URL}/staff-profile-change-requests`,
+      method: "get",
+      params: toAdminQuery({ pageNum: 1, pageSize: 20, ...queryParams } as LifeQueryParams),
+    });
+    return toPageResult(data);
+  },
+
+  getStaffProfileChangeRequestDetail(id: string | number) {
+    return request<unknown, StaffProfileChangeRequestItem>({
+      url: `${ADMIN_BASE_URL}/staff-profile-change-requests/${id}`,
+      method: "get",
+    });
+  },
+
+  reviewStaffProfileChangeRequest(id: string | number, data: { decision: "approve" | "reject"; rejectReason?: string; remark?: string }) {
+    return request<unknown, StaffProfileChangeRequestItem>({
+      url: `${ADMIN_BASE_URL}/staff-profile-change-requests/${id}/review`,
+      method: "post",
+      data,
+    });
+  },
+
+  getStaffProfileHistory(id: string | number) {
+    return request<unknown, StaffProfileHistory>({
+      url: `${ADMIN_BASE_URL}/staff/${id}/profile-history`,
+      method: "get",
     });
   },
 

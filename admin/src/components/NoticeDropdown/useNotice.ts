@@ -2,8 +2,9 @@
  * 通知中心逻辑
  */
 import { ref, onMounted, onBeforeUnmount } from "vue";
-import type { NoticeItem, NoticeDetail, NoticeQueryParams } from "@/api/system/notice";
-import NoticeAPI from "@/api/system/notice";
+import LifeAPI from "@/api/life";
+import type { AdminNotificationItem } from "@/api/life";
+import type { NoticeItem, NoticeDetail } from "@/api/system/notice";
 import { useSse } from "@/composables";
 import router from "@/router";
 
@@ -19,6 +20,7 @@ export function useNotice() {
   const unreadTotal = ref(0);
   const detail = ref<NoticeDetail | null>(null);
   const dialogVisible = ref(false);
+  const adminNoticeMap = ref(new Map<string, AdminNotificationItem>());
 
   let unsubscribe: (() => void) | null = null;
 
@@ -26,20 +28,22 @@ export function useNotice() {
   // 数据获取
   // ============================================
 
-  async function fetchList(params?: Partial<NoticeQueryParams>) {
-    const query: NoticeQueryParams = {
-      pageNum: 1,
-      pageSize: PAGE_SIZE,
-      isRead: 0,
-      ...params,
-    };
-    const page = await NoticeAPI.getMyNoticePage(query);
-    list.value = page.list || [];
-    unreadTotal.value = page.total ?? 0;
+  async function fetchList() {
+    const [page, unread] = await Promise.all([
+      LifeAPI.getAdminNotifications({ page: 1, pageSize: PAGE_SIZE, isRead: false }),
+      LifeAPI.getAdminNotificationUnreadCount(),
+    ]);
+    adminNoticeMap.value = new Map((page.items || []).map((item) => [String(item.id), item]));
+    list.value = (page.items || []).map(toNoticeItem);
+    unreadTotal.value = unread.unreadCount ?? unread.count ?? list.value.length;
   }
 
   async function read(id: string) {
-    detail.value = await NoticeAPI.getDetail(id);
+    const current = adminNoticeMap.value.get(String(id));
+    if (current) {
+      detail.value = toNoticeDetail(current);
+      await LifeAPI.markAdminNotificationRead(id);
+    }
     dialogVisible.value = true;
 
     const idx = list.value.findIndex((item: NoticeItem) => item.id === id);
@@ -50,14 +54,41 @@ export function useNotice() {
   }
 
   async function readAll() {
-    await NoticeAPI.readAll();
+    const page = await LifeAPI.getAdminNotifications({ page: 1, pageSize: 100, isRead: false });
+    await Promise.all((page.items || []).map((item) => LifeAPI.markAdminNotificationRead(item.id)));
     list.value = [];
     unreadTotal.value = 0;
     ElMessage.success("已全部标记为已读");
   }
 
   function goMore() {
-    router.push({ name: "MyNotice" });
+    router.push({ name: "LifeOrderDispatch" });
+  }
+
+  function toNoticeItem(item: AdminNotificationItem): NoticeItem {
+    return {
+      id: String(item.id),
+      title: item.title,
+      content: item.content,
+      type: 1,
+      level: item.type,
+      publishStatus: 1,
+      isRead: item.isRead ? 1 : 0,
+      publishTime: item.createdAt as unknown as Date,
+    };
+  }
+
+  function toNoticeDetail(item: AdminNotificationItem): NoticeDetail {
+    return {
+      id: String(item.id),
+      title: item.title,
+      content: item.content,
+      type: 1,
+      level: item.type,
+      publishStatus: 1,
+      publisherName: "Life Assistant",
+      publishTime: item.createdAt as unknown as Date,
+    };
   }
 
   // ============================================

@@ -4,6 +4,7 @@ import { Order, Prisma, Refund } from '@prisma/client'
 import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
+import { CouponsService } from '../coupons/coupons.service'
 import { MemberCardsService } from '../member-cards/member-cards.service'
 import { ORDER_ACTION } from '../orders/constants/order-action'
 import { ORDER_STATUS } from '../orders/constants/order-status'
@@ -12,6 +13,7 @@ import { PAYMENT_CHANNEL, PaymentChannel } from '../payments/constants/payment-c
 import { PAYMENT_STATUS } from '../payments/constants/payment-status'
 import { WechatPayClient } from '../payments/wechat-pay.client'
 import { PrismaService } from '../prisma/prisma.service'
+import { UsersService } from '../users/users.service'
 import { CreateRefundRequestDto } from './dto/create-refund-request.dto'
 import { RejectRefundDto, ReviewRefundDto } from './dto/review-refund.dto'
 import { REFUND_STATUS } from './constants/refund-status'
@@ -45,6 +47,8 @@ export class RefundsService {
     @Inject(AdminAuditService) private readonly audit: AdminAuditService,
     @Inject(WechatPayClient) private readonly wechatPay: WechatPayClient,
     @Inject(MemberCardsService) private readonly memberCards: MemberCardsService,
+    @Inject(CouponsService) private readonly coupons: CouponsService,
+    @Inject(UsersService) private readonly users: UsersService,
   ) {}
 
   async createUserRefundRequest(userId: number, orderId: number, dto: CreateRefundRequestDto, requestId?: string) {
@@ -496,6 +500,15 @@ export class RefundsService {
         })
       }
 
+      await this.coupons.releaseCouponForRefund(tx, current.orderId)
+      await this.users.ensureRefundDeductPointsForOrder(
+        tx,
+        current.orderId,
+        current.amount,
+        `退款 ${current.refundNo} 扣回积分`,
+      )
+      await this.reverseIncomeForRefund(tx, current.orderId, current.refundNo, requestId)
+
       await tx.paymentNotifyLog.create({
         data: {
           paymentId: current.paymentId,
@@ -510,6 +523,41 @@ export class RefundsService {
     })
 
     return this.getAdminRefund(Number(refund.id))
+  }
+
+  private async reverseIncomeForRefund(tx: Prisma.TransactionClient, orderId: bigint, refundNo: string, requestId?: string) {
+    const incomes = await tx.staffIncomeRecord.findMany({ where: { orderId } })
+    for (const income of incomes) {
+      if (income.withdrawStatus === 'none') {
+        await tx.staffIncomeRecord.update({
+          where: { id: income.id },
+          data: {
+            status: 'reversed',
+            settlementStatus: 'reversed',
+          },
+        })
+        continue
+      }
+
+      await tx.orderStatusLog.create({
+        data: {
+          orderId,
+          fromStatus: ORDER_STATUS.REFUNDED,
+          toStatus: ORDER_STATUS.REFUNDED,
+          operatorType: 'system',
+          operatorId: BigInt(0),
+          action: 'refund_income_manual_review',
+          requestId,
+          remark: 'refund success requires manual income review',
+          detail: {
+            refundNo,
+            incomeRecordId: Number(income.id),
+            withdrawStatus: income.withdrawStatus,
+            settlementStatus: income.settlementStatus,
+          },
+        },
+      })
+    }
   }
 
   async handleRefundFailed(refundNo: string, reason: string, rawNotify?: string, requestId?: string) {

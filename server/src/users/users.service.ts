@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common'
-import { Prisma } from '@prisma/client'
+import { Order, Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import { ORDER_TYPE } from '../orders/constants/order-type'
 
@@ -119,6 +119,83 @@ export class UsersService {
         amount,
         balanceAfter,
         remark: `订单 ${order.orderNo} 消费积分`,
+      },
+    })
+  }
+
+  async ensureEarnedPointsForPaidOrder(
+    tx: Prisma.TransactionClient,
+    order: Pick<Order, 'id' | 'userId' | 'orderNo' | 'orderType' | 'status' | 'payableAmount'>,
+    paidAmount: Prisma.Decimal,
+  ) {
+    if (order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE) return null
+
+    const existing = await tx.pointLedger.findFirst({
+      where: { orderId: order.id, type: POINT_LEDGER_TYPE_EARN },
+    })
+    if (existing) return existing
+
+    const amount = this.pointableAmount(paidAmount, order.payableAmount)
+    const points = this.amountToPoints(amount)
+    if (points <= 0) return null
+
+    const summary = await tx.pointLedger.aggregate({
+      where: { userId: order.userId },
+      _sum: { points: true },
+    })
+    const balanceAfter = (summary._sum.points || 0) + points
+    return tx.pointLedger.create({
+      data: {
+        userId: order.userId,
+        orderId: order.id,
+        type: POINT_LEDGER_TYPE_EARN,
+        points,
+        amount,
+        balanceAfter,
+        remark: `订单 ${order.orderNo} 消费积分`,
+      },
+    })
+  }
+
+  async ensureRefundDeductPointsForOrder(
+    tx: Prisma.TransactionClient,
+    orderId: bigint | number,
+    refundAmount: Prisma.Decimal,
+    remark?: string,
+  ) {
+    const order = await tx.order.findUnique({
+      where: { id: BigInt(orderId) },
+      select: { id: true, userId: true, orderNo: true },
+    })
+    if (!order) return null
+
+    const earn = await tx.pointLedger.findFirst({
+      where: { orderId: order.id, type: POINT_LEDGER_TYPE_EARN },
+    })
+    if (!earn || earn.points <= 0) return null
+
+    const existingDeduct = await tx.pointLedger.findFirst({
+      where: { orderId: order.id, type: 'refund_deduct' },
+    })
+    if (existingDeduct) return existingDeduct
+
+    const points = -Math.min(earn.points, this.amountToPoints(refundAmount))
+    if (points >= 0) return null
+
+    const summary = await tx.pointLedger.aggregate({
+      where: { userId: order.userId },
+      _sum: { points: true },
+    })
+    const balanceAfter = (summary._sum.points || 0) + points
+    return tx.pointLedger.create({
+      data: {
+        userId: order.userId,
+        orderId: order.id,
+        type: 'refund_deduct',
+        points,
+        amount: refundAmount,
+        balanceAfter,
+        remark: remark || `订单 ${order.orderNo} 退款扣回积分`,
       },
     })
   }

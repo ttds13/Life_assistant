@@ -3,13 +3,19 @@ import { Address, Order, Prisma } from '@prisma/client'
 import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
+import { USER_COUPON_STATUS } from '../coupons/coupon-status'
+import { CouponsService } from '../coupons/coupons.service'
 import { MemberCardsService } from '../member-cards/member-cards.service'
 import { MEMBER_CARD_TYPE } from '../member-cards/constants/member-card'
 import { NotificationsService } from '../notifications/notifications.service'
 import { ORDER_ACTION } from './constants/order-action'
 import { ORDER_STATUS } from './constants/order-status'
 import { ORDER_TYPE, isStaffVisibleOrderType } from './constants/order-type'
+import { PAYMENT_CHANNEL } from '../payments/constants/payment-channel'
+import { PAYMENT_STATUS } from '../payments/constants/payment-status'
+import { REFUND_STATUS } from '../refunds/constants/refund-status'
 import { RefundsService } from '../refunds/refunds.service'
+import { UsersService } from '../users/users.service'
 import { WithdrawalsService } from '../withdrawals/withdrawals.service'
 import type { AutoAssignOrderDto } from './dto/auto-assign-order.dto'
 import type { AdminCreateOrderDto } from './dto/admin-create-order.dto'
@@ -18,6 +24,7 @@ import type { AdminQueryOrdersDto } from './dto/admin-query-orders.dto'
 import type { AdminUpdateOrderDto } from './dto/admin-update-order.dto'
 import type { AssignOrderDto } from './dto/assign-order.dto'
 import type { CompleteServiceDto } from './dto/complete-service.dto'
+import type { ConfirmOfflinePaymentDto } from './dto/confirm-offline-payment.dto'
 import type { CreateOrderDto } from './dto/create-order.dto'
 import type { PricePreviewDto } from './dto/price-preview.dto'
 import type { QueryOrdersDto } from './dto/query-orders.dto'
@@ -38,6 +45,7 @@ import {
 import { OrderDetailRecord, OrdersRepository } from './orders.repository'
 import { IMAGE_BIZ_TYPE } from '../storage/image-biz-types'
 import { ObjectStorageService } from '../storage/storage.service'
+import { StaffProfileChangeService } from '../staff-profile-change/staff-profile-change.service'
 
 type AutoAssignSource = 'admin_retry' | 'job_retry'
 type AutoAssignSkipReason = 'order_not_pending_dispatch' | 'already_assigned' | 'no_available_staff'
@@ -68,19 +76,38 @@ export class OrdersService {
     @Inject(OrdersRepository) private readonly repository: OrdersRepository,
     @Inject(OrderTransitionService) private readonly transitions: OrderTransitionService,
     @Inject(AdminAuditService) private readonly adminAudit: AdminAuditService,
+    @Inject(CouponsService) private readonly coupons: CouponsService,
     @Inject(ObjectStorageService) private readonly storage: ObjectStorageService,
     @Inject(MemberCardsService) private readonly memberCards: MemberCardsService,
     @Inject(NotificationsService) private readonly notifications: NotificationsService,
+    @Inject(StaffProfileChangeService) private readonly staffProfileChanges: StaffProfileChangeService,
     @Inject(RefundsService) private readonly refunds: RefundsService,
+    @Inject(UsersService) private readonly users: UsersService,
     @Inject(WithdrawalsService) private readonly withdrawals: WithdrawalsService,
   ) {}
 
-  async getPricePreview(query: PricePreviewDto) {
+  async getPricePreview(userId: number, query: PricePreviewDto) {
     const service = await this.resolveActiveService(query)
     const serviceCardType = this.memberCards.calculateServiceCardType(service)
+    const isConsultationOrder = serviceCardType === MEMBER_CARD_TYPE.CONSULTATION
+    const preview = !isConsultationOrder && query.couponId
+      ? await this.coupons.previewDiscount({
+          userId,
+          couponId: query.couponId,
+          serviceId: service.id,
+          amount: service.basePrice,
+        })
+      : {
+          couponId: null,
+          discountAmount: new Prisma.Decimal(0),
+          payableAmount: service.basePrice,
+        }
     return presentPricePreview(service.basePrice.toNumber(), {
       consultationRequired: serviceCardType === MEMBER_CARD_TYPE.CONSULTATION,
       cardType: serviceCardType,
+      discountAmount: preview.discountAmount.toNumber(),
+      payableAmount: preview.payableAmount.toNumber(),
+      couponId: preview.couponId ? Number(preview.couponId) : null,
     })
   }
 
@@ -127,6 +154,9 @@ export class OrdersService {
     }
     if (isMemberCardOrder && !supportsMemberCard) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'service does not support member card', 400)
+    }
+    if (dto.couponId && (isConsultationOrder || isMemberCardOrder)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'coupon cannot be used for this order type', 400)
     }
     const orderNo = this.createOrderNo()
     const serviceSnapshot = {
@@ -190,7 +220,7 @@ export class OrdersService {
           discountAmount: 0,
           payableAmount,
           paidAmount: 0,
-          couponId: dto.couponId ? BigInt(dto.couponId) : null,
+          couponId: null,
           memberCardId: dto.memberCardId ? BigInt(dto.memberCardId) : null,
           remark: dto.remark || null,
           source: this.normalizeOrderSource(dto.source),
@@ -211,6 +241,25 @@ export class OrdersService {
           data: {
             memberCardConsumeUnits: freeze.consumeUnits,
             discountAmount: service.basePrice,
+          },
+        })
+      }
+
+      if (!isMemberCardOrder && !isConsultationOrder && dto.couponId) {
+        const couponPreview = await this.coupons.lockCouponForOrder({
+          tx,
+          userId,
+          couponId: dto.couponId,
+          serviceId: service.id,
+          amount: service.basePrice,
+          orderId: order.id,
+        })
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            couponId: couponPreview.couponId,
+            discountAmount: couponPreview.discountAmount,
+            payableAmount: couponPreview.payableAmount,
           },
         })
       }
@@ -236,6 +285,18 @@ export class OrdersService {
           campaignId: dto.campaignId || null,
         },
       })
+
+      if (initialStatus === ORDER_STATUS.PENDING_DISPATCH) {
+        await this.notifications.createAdminOrderNotification({
+          tx,
+          orderId: order.id,
+          orderNo: order.orderNo,
+          serviceName: this.serviceNameFromSnapshot(order.serviceSnapshot),
+          appointmentStartTime: order.appointmentStartTime,
+          type: isConsultationOrder ? 'admin_order_created' : 'admin_pending_dispatch',
+          runId: this.extractDay38RunId(order.remark || ''),
+        })
+      }
 
       return order
     })
@@ -310,6 +371,7 @@ export class OrdersService {
       check: order => this.assertOrderUserId(order, userId),
       sideEffect: async (tx, order) => {
         await this.memberCards.releaseFrozenForOrder(tx, order, reason)
+        await this.coupons.releaseCouponForOrder(tx, order.id, reason)
       },
     })
 
@@ -435,7 +497,8 @@ export class OrdersService {
 
   async getAdminOrderDetail(orderId: number) {
     const order = await this.getOrderDetailOrThrow(orderId)
-    return this.withSignedOrderImages(presentAdminOrderDetail(order))
+    const detail = this.withSignedOrderImages(presentAdminOrderDetail(order))
+    return this.withAdminAssignmentNotifications(detail, order)
   }
 
   async getAdminOrderDispatchCheck(orderId: number) {
@@ -456,8 +519,8 @@ export class OrdersService {
     const orderNo = this.createOrderNo()
     const serviceSnapshot = this.createServiceSnapshot(service)
     const originalAmount = new Prisma.Decimal(dto.originalAmount ?? service.basePrice.toNumber())
-    const payableAmount = new Prisma.Decimal(dto.payableAmount ?? 0)
-    const discountAmount = new Prisma.Decimal(dto.discountAmount ?? Math.max(0, originalAmount.sub(payableAmount).toNumber()))
+    const discountAmount = new Prisma.Decimal(dto.discountAmount ?? 0)
+    const payableAmount = new Prisma.Decimal(dto.payableAmount ?? Math.max(0, originalAmount.sub(discountAmount).toNumber()))
 
     const created = await this.repository.client.$transaction(async (tx) => {
       const user = await this.resolveAdminOrderUser(tx, dto, source)
@@ -504,6 +567,16 @@ export class OrdersService {
         },
       })
 
+      await this.notifications.createAdminOrderNotification({
+        tx,
+        orderId: order.id,
+        orderNo: order.orderNo,
+        serviceName: this.serviceNameFromSnapshot(order.serviceSnapshot),
+        appointmentStartTime: order.appointmentStartTime,
+        type: 'admin_pending_dispatch',
+        runId: this.extractDay38RunId(order.adminRemark || order.remark || ''),
+      })
+
       await this.adminAudit.writeWithClient(tx, {
         adminId,
         action: 'order:create',
@@ -527,8 +600,267 @@ export class OrdersService {
     return this.getAdminOrderDetail(Number(created.id))
   }
 
+  async confirmOfflinePayment(adminId: number, orderId: number, dto: ConfirmOfflinePaymentDto, requestId?: string, ip?: string) {
+    const paidAt = dto.paidAt ? this.parseAdminDate(dto.paidAt, 'paidAt') : new Date()
+    await this.repository.client.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM orders WHERE id = ${BigInt(orderId)} FOR UPDATE`
+      const order = await tx.order.findUnique({ where: { id: BigInt(orderId) } })
+      if (!order) throw new BusinessException(ErrorCode.ORDER_NOT_FOUND, 'order not found', 404)
+      if (order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE || order.memberCardId) {
+        throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'offline payment only supports cash service orders', 409)
+      }
+      if (![ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PENDING_DISPATCH].includes(order.status as any)) {
+        throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order cannot confirm offline payment here', 409)
+      }
+
+      const existing = await tx.payment.findFirst({
+        where: { orderId: order.id, status: PAYMENT_STATUS.SUCCESS },
+        orderBy: [{ paidAt: 'desc' }, { id: 'desc' }],
+      })
+      if (existing) return
+
+      const amount = new Prisma.Decimal(dto.amount ?? order.payableAmount.toNumber())
+      if (!amount.equals(order.payableAmount) || amount.lessThanOrEqualTo(0)) {
+        throw new BusinessException(ErrorCode.ORDER_PRICE_CHANGED, 'offline payment amount must equal order payable amount', 409)
+      }
+
+      const paymentNo = this.createOfflinePaymentNo(order.orderNo)
+      const payment = await tx.payment.create({
+        data: {
+          paymentNo,
+          orderId: order.id,
+          userId: order.userId,
+          channel: PAYMENT_CHANNEL.OFFLINE,
+          amount,
+          status: PAYMENT_STATUS.SUCCESS,
+          transactionNo: `OFFLINE_${order.orderNo}`,
+          paidAt,
+          callbackRaw: JSON.stringify({ channel: PAYMENT_CHANNEL.OFFLINE, requestId, adminId, remark: dto.remark || '' }),
+        },
+      })
+      await tx.paymentNotifyLog.create({
+        data: {
+          paymentId: payment.id,
+          paymentNo,
+          channel: PAYMENT_CHANNEL.OFFLINE,
+          rawBody: JSON.stringify({ orderId, requestId, adminId, remark: dto.remark || '' }),
+          processResult: 'success',
+        },
+      })
+      await tx.order.update({
+        where: { id: order.id },
+        data: {
+          status: ORDER_STATUS.PENDING_DISPATCH,
+          paidAmount: amount,
+          paidAt,
+          version: { increment: 1 },
+        },
+      })
+      await tx.orderStatusLog.create({
+        data: {
+          orderId: order.id,
+          fromStatus: order.status,
+          toStatus: ORDER_STATUS.PENDING_DISPATCH,
+          operatorType: 'admin',
+          operatorId: BigInt(adminId),
+          action: 'admin_confirm_offline_payment',
+          requestId,
+          remark: dto.remark || 'admin confirmed offline payment',
+          detail: { paymentNo, amount: amount.toNumber() },
+        },
+      })
+      await this.users.ensureEarnedPointsForPaidOrder(tx, order, amount)
+      await this.notifications.createAdminOrderNotification({
+        tx,
+        orderId: order.id,
+        orderNo: order.orderNo,
+        serviceName: this.serviceNameFromSnapshot(order.serviceSnapshot),
+        appointmentStartTime: order.appointmentStartTime,
+        type: 'admin_pending_dispatch',
+        runId: this.extractDay38RunId(`${order.adminRemark || ''} ${order.remark || ''}`),
+      })
+      await this.adminAudit.writeWithClient(tx, {
+        adminId,
+        action: 'order:offline-payment:confirm',
+        module: 'order',
+        targetType: 'order',
+        targetId: order.id,
+        requestId,
+        ip,
+        detail: { paymentNo, amount: amount.toNumber(), paidAt: paidAt.toISOString(), remark: dto.remark || '' },
+      })
+    })
+
+    return this.getAdminOrderDetail(orderId)
+  }
+
+  async getAdminOrderAccounting(orderId: number) {
+    const order = await this.repository.client.order.findUnique({
+      where: { id: BigInt(orderId) },
+      include: {
+        payments: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] },
+        refunds: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] },
+        pointLedgers: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
+        incomeRecords: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
+      },
+    })
+    if (!order) throw new BusinessException(ErrorCode.ORDER_NOT_FOUND, 'order not found', 404)
+
+    const paidPayments = order.payments.filter(payment => [
+      PAYMENT_STATUS.SUCCESS,
+      PAYMENT_STATUS.PARTIAL_REFUNDED,
+      PAYMENT_STATUS.REFUNDED,
+    ].includes(payment.status as any))
+    const historicalPaidAmount = paidPayments.reduce((sum, payment) => sum.add(payment.amount), new Prisma.Decimal(0))
+    const refundedAmount = order.refunds
+      .filter(refund => refund.status === REFUND_STATUS.REFUNDED)
+      .reduce((sum, refund) => sum.add(refund.amount), new Prisma.Decimal(0))
+    const paymentRefundedAmount = paidPayments.reduce((sum, payment) => sum.add(payment.refundedAmount), new Prisma.Decimal(0))
+    const netPaidAmount = historicalPaidAmount.sub(refundedAmount)
+    const isRefunded = order.status === ORDER_STATUS.REFUNDED || refundedAmount.greaterThan(0)
+    const hasEarnPoints = order.pointLedgers.some(item => item.type === 'earn')
+    const earnPoints = order.pointLedgers
+      .filter(item => item.type === 'earn')
+      .reduce((sum, item) => sum + item.points, 0)
+    const refundDeductPoints = order.pointLedgers
+      .filter(item => item.type === 'refund_deduct')
+      .reduce((sum, item) => sum + item.points, 0)
+    const couponRecord = order.couponId
+      ? await this.repository.client.userCoupon.findFirst({
+          where: {
+            couponId: order.couponId,
+            userId: order.userId,
+            OR: [
+              { usedOrderId: order.id },
+              ...(isRefunded
+                ? [{
+                    usedOrderId: null,
+                    status: { in: [USER_COUPON_STATUS.AVAILABLE, USER_COUPON_STATUS.EXPIRED, USER_COUPON_STATUS.RELEASED] },
+                  }]
+                : []),
+            ],
+          },
+          orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
+        })
+      : null
+    const checks = [
+      {
+        key: 'payment',
+        passed: !order.paidAt || paidPayments.length > 0,
+        message: order.paidAt && paidPayments.length === 0 ? '订单已支付但缺少历史支付流水' : '支付流水正常',
+      },
+      {
+        key: 'paid_amount',
+        passed: !order.paidAt || historicalPaidAmount.equals(order.paidAmount),
+        message: order.paidAt && !historicalPaidAmount.equals(order.paidAmount) ? '历史支付金额与订单已付金额不一致' : '历史支付金额正常',
+      },
+      {
+        key: 'net_paid_amount',
+        passed: !isRefunded || netPaidAmount.greaterThanOrEqualTo(0),
+        message: isRefunded && netPaidAmount.lessThan(0) ? '退款金额大于历史支付金额' : '退款后净收入口径正常',
+      },
+      {
+        key: 'points',
+        passed: !order.paidAt || order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE || hasEarnPoints,
+        message: order.paidAt && order.orderType !== ORDER_TYPE.MEMBER_CARD_PURCHASE && !hasEarnPoints ? '支付成功后缺少积分流水' : '积分发放流水正常',
+      },
+      {
+        key: 'refund_points',
+        passed: !isRefunded || order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE || earnPoints <= 0 || refundDeductPoints < 0,
+        message: isRefunded && order.orderType !== ORDER_TYPE.MEMBER_CARD_PURCHASE && earnPoints > 0 && refundDeductPoints >= 0 ? '退款后缺少积分扣回流水' : '退款积分扣回正常',
+      },
+      {
+        key: 'coupon',
+        passed: !order.couponId || Boolean(couponRecord),
+        message: order.couponId && !couponRecord ? '订单使用优惠券但缺少用户券锁定/释放记录' : '优惠券锁定/核销/释放记录正常',
+      },
+      {
+        key: 'refund',
+        passed: !isRefunded || (
+          order.refunds.some(refund => refund.status === REFUND_STATUS.REFUNDED)
+          && paymentRefundedAmount.greaterThanOrEqualTo(refundedAmount)
+        ),
+        message: isRefunded && !(
+          order.refunds.some(refund => refund.status === REFUND_STATUS.REFUNDED)
+          && paymentRefundedAmount.greaterThanOrEqualTo(refundedAmount)
+        ) ? '退款订单缺少已退款记录或 payment.refundedAmount 不一致' : '退款流水正常',
+      },
+      {
+        key: 'income',
+        passed: isRefunded
+          ? order.incomeRecords.length === 0 || order.incomeRecords.every(item => item.status === 'reversed' || item.settlementStatus === 'reversed' || item.withdrawStatus !== 'none')
+          : order.status !== ORDER_STATUS.COMPLETED || !order.staffId || order.incomeRecords.length > 0,
+        message: isRefunded
+          ? '退款后师傅收入冲正/人工复核口径正常'
+          : (order.status === ORDER_STATUS.COMPLETED && order.staffId && order.incomeRecords.length === 0 ? '订单已完成但缺少师傅收入记录' : '师傅收入正常'),
+      },
+      {
+        key: 'offline_payment',
+        passed: order.source !== 'offline' && order.source !== 'admin' || !order.paidAt || paidPayments.some(payment => payment.channel === PAYMENT_CHANNEL.OFFLINE),
+        message: (order.source === 'offline' || order.source === 'admin') && order.paidAt && !paidPayments.some(payment => payment.channel === PAYMENT_CHANNEL.OFFLINE)
+          ? '外来订单已收款但缺少 offline payment'
+          : '外来订单支付口径正常',
+      },
+    ]
+
+    return {
+      orderId,
+      orderNo: order.orderNo,
+      status: order.status,
+      historicalPaidAmount: historicalPaidAmount.toNumber(),
+      refundedAmount: refundedAmount.toNumber(),
+      netPaidAmount: netPaidAmount.toNumber(),
+      couponRecord: couponRecord
+        ? {
+            id: Number(couponRecord.id),
+            status: couponRecord.status,
+            usedOrderId: couponRecord.usedOrderId ? Number(couponRecord.usedOrderId) : null,
+            receivedAt: couponRecord.receivedAt.toISOString(),
+            usedAt: couponRecord.usedAt?.toISOString() || null,
+            expireAt: couponRecord.expireAt.toISOString(),
+          }
+        : null,
+      passed: checks.every(item => item.passed),
+      checks,
+      payments: order.payments.map(payment => ({
+        id: Number(payment.id),
+        paymentNo: payment.paymentNo,
+        channel: payment.channel,
+        status: payment.status,
+        amount: payment.amount.toNumber(),
+        refundedAmount: payment.refundedAmount.toNumber(),
+        paidAt: payment.paidAt?.toISOString() || null,
+      })),
+      pointLedgers: order.pointLedgers.map(item => ({
+        id: Number(item.id),
+        type: item.type,
+        points: item.points,
+        amount: item.amount?.toNumber() || 0,
+        balanceAfter: item.balanceAfter,
+        createdAt: item.createdAt.toISOString(),
+      })),
+      incomeRecords: order.incomeRecords.map(item => ({
+        id: Number(item.id),
+        staffId: Number(item.staffId),
+        amount: item.amount.toNumber(),
+        type: item.type,
+        status: item.status,
+        settlementStatus: item.settlementStatus,
+        withdrawStatus: item.withdrawStatus,
+      })),
+      refunds: order.refunds.map(item => ({
+        id: Number(item.id),
+        refundNo: item.refundNo,
+        amount: item.amount.toNumber(),
+        status: item.status,
+        refundedAt: item.refundedAt?.toISOString() || null,
+      })),
+    }
+  }
+
   async updateAdminOrder(adminId: number, orderId: number, dto: AdminUpdateOrderDto, requestId?: string, ip?: string) {
     const current = await this.getOrderDetailOrThrow(orderId)
+    this.assertAdminUpdateDoesNotBypassAccounting(current, dto)
     const data: Prisma.OrderUncheckedUpdateInput = {}
     let nextAppointmentStart = current.appointmentStartTime
     let nextAppointmentEnd = current.appointmentEndTime
@@ -674,7 +1006,7 @@ export class OrdersService {
       await tx.orderStatusLog.deleteMany({ where: { orderId: orderBigInt } })
       await tx.userCoupon.updateMany({
         where: { usedOrderId: orderBigInt },
-        data: { usedOrderId: null, usedAt: null },
+        data: { status: 'available', usedOrderId: null, usedAt: null },
       })
       await tx.file.deleteMany({ where: { bizType: 'order', bizId: orderBigInt } })
       await tx.order.delete({ where: { id: orderBigInt } })
@@ -973,11 +1305,12 @@ export class OrdersService {
       throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
     }
 
-    const [today, week, month, total] = await Promise.all([
+    const [today, week, month, total, latestProfileChangeRequest] = await Promise.all([
       this.getStaffProfileStats(staffId, 'today'),
       this.getStaffProfileStats(staffId, 'week'),
       this.getStaffProfileStats(staffId, 'month'),
       this.getStaffProfileStats(staffId, 'total'),
+      this.staffProfileChanges.getStaffLatestRequest(staffId),
     ])
 
     const avatarUrls = this.storage.resolveAvatarUrls(staff.avatarUrl)
@@ -995,40 +1328,21 @@ export class OrdersService {
       workStatusText: this.workStatusText(staff.workStatus),
       rating: staff.rating.toNumber(),
       stats: { today, week, month, total },
+      profileChangeRequest: latestProfileChangeRequest,
     }
   }
 
   async updateStaffProfile(staffId: number, dto: UpdateStaffProfileDto) {
-    const data: Prisma.StaffUpdateManyMutationInput = {}
-
-    if (dto.staffName !== undefined) {
-      const staffName = dto.staffName.trim()
-      if (!staffName) {
-        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'staffName is required', 400)
-      }
-      data.name = staffName
+    const request = await this.staffProfileChanges.submitStaffProfileChange(staffId, {
+      staffName: dto.staffName,
+      avatar: dto.avatar,
+    })
+    const profile = await this.getStaffProfile(staffId)
+    return {
+      ...profile,
+      pendingProfileChange: true,
+      profileChangeRequest: request,
     }
-
-    if (dto.avatar !== undefined) {
-      const avatar = dto.avatar.trim()
-      this.storage.assertPermanentOssUrl(avatar, { force: true })
-      data.avatarUrl = avatar
-    }
-
-    if (Object.keys(data).length) {
-      const result = await this.repository.client.staff.updateMany({
-        where: { id: BigInt(staffId), status: 1, deletedAt: null },
-        data,
-      })
-      if (result.count !== 1) {
-        throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
-      }
-      if (typeof data.avatarUrl === 'string' && data.avatarUrl) {
-        await this.storage.bindFilesToBiz([data.avatarUrl], IMAGE_BIZ_TYPE.STAFF_AVATAR, staffId)
-      }
-    }
-
-    return this.getStaffProfile(staffId)
   }
 
   async getStaffWorkStatus(staffId: number) {
@@ -1043,12 +1357,17 @@ export class OrdersService {
   }
 
   async updateStaffWorkStatus(staffId: number, dto: UpdateStaffWorkStatusDto) {
-    const result = await this.repository.client.staff.updateMany({
+    const current = await this.repository.client.staff.findFirst({
       where: { id: BigInt(staffId), status: 1, deletedAt: null },
-      data: { workStatus: dto.workStatus },
+      select: { id: true, workStatus: true },
     })
-    if (result.count !== 1) {
-      throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
+    if (!current) throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
+    if (current.workStatus !== dto.workStatus) {
+      await this.repository.client.staff.update({
+        where: { id: current.id },
+        data: { workStatus: dto.workStatus },
+      })
+      await this.staffProfileChanges.writeStaffWorkStatusLog(staffId, current.workStatus, dto.workStatus)
     }
     return this.presentStaffWorkStatus(staffId, dto.workStatus)
   }
@@ -1685,6 +2004,94 @@ export class OrdersService {
     return /^[a-zA-Z0-9_-]{1,16}$/.test(value) ? value : 'miniapp'
   }
 
+  private assertAdminUpdateDoesNotBypassAccounting(order: OrderDetailRecord, dto: AdminUpdateOrderDto) {
+    const blockedFields = [
+      dto.status !== undefined ? 'status' : '',
+      dto.paidAmount !== undefined ? 'paidAmount' : '',
+      dto.paidAt !== undefined ? 'paidAt' : '',
+      dto.completedAt !== undefined ? 'completedAt' : '',
+    ].filter(Boolean)
+    if (blockedFields.length) {
+      throw new BusinessException(
+        ErrorCode.COMMON_BAD_REQUEST,
+        `accounting fields must use dedicated actions: ${blockedFields.join(', ')}`,
+        400,
+      )
+    }
+
+    const amountFields = [
+      dto.originalAmount !== undefined ? 'originalAmount' : '',
+      dto.discountAmount !== undefined ? 'discountAmount' : '',
+      dto.payableAmount !== undefined ? 'payableAmount' : '',
+    ].filter(Boolean)
+    const hasSuccessPayment = order.payments.some(payment => payment.status === PAYMENT_STATUS.SUCCESS)
+    if (amountFields.length && (order.paidAt || hasSuccessPayment || order.status !== ORDER_STATUS.PENDING_PAYMENT)) {
+      throw new BusinessException(
+        ErrorCode.COMMON_BAD_REQUEST,
+        `paid or dispatchable orders cannot edit amount fields directly: ${amountFields.join(', ')}`,
+        400,
+      )
+    }
+  }
+
+  private async withAdminAssignmentNotifications<T extends Record<string, any>>(payload: T, order: OrderDetailRecord): Promise<T> {
+    if (!order.staffId) {
+      return {
+        ...payload,
+        assignmentNotification: null,
+        assignmentNotifications: [],
+      } as T
+    }
+
+    const notifications = await this.repository.client.notification.findMany({
+      where: {
+        receiverType: 'staff',
+        receiverId: order.staffId,
+        bizType: 'order',
+        bizId: order.id,
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 10,
+    })
+    const latestAssignment = order.assignments[0]
+    const current = latestAssignment?.notificationId
+      ? notifications.find(item => item.id === latestAssignment.notificationId) || notifications[0]
+      : notifications[0]
+    const presented = notifications.map(item => ({
+      id: Number(item.id),
+      type: item.type,
+      title: item.title,
+      sendStatus: item.sendStatus,
+      isRead: item.isRead,
+      sentAt: item.sentAt?.toISOString() || null,
+      readAt: item.readAt?.toISOString() || null,
+      retryCount: item.retryCount || 0,
+      lastRetriedAt: item.lastRetriedAt?.toISOString() || null,
+      failureReason: item.failureReason || '',
+      createdAt: item.createdAt.toISOString(),
+    }))
+
+    return {
+      ...payload,
+      assignmentNotification: current
+        ? {
+            id: Number(current.id),
+            type: current.type,
+            title: current.title,
+            sendStatus: current.sendStatus,
+            isRead: current.isRead,
+            sentAt: current.sentAt?.toISOString() || null,
+            readAt: current.readAt?.toISOString() || null,
+            retryCount: current.retryCount || 0,
+            lastRetriedAt: current.lastRetriedAt?.toISOString() || null,
+            failureReason: current.failureReason || '',
+            createdAt: current.createdAt.toISOString(),
+          }
+        : null,
+      assignmentNotifications: presented,
+    } as T
+  }
+
   private withSignedOrderImages<T extends Record<string, any>>(payload: T): T {
     const next: Record<string, any> = { ...payload }
 
@@ -1833,6 +2240,16 @@ export class OrdersService {
     ].join('')
     const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
     return `LA${date}${time}${random}`
+  }
+
+  private createOfflinePaymentNo(orderNo: string) {
+    const random = Math.floor(Math.random() * 100000).toString().padStart(5, '0')
+    return `OF${Date.now()}${random}`.slice(0, 64) || `OF${orderNo}`
+  }
+
+  private extractDay38RunId(text: string) {
+    const matched = text.match(/DAY38_TEST_[A-Za-z0-9_-]+/)
+    return matched?.[0]
   }
 
   private createRefundNo() {
