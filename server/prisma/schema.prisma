@@ -21,6 +21,8 @@ model User {
   status    Int       @default(1) @db.SmallInt
   cityCode  String?   @map("city_code") @db.VarChar(20)
   storeId   BigInt?   @map("store_id")
+  source    String?   @default("miniapp") @db.VarChar(16)
+  adminRemark String? @map("admin_remark") @db.VarChar(512)
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
@@ -33,6 +35,8 @@ model User {
   favorites       ServiceFavorite[]
   staffProfile    Staff?
   refreshTokens   UserRefreshToken[]
+  feedbacks       Feedback[]
+  pointLedgers     PointLedger[]
 
   @@index([phone])
   @@index([cityCode])
@@ -74,6 +78,8 @@ model Staff {
   workStatus   Int       @default(0) @map("work_status") @db.SmallInt
   cityCode     String?   @map("city_code") @db.VarChar(20)
   storeId      BigInt?   @map("store_id")
+  applicationNote   String? @map("application_note") @db.Text
+  applicationImages Json?   @map("application_images")
   rating       Decimal   @default(5.00) @db.Decimal(3, 2)
   totalOrders  Int       @default(0) @map("total_orders")
   createdAt    DateTime  @default(now()) @map("created_at")
@@ -85,6 +91,7 @@ model Staff {
   checkins      ServiceCheckin[]
   photos        ServicePhoto[]
   incomeRecords StaffIncomeRecord[]
+  withdrawRequests WithdrawRequest[]
   reviews       Review[]
   user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
 
@@ -102,6 +109,7 @@ model AdminUser {
   passwordHash String    @map("password_hash") @db.VarChar(128)
   name         String    @db.VarChar(64)
   phone        String?   @db.VarChar(20)
+  avatarUrl    String?   @map("avatar_url") @db.VarChar(512)
   role         String    @db.VarChar(32)
   status       Int       @default(1) @db.SmallInt
   lastLoginAt  DateTime? @map("last_login_at")
@@ -341,12 +349,14 @@ model Order {
   statusLogs        OrderStatusLog[]
   assignments       OrderAssignment[]
   payments          Payment[]
+  refunds           Refund[]
   checkins          ServiceCheckin[]
   photos            ServicePhoto[]
   review            Review?
   tickets           Ticket[]
   incomeRecords     StaffIncomeRecord[]
   memberCardRecords MemberCardRecord[]
+  pointLedgers       PointLedger[]
 
   @@index([userId])
   @@index([staffId])
@@ -393,6 +403,8 @@ model OrderAssignment {
   assignType   String    @map("assign_type") @db.VarChar(16)
   assignStatus String    @map("assign_status") @db.VarChar(16)
   assignedBy   BigInt    @map("assigned_by")
+  notificationId     BigInt? @map("notification_id")
+  notificationStatus String? @map("notification_status") @db.VarChar(16)
   rejectReason String?   @map("reject_reason") @db.VarChar(256)
   assignedAt   DateTime  @default(now()) @map("assigned_at")
   acceptedAt   DateTime? @map("accepted_at")
@@ -415,6 +427,7 @@ model Payment {
   userId        BigInt    @map("user_id")
   channel       String    @db.VarChar(16)
   amount        Decimal   @db.Decimal(10, 2)
+  refundedAmount Decimal  @default(0) @map("refunded_amount") @db.Decimal(10, 2)
   status        String    @db.VarChar(16)
   transactionNo String?   @map("transaction_no") @db.VarChar(64)
   prepayId      String?   @map("prepay_id") @db.VarChar(128)
@@ -455,15 +468,27 @@ model Refund {
   amount          Decimal   @db.Decimal(10, 2)
   reason          String?   @db.VarChar(256)
   status          String    @db.VarChar(16)
+  channel         String?   @db.VarChar(16)
+  outRefundNo     String?   @map("out_refund_no") @db.VarChar(64)
   channelRefundNo String?   @map("channel_refund_no") @db.VarChar(64)
+  failureReason   String?   @map("failure_reason") @db.VarChar(512)
+  notifyRaw       String?   @map("notify_raw") @db.Text
+  retryCount      Int       @default(0) @map("retry_count")
+  reviewedBy      BigInt?   @map("reviewed_by")
+  reviewedAt      DateTime? @map("reviewed_at")
   operatedBy      BigInt    @map("operated_by")
+  processedAt     DateTime? @map("processed_at")
   refundedAt      DateTime? @map("refunded_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
+  order   Order   @relation(fields: [orderId], references: [id])
   payment Payment @relation(fields: [paymentId], references: [id])
 
   @@index([orderId])
+  @@index([paymentId])
+  @@index([status])
+  @@index([channelRefundNo])
   @@map("refunds")
 }
 
@@ -580,6 +605,58 @@ model TicketMessage {
 
   @@index([ticketId])
   @@map("ticket_messages")
+}
+
+model Feedback {
+  id           BigInt    @id @default(autoincrement())
+  feedbackNo   String    @unique @map("feedback_no") @db.VarChar(32)
+  userId       BigInt    @map("user_id")
+  type         String    @db.VarChar(32)
+  content      String    @db.Text
+  contactPhone String?   @map("contact_phone") @db.VarChar(20)
+  images       Json?
+  status       String    @default("open") @db.VarChar(32)
+  reply        String?   @db.Text
+  handledBy    BigInt?   @map("handled_by")
+  handledAt    DateTime? @map("handled_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([type])
+  @@map("feedbacks")
+}
+
+model SupportFaq {
+  id        BigInt   @id @default(autoincrement())
+  category  String   @db.VarChar(64)
+  question  String   @db.VarChar(255)
+  answer    String   @db.Text
+  sortOrder Int      @default(0) @map("sort_order")
+  status    Int      @default(1) @db.SmallInt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([category])
+  @@index([status])
+  @@index([sortOrder])
+  @@map("support_faqs")
+}
+
+model SupportConfig {
+  id           BigInt   @id @default(autoincrement())
+  phone        String   @default("0469-8596888") @db.VarChar(32)
+  wechatId     String   @default("15645777033 / 13384692200") @map("wechat_id") @db.VarChar(64)
+  serviceHours String   @default("09:00-21:00") @map("service_hours") @db.VarChar(64)
+  responseTime String   @default("工作时间内通常 30 分钟内响应") @map("response_time") @db.VarChar(128)
+  onlineEnabled Boolean @default(true) @map("online_enabled")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("support_configs")
 }
 
 // ==================== 8. Coupon ====================
@@ -710,6 +787,26 @@ model Notification {
   @@map("notifications")
 }
 
+model PointLedger {
+  id           BigInt   @id @default(autoincrement())
+  userId       BigInt   @map("user_id")
+  orderId      BigInt?  @map("order_id")
+  type         String   @db.VarChar(24)
+  points       Int
+  amount       Decimal? @db.Decimal(10, 2)
+  balanceAfter Int      @map("balance_after")
+  remark       String?  @db.VarChar(256)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user  User   @relation(fields: [userId], references: [id])
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, type])
+  @@index([userId, createdAt])
+  @@index([orderId])
+  @@map("point_ledgers")
+}
+
 // ==================== 11. File ====================
 
 model File {
@@ -724,44 +821,114 @@ model File {
   storageKey   String   @map("storage_key") @db.VarChar(512)
   mimeType     String   @map("mime_type") @db.VarChar(64)
   size         BigInt
+  status       String   @default("active") @db.VarChar(16)
+  source       String?  @db.VarChar(32)
+  visibility   String   @default("private") @db.VarChar(16)
+  alt          String?  @db.VarChar(128)
+  remark       String?  @db.VarChar(512)
+  deletedBy    BigInt?  @map("deleted_by")
+  deletedAt    DateTime? @map("deleted_at")
   createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@index([bizType, bizId])
+  @@index([status, createdAt])
+  @@index([uploaderType, uploaderId])
+  @@index([url])
   @@map("files")
 }
 
 // ==================== 12. Finance ====================
 
 model StaffIncomeRecord {
-  id        BigInt    @id @default(autoincrement())
-  staffId   BigInt    @map("staff_id")
-  orderId   BigInt    @map("order_id")
-  amount    Decimal   @db.Decimal(10, 2)
-  type      String    @db.VarChar(16)
-  status    String    @db.VarChar(16)
-  settledAt DateTime? @map("settled_at")
-  createdAt DateTime  @default(now()) @map("created_at")
+  id                BigInt    @id @default(autoincrement())
+  staffId           BigInt    @map("staff_id")
+  orderId           BigInt    @map("order_id")
+  withdrawRequestId BigInt?   @map("withdraw_request_id")
+  amount            Decimal   @db.Decimal(10, 2)
+  type              String    @db.VarChar(32)
+  status            String    @db.VarChar(32)
+  settlementStatus  String    @default("pending") @map("settlement_status") @db.VarChar(32)
+  withdrawStatus    String    @default("none") @map("withdraw_status") @db.VarChar(32)
+  availableAt       DateTime? @map("available_at")
+  settledAt         DateTime? @map("settled_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
 
-  staff Staff @relation(fields: [staffId], references: [id])
-  order Order @relation(fields: [orderId], references: [id])
+  staff           Staff            @relation(fields: [staffId], references: [id])
+  order           Order            @relation(fields: [orderId], references: [id])
+  withdrawRequest WithdrawRequest? @relation(fields: [withdrawRequestId], references: [id])
 
+  @@unique([staffId, orderId, type])
   @@index([staffId])
+  @@index([withdrawRequestId])
+  @@index([settlementStatus, withdrawStatus])
+  @@index([availableAt])
   @@map("staff_income_records")
 }
 
 model WithdrawRequest {
-  id        BigInt    @id @default(autoincrement())
-  staffId   BigInt    @map("staff_id")
-  amount    Decimal   @db.Decimal(10, 2)
-  status    String    @db.VarChar(16)
-  bankInfo  Json      @map("bank_info")
-  handledBy BigInt?   @map("handled_by")
-  handledAt DateTime? @map("handled_at")
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt @map("updated_at")
+  id                BigInt    @id @default(autoincrement())
+  withdrawNo        String    @unique @map("withdraw_no") @db.VarChar(64)
+  staffId           BigInt    @map("staff_id")
+  amount            Decimal   @db.Decimal(10, 2)
+  amountFen         Int       @default(0) @map("amount_fen")
+  feeAmount         Decimal   @default(0) @map("fee_amount") @db.Decimal(10, 2)
+  availableSnapshot Decimal   @default(0) @map("available_snapshot") @db.Decimal(10, 2)
+  status            String    @db.VarChar(32)
+  channel           String    @default("mock") @db.VarChar(16)
+  outBillNo         String?   @unique @map("out_bill_no") @db.VarChar(64)
+  transferBillNo    String?   @map("transfer_bill_no") @db.VarChar(128)
+  packageInfo       String?   @map("package_info") @db.Text
+  openid            String?   @db.VarChar(64)
+  userNameEncrypted String?   @map("user_name_encrypted") @db.VarChar(512)
+  bankInfo          Json      @map("bank_info")
+  failureReason     String?   @map("failure_reason") @db.VarChar(512)
+  rejectReason      String?   @map("reject_reason") @db.VarChar(512)
+  notifyRaw         String?   @map("notify_raw") @db.Text
+  retryCount        Int       @default(0) @map("retry_count")
+  version           Int       @default(0)
+  requestId         String?   @map("request_id") @db.VarChar(64)
+  handledBy         BigInt?   @map("handled_by")
+  handledAt         DateTime? @map("handled_at")
+  reviewedBy        BigInt?   @map("reviewed_by")
+  reviewedAt        DateTime? @map("reviewed_at")
+  processedAt       DateTime? @map("processed_at")
+  paidAt            DateTime? @map("paid_at")
+  expiredAt         DateTime? @map("expired_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  staff         Staff               @relation(fields: [staffId], references: [id])
+  incomeRecords StaffIncomeRecord[]
+  statusLogs    WithdrawStatusLog[]
 
   @@index([staffId])
+  @@index([status])
+  @@index([channel])
+  @@index([transferBillNo])
+  @@index([createdAt])
   @@map("withdraw_requests")
+}
+
+model WithdrawStatusLog {
+  id                BigInt   @id @default(autoincrement())
+  withdrawRequestId BigInt   @map("withdraw_request_id")
+  fromStatus        String?  @map("from_status") @db.VarChar(32)
+  toStatus          String   @map("to_status") @db.VarChar(32)
+  action            String   @db.VarChar(64)
+  operatorType      String   @map("operator_type") @db.VarChar(16)
+  operatorId        BigInt   @map("operator_id")
+  remark            String?  @db.VarChar(512)
+  detail            Json?
+  requestId         String?  @map("request_id") @db.VarChar(64)
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  withdrawRequest WithdrawRequest @relation(fields: [withdrawRequestId], references: [id])
+
+  @@index([withdrawRequestId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("withdraw_status_logs")
 }
 
 // ==================== 13. Audit Log ====================

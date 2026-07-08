@@ -1,5 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common'
 import { AdminAuthGuard } from '../admin-auth/admin-auth.guard'
+import { RequireAdminPermissions } from '../admin-auth/admin-permission.decorator'
+import { ADMIN_PERMISSION } from '../admin-auth/admin-permissions'
 import { ConfigService } from '@nestjs/config'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { StaffIdentityService } from '../auth/staff-identity.service'
@@ -8,6 +10,7 @@ import { ErrorCode } from '../common/errors/error-code'
 import { getRequestId, RequestWithContext } from '../common/utils/request-context'
 import { AutoAssignOrderDto } from './dto/auto-assign-order.dto'
 import { AdminOrderRemarkDto } from './dto/admin-order-remark.dto'
+import { AdminCreateOrderDto } from './dto/admin-create-order.dto'
 import { AdminQueryOrdersDto } from './dto/admin-query-orders.dto'
 import { AdminUpdateOrderDto } from './dto/admin-update-order.dto'
 import { AssignOrderDto } from './dto/assign-order.dto'
@@ -19,6 +22,7 @@ import { RejectOrderDto } from './dto/reject-order.dto'
 import { RescheduleOrderDto } from './dto/reschedule-order.dto'
 import { TransitionVersionDto } from './dto/transition-version.dto'
 import { UpdateStaffProfileDto } from './dto/update-staff-profile.dto'
+import { UpdateStaffWorkStatusDto } from './dto/update-staff-work-status.dto'
 import { OrdersService } from './orders.service'
 
 @Controller()
@@ -71,13 +75,36 @@ export class OrdersController {
 
   @Get('admin/orders')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_LIST)
   listAdminOrders(@Req() request: RequestWithContext, @Query() query: AdminQueryOrdersDto) {
     this.parseAdminId(request)
     return this.ordersService.listAdminOrders(query)
   }
 
+  @Post('admin/orders')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_UPDATE)
+  @HttpCode(200)
+  createAdminOrder(@Req() request: RequestWithContext, @Body() dto: AdminCreateOrderDto) {
+    return this.ordersService.createAdminOrder(
+      this.parseAdminId(request),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
+  }
+
+  @Get('admin/orders/:id/dispatch-check')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_ASSIGN)
+  getAdminOrderDispatchCheck(@Req() request: RequestWithContext, @Param('id') idText: string) {
+    this.parseAdminId(request)
+    return this.ordersService.getAdminOrderDispatchCheck(this.parseId(idText))
+  }
+
   @Get('admin/orders/:id')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_DETAIL)
   getAdminOrderDetail(@Req() request: RequestWithContext, @Param('id') idText: string) {
     this.parseAdminId(request)
     return this.ordersService.getAdminOrderDetail(this.parseId(idText))
@@ -85,6 +112,7 @@ export class OrdersController {
 
   @Put('admin/orders/:id')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_UPDATE)
   @HttpCode(200)
   updateAdminOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminUpdateOrderDto) {
     return this.ordersService.updateAdminOrder(
@@ -98,6 +126,7 @@ export class OrdersController {
 
   @Delete('admin/orders/:id')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_DELETE)
   @HttpCode(200)
   deleteAdminOrder(@Req() request: RequestWithContext, @Param('id') idText: string) {
     return this.ordersService.deleteAdminOrder(
@@ -110,6 +139,7 @@ export class OrdersController {
 
   @Post('admin/orders/:id/assign')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_ASSIGN)
   @HttpCode(200)
   assignOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AssignOrderDto) {
     return this.ordersService.assignOrder(
@@ -123,6 +153,7 @@ export class OrdersController {
 
   @Post('admin/orders/:id/auto-assign')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_ASSIGN)
   @HttpCode(200)
   autoAssignOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AutoAssignOrderDto) {
     return this.ordersService.autoAssignOrder(
@@ -136,6 +167,7 @@ export class OrdersController {
 
   @Put('admin/orders/:id/remark')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_UPDATE)
   @HttpCode(200)
   updateAdminOrderRemark(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminOrderRemarkDto) {
     return this.ordersService.updateAdminOrderRemark(
@@ -149,6 +181,7 @@ export class OrdersController {
 
   @Get('admin/staff/options')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.STAFF_LIST)
   listAssignableStaffOptions(@Req() request: RequestWithContext) {
     this.parseAdminId(request)
     return this.ordersService.listAssignableStaffOptions()
@@ -157,16 +190,6 @@ export class OrdersController {
   @Get('staff/orders')
   async listStaffOrders(@Req() request: RequestWithContext, @Query() query: QueryOrdersDto) {
     return this.ordersService.listStaffOrders(await this.parseStaffId(request), query)
-  }
-
-  @Get('staff/available-orders')
-  async listAvailableStaffOrders(@Req() request: RequestWithContext, @Query() query: QueryOrdersDto) {
-    return this.ordersService.listAvailableStaffOrders(await this.parseStaffId(request), query)
-  }
-
-  @Get('staff/available-orders/:id')
-  async getAvailableStaffOrderDetail(@Req() request: RequestWithContext, @Param('id') idText: string) {
-    return this.ordersService.getAvailableStaffOrderDetail(await this.parseStaffId(request), this.parseId(idText))
   }
 
   @Get('staff/profile')
@@ -179,6 +202,16 @@ export class OrdersController {
     return this.ordersService.updateStaffProfile(await this.parseStaffId(request), dto)
   }
 
+  @Get('staff/work-status')
+  async getStaffWorkStatus(@Req() request: RequestWithContext) {
+    return this.ordersService.getStaffWorkStatus(await this.parseStaffId(request))
+  }
+
+  @Put('staff/work-status')
+  async updateStaffWorkStatus(@Req() request: RequestWithContext, @Body() dto: UpdateStaffWorkStatusDto) {
+    return this.ordersService.updateStaffWorkStatus(await this.parseStaffId(request), dto)
+  }
+
   @Get('staff/orders/:id')
   async getStaffOrderDetail(@Req() request: RequestWithContext, @Param('id') idText: string) {
     return this.ordersService.getStaffOrderDetail(await this.parseStaffId(request), this.parseId(idText))
@@ -188,12 +221,6 @@ export class OrdersController {
   @HttpCode(200)
   async staffAccept(@Req() request: RequestWithContext, @Param('id') idText: string) {
     return this.ordersService.staffAccept(await this.parseStaffId(request), this.parseId(idText), getRequestId(request))
-  }
-
-  @Post('staff/orders/:id/claim')
-  @HttpCode(200)
-  async staffClaim(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: TransitionVersionDto) {
-    return this.ordersService.staffClaim(await this.parseStaffId(request), this.parseId(idText), dto, getRequestId(request))
   }
 
   @Post('staff/orders/:id/reject')

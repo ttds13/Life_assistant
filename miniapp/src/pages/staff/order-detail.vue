@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import type { StaffTask, StaffTaskStatus } from '@/api/types/staff'
-import { acceptStaffTask, checkinStaffTask, claimStaffTask, completeStaffTask, getStaffTaskDetail, rejectStaffTask, startStaffTask } from '@/api/staff'
+import { acceptStaffTask, checkinStaffTask, completeStaffTask, getStaffTaskDetail, rejectStaffTask, startStaffTask } from '@/api/staff'
 
 definePage({
   style: {
@@ -9,23 +9,18 @@ definePage({
 })
 
 const taskId = ref(0)
-const taskGroup = ref<'grab' | 'dispatch'>('dispatch')
 const task = ref<StaffTask | null>(null)
 const loading = ref(true)
 const actionLoading = ref(false)
 
 const statusInfo = computed(() => {
-  if (task.value?.group === 'grab' && task.value.status === 'pending_accept') {
-    return { title: '可接订单', desc: '请确认时间和地址后领取', next: '下一步：立即接单' }
-  }
-
   const map: Record<StaffTaskStatus, { title: string, desc: string, next: string }> = {
-    pending_accept: { title: '待接单', desc: '请确认时间和地址后接单', next: '下一步：接单或拒单' },
-    accepted: { title: '已接单', desc: '请按预约时间准时上门', next: '下一步：上门打卡' },
-    on_the_way: { title: '上门中', desc: '已完成上门打卡', next: '下一步：开始服务' },
-    in_service: { title: '服务中', desc: '服务正在进行，请按要求上传照片', next: '下一步：上传照片并完成服务' },
-    pending_confirm: { title: '待用户确认', desc: '服务已提交，等待用户确认', next: '下一步：等待确认' },
-    completed: { title: '已完成', desc: '订单已完成并进入结算流程', next: '可返回订单列表' },
+    pending_accept: { title: '待接单', desc: '请确认预约时间和地址后接单', next: '下一步：接单或拒单' },
+    accepted: { title: '已接单', desc: '请按预约时间准时上门', next: '下一步：出发上门' },
+    on_the_way: { title: '已出发', desc: '已记录出发时间', next: '下一步：开始服务' },
+    in_service: { title: '服务中', desc: '服务完成前请上传现场照片', next: '下一步：上传照片并完成服务' },
+    pending_confirm: { title: '待用户确认', desc: '服务已提交，等待用户确认或系统自动确认', next: '可查看履约记录' },
+    completed: { title: '已完成', desc: '订单已完成', next: '可返回订单列表' },
     rejected: { title: '已拒单', desc: '该任务已拒绝', next: '可返回订单列表' },
     cancelled: { title: '已取消', desc: '该任务已取消', next: '可返回订单列表' },
   }
@@ -33,15 +28,11 @@ const statusInfo = computed(() => {
 })
 
 const actionConfig = computed(() => {
-  const status = task.value?.status
-  if (status === 'pending_accept' && task.value?.group === 'grab')
-    return { primary: '立即接单', secondary: '' }
-
-  switch (status) {
+  switch (task.value?.status) {
     case 'pending_accept':
       return { primary: '接单', secondary: '拒单' }
     case 'accepted':
-      return { primary: '上门打卡', secondary: '' }
+      return { primary: '出发上门', secondary: '' }
     case 'on_the_way':
       return { primary: '开始服务', secondary: '' }
     case 'in_service':
@@ -51,14 +42,18 @@ const actionConfig = computed(() => {
   }
 })
 
-function rowValue(value?: string) {
+function rowValue(value?: string | null) {
   return value || '暂无'
 }
 
 async function loadTask() {
   loading.value = true
-  task.value = await getStaffTaskDetail(taskId.value || 901, taskGroup.value)
-  loading.value = false
+  try {
+    task.value = await getStaffTaskDetail(taskId.value)
+  }
+  finally {
+    loading.value = false
+  }
 }
 
 function onCallCustomer() {
@@ -70,7 +65,56 @@ function onCallCustomer() {
 }
 
 function onNavigate() {
-  uni.showToast({ icon: 'none', title: '请按地址信息前往' })
+  if (!task.value)
+    return
+  if (task.value.latitude && task.value.longitude) {
+    uni.openLocation({
+      latitude: task.value.latitude,
+      longitude: task.value.longitude,
+      name: task.value.customerName || '服务地址',
+      address: task.value.addressText,
+    })
+    return
+  }
+  uni.setClipboardData({
+    data: task.value.addressText,
+    success: () => uni.showToast({ icon: 'success', title: '地址已复制' }),
+  })
+}
+
+function chooseActualMinutes(current: StaffTask) {
+  return new Promise<number | undefined>((resolve) => {
+    if (!(current.memberCardName && current.serviceCardType === 'time')) {
+      resolve(undefined)
+      return
+    }
+    const planned = current.plannedConsumeUnits || current.memberCardConsumeUnits || 120
+    const half = Math.max(60, Math.ceil(planned / 2))
+    uni.showActionSheet({
+      itemList: [`${half} 分钟`, `${planned} 分钟`],
+      success: res => resolve(res.tapIndex === 0 ? half : planned),
+      fail: () => resolve(undefined),
+    })
+  })
+}
+
+async function completeCurrentTask(current: StaffTask) {
+  if (!current.photos?.length) {
+    uni.showToast({ icon: 'none', title: '请先上传服务照片' })
+    uni.navigateTo({ url: `/pages/staff/upload-photos?id=${current.id}` })
+    return
+  }
+
+  const actualMinutes = await chooseActualMinutes(current)
+  if (current.memberCardName && current.serviceCardType === 'time' && !actualMinutes)
+    return
+
+  task.value = await completeStaffTask(current.id, {
+    version: current.version,
+    actualMinutes,
+    photoUrls: current.photos.map(photo => photo.ossUrl || photo.url),
+  })
+  uni.showToast({ icon: 'success', title: '已提交' })
 }
 
 async function doPrimary() {
@@ -79,42 +123,19 @@ async function doPrimary() {
   actionLoading.value = true
   try {
     if (task.value.status === 'pending_accept') {
-      if (task.value.group === 'grab') {
-        task.value = await claimStaffTask(task.value.id, task.value.version)
-        taskGroup.value = 'dispatch'
-        uni.showToast({ icon: 'success', title: '领取成功' })
-      }
-      else {
-        task.value = await acceptStaffTask(task.value.id)
-        uni.showToast({ icon: 'success', title: '已接单' })
-      }
+      task.value = await acceptStaffTask(task.value.id)
+      uni.showToast({ icon: 'success', title: '已接单' })
     }
     else if (task.value.status === 'accepted') {
       task.value = await checkinStaffTask(task.value.id, task.value.version)
-      uni.showToast({ icon: 'success', title: '已打卡' })
+      uni.showToast({ icon: 'success', title: '已出发' })
     }
     else if (task.value.status === 'on_the_way') {
       task.value = await startStaffTask(task.value.id, task.value.version)
       uni.showToast({ icon: 'success', title: '已开始' })
     }
     else if (task.value.status === 'in_service') {
-      if (!task.value.photos?.length) {
-        uni.showToast({ icon: 'none', title: '请先上传服务照片' })
-        return
-      }
-      uni.showModal({
-        title: '完成服务',
-        content: '确认已经完成服务并提交给用户确认吗？',
-        success: async (res) => {
-          if (!res.confirm)
-            return
-          task.value = await completeStaffTask(task.value!.id, {
-            version: task.value!.version,
-            photoUrls: task.value!.photos?.map(photo => photo.ossUrl || photo.url) || [],
-          })
-          uni.showToast({ icon: 'success', title: '已提交' })
-        },
-      })
+      await completeCurrentTask(task.value)
     }
     else {
       uni.redirectTo({ url: '/pages/staff/orders?status=processing' })
@@ -132,10 +153,10 @@ function onPrimary() {
 function onSecondary() {
   if (!task.value)
     return
-  if (task.value.status === 'pending_accept' && task.value.group === 'dispatch') {
+  if (task.value.status === 'pending_accept') {
     uni.showModal({
       title: '拒单确认',
-      content: '确定拒绝该任务吗？',
+      content: '确定拒绝这笔任务吗？',
       success: async (res) => {
         if (!res.confirm)
           return
@@ -151,9 +172,11 @@ function onSecondary() {
 }
 
 onLoad((query) => {
-  taskId.value = Number(query?.id || 901)
-  taskGroup.value = query?.group === 'grab' ? 'grab' : 'dispatch'
-  loadTask()
+  taskId.value = Number(query?.id || 0)
+  if (taskId.value)
+    loadTask()
+  else
+    loading.value = false
 })
 
 onShow(() => {
@@ -177,9 +200,29 @@ onShow(() => {
 
         <form-section title="服务信息">
           <text class="block text-[32rpx] text-[#1F2937] font-700">{{ task.serviceName }}</text>
-          <text class="block mt-[10rpx] text-[26rpx] text-[#6B7280]">{{ rowValue(task.serviceSpec) }}</text>
+          <text class="block mt-[10rpx] text-[26rpx] text-[#6B7280]">{{ task.serviceTypeText || rowValue(task.serviceSpec) }}</text>
           <view class="mt-[18rpx] rounded-[16rpx] bg-[#F9FAFB] p-[20rpx]">
             <text class="text-[26rpx] leading-[38rpx] text-[#4B5563]">{{ rowValue(task.serviceRequirement) }}</text>
+          </view>
+        </form-section>
+
+        <form-section title="会员卡/计费">
+          <view class="rounded-[16rpx] bg-[#F9FAFB] p-[20rpx]">
+            <text class="text-[26rpx] leading-[38rpx] text-[#4B5563]">{{ task.memberCardTip || '本订单不使用会员卡' }}</text>
+          </view>
+          <view v-if="task.memberCardName" class="mt-[16rpx] grid grid-cols-3 gap-[12rpx]">
+            <view class="rounded-[14rpx] bg-[#FFF7ED] p-[16rpx]">
+              <text class="block text-[22rpx] text-[#B45309]">冻结</text>
+              <text class="block mt-[6rpx] text-[28rpx] text-[#92400E] font-700">{{ task.frozenUnits || task.plannedConsumeUnits || 0 }}{{ task.memberCardUnitName }}</text>
+            </view>
+            <view class="rounded-[14rpx] bg-[#ECFDF5] p-[16rpx]">
+              <text class="block text-[22rpx] text-[#047857]">已扣</text>
+              <text class="block mt-[6rpx] text-[28rpx] text-[#047857] font-700">{{ task.actualConsumeUnits || 0 }}{{ task.memberCardUnitName }}</text>
+            </view>
+            <view class="rounded-[14rpx] bg-[#EAF3FF] p-[16rpx]">
+              <text class="block text-[22rpx] text-[#1677FF]">释放</text>
+              <text class="block mt-[6rpx] text-[28rpx] text-[#1677FF] font-700">{{ task.releasedUnits || 0 }}{{ task.memberCardUnitName }}</text>
+            </view>
           </view>
         </form-section>
 
@@ -190,7 +233,7 @@ onShow(() => {
           </view>
           <view class="py-[10rpx] flex">
             <text class="w-[150rpx] text-[26rpx] text-[#9CA3AF]">客户姓名</text>
-            <text class="flex-1 text-[26rpx] text-[#4B5563]">{{ task.customerName }}</text>
+            <text class="flex-1 text-[26rpx] text-[#4B5563]">{{ task.customerName || '暂无' }}</text>
           </view>
           <view class="py-[10rpx] flex">
             <text class="w-[150rpx] text-[26rpx] text-[#9CA3AF]">客户电话</text>
@@ -205,7 +248,7 @@ onShow(() => {
               联系客户
             </button>
             <button class="flex-1 h-[72rpx] rounded-full bg-[#EAF3FF] text-[#1677FF] text-[26rpx] flex items-center justify-center" @tap="onNavigate">
-              导航
+              导航/复制地址
             </button>
           </view>
         </form-section>
@@ -215,7 +258,7 @@ onShow(() => {
             <text class="text-[26rpx] leading-[38rpx] text-[#4B5563]">{{ task.remark || '用户暂无备注' }}</text>
           </view>
           <view class="mt-[18rpx] rounded-[16rpx] bg-[#FFF7ED] p-[20rpx]">
-            <text class="text-[24rpx] leading-[36rpx] text-[#B45309]">平台提示：上门前请核对服务地址，服务过程保留必要照片凭证。</text>
+            <text class="text-[24rpx] leading-[36rpx] text-[#B45309]">完成服务前请上传至少 1 张现场照片。会员卡时间类订单完成时请选择实际服务时长。</text>
           </view>
         </form-section>
 
@@ -226,7 +269,7 @@ onShow(() => {
               <text class="flex-1 text-[26rpx] text-[#4B5563]">{{ rowValue(task.acceptedAt) }}</text>
             </view>
             <view class="flex py-[8rpx]">
-              <text class="w-[170rpx] text-[26rpx] text-[#9CA3AF]">打卡时间</text>
+              <text class="w-[170rpx] text-[26rpx] text-[#9CA3AF]">出发时间</text>
               <text class="flex-1 text-[26rpx] text-[#4B5563]">{{ rowValue(task.checkinAt) }}</text>
             </view>
             <view class="flex py-[8rpx]">

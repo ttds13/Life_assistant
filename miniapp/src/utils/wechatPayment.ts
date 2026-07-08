@@ -21,11 +21,6 @@ export function getWechatPaymentParams(payment: PayOrderResult): WechatPaymentPa
 }
 
 export function requestWechatPayment(params: WechatPaymentParams) {
-  if (import.meta.env.VITE_LOCAL_DEBUG_PAYMENT === 'true') {
-    uni.showToast({ icon: 'none', title: '本地调试：已跳过微信支付' })
-    return Promise.resolve()
-  }
-
   return new Promise<void>((resolve, reject) => {
     const options = {
       ...params,

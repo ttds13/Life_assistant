@@ -2,6 +2,7 @@
 import type { SaveAddressPayload } from '@/api/types/address'
 import { createStaffAddress, deleteStaffAddress, getStaffAddress, updateStaffAddress } from '@/api/staff-address'
 import { chooseAddressLocation, locateCurrentAddress } from '@/utils/location'
+import type { AddressLocationResult } from '@/utils/location'
 
 definePage({
   style: {
@@ -13,6 +14,8 @@ const addressId = ref<number | null>(null)
 const loading = ref(false)
 const saving = ref(false)
 const deleting = ref(false)
+const locating = ref(false)
+const locationTip = ref('')
 const form = reactive<SaveAddressPayload>({
   contactName: '',
   contactPhone: '',
@@ -113,23 +116,60 @@ async function onSave() {
   }
 }
 
-async function applyLocation(patch: Partial<SaveAddressPayload> | null) {
-  if (!patch) {
-    uni.showToast({ icon: 'none', title: '未获取到地址' })
+function showLocationFailure(result: AddressLocationResult) {
+  locationTip.value = result.message
+  uni.showToast({ icon: 'none', title: result.message })
+  if (result.reason === 'permission_denied') {
+    uni.showModal({
+      title: '定位权限未开启',
+      content: '可打开设置授权定位，也可以继续手动填写地址并保存。',
+      confirmText: '打开设置',
+      cancelText: '手动填写',
+      success: (res) => {
+        if (res.confirm)
+          uni.openSetting({})
+      },
+    })
+  }
+}
+
+async function applyLocation(result: AddressLocationResult) {
+  if (!result.ok) {
+    if (result.data)
+      Object.assign(form, result.data)
+    showLocationFailure(result)
     return
   }
+
+  const patch = result.data || {}
   Object.assign(form, {
     ...patch,
     detailAddress: patch.detailAddress || form.detailAddress,
   })
+  locationTip.value = result.message
+  uni.showToast({ icon: 'success', title: result.message })
 }
 
 async function onLocateCurrent() {
-  await applyLocation(await locateCurrentAddress())
+  if (locating.value) return
+  locating.value = true
+  try {
+    await applyLocation(await locateCurrentAddress())
+  }
+  finally {
+    locating.value = false
+  }
 }
 
 async function onChooseLocation() {
-  await applyLocation(await chooseAddressLocation())
+  if (locating.value) return
+  locating.value = true
+  try {
+    await applyLocation(await chooseAddressLocation())
+  }
+  finally {
+    locating.value = false
+  }
 }
 
 function onDelete() {
@@ -200,12 +240,15 @@ onLoad((query) => {
 
       <form-section title="师傅地址" required>
         <view class="grid grid-cols-2 gap-2 pb-3 border-b border-[#F3F4F6]">
-          <button class="h-[72rpx] rounded-[12rpx] bg-[#FFECEC] text-[#FF373D] text-[26rpx]" @tap="onLocateCurrent">
-            定位当前地址
+          <button class="h-[72rpx] rounded-[12rpx] bg-[#FFECEC] text-[#FF373D] text-[26rpx]" :loading="locating" @tap="onLocateCurrent">
+            {{ locating ? '定位中' : '定位当前地址' }}
           </button>
-          <button class="h-[72rpx] rounded-[12rpx] bg-[#F3F4F6] text-[#374151] text-[26rpx]" @tap="onChooseLocation">
+          <button class="h-[72rpx] rounded-[12rpx] bg-[#F3F4F6] text-[#374151] text-[26rpx]" :loading="locating" @tap="onChooseLocation">
             地图选点
           </button>
+        </view>
+        <view v-if="locationTip" class="mt-3 rounded-[12rpx] bg-[#FFF7ED] px-3 py-2">
+          <text class="text-[24rpx] leading-[36rpx] text-[#AD6800]">{{ locationTip }}</text>
         </view>
         <view class="flex items-center py-3 border-b border-[#F3F4F6]">
           <text class="w-[160rpx] text-[28rpx] text-gray-700">省份</text>

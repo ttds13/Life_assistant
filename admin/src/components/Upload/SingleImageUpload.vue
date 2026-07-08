@@ -141,7 +141,7 @@ function handleUpload(options: UploadRequestOptions) {
 
     // 处理附加参数
     Object.keys(props.data).forEach((key) => {
-      formData.append(key, props.data[key]);
+      formData.append(key, String(props.data[key]));
     });
 
     FileAPI.upload(formData).then(

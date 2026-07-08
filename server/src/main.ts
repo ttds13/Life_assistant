@@ -46,14 +46,16 @@ export async function createConfiguredApp() {
     new ResponseTransformInterceptor(reflector),
   )
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Life Assistant Server')
-    .setDescription('NestJS backend for Life Assistant')
-    .setVersion('0.1.0')
-    .addBearerAuth()
-    .build()
-  const document = SwaggerModule.createDocument(app, swaggerConfig)
-  SwaggerModule.setup(`${apiPrefix}/docs`, app, document)
+  if (config.get<string>('NODE_ENV', 'development') !== 'production') {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Life Assistant Server')
+      .setDescription('NestJS backend for Life Assistant')
+      .setVersion('0.1.0')
+      .addBearerAuth()
+      .build()
+    const document = SwaggerModule.createDocument(app, swaggerConfig)
+    SwaggerModule.setup(`${apiPrefix}/docs`, app, document)
+  }
 
   return app
 }

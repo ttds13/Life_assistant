@@ -1,5 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common'
 import { AdminAuthGuard } from '../admin-auth/admin-auth.guard'
+import { RequireAdminPermissions } from '../admin-auth/admin-permission.decorator'
+import { ADMIN_PERMISSION } from '../admin-auth/admin-permissions'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { getRequestId, RequestWithContext } from '../common/utils/request-context'
@@ -12,6 +14,7 @@ export class AdminAddressesController {
   constructor(@Inject(AddressesService) private readonly addressesService: AddressesService) {}
 
   @Get()
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_LIST)
   list(@Query() query: Record<string, unknown>) {
     return this.addressesService.listAdminAddresses({
       ownerType: this.optionalString(query.ownerType),
@@ -26,22 +29,26 @@ export class AdminAddressesController {
   }
 
   @Get(':id')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_LIST)
   get(@Param('id') idText: string) {
     return this.addressesService.getAdminAddress(this.parseId(idText))
   }
 
   @Post()
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_CREATE)
   @HttpCode(200)
   create(@Req() request: RequestWithContext, @Body() dto: AdminSaveAddressDto) {
     return this.addressesService.createAdminAddress(dto, this.context(request))
   }
 
   @Put(':id')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_UPDATE)
   update(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminSaveAddressDto) {
     return this.addressesService.updateAdminAddress(this.parseId(idText), dto, this.context(request))
   }
 
   @Delete(':id')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_DELETE)
   @HttpCode(200)
   delete(@Req() request: RequestWithContext, @Param('id') idText: string) {
     return this.addressesService.deleteAdminAddress(this.parseId(idText), this.context(request))

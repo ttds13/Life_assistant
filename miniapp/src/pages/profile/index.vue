@@ -2,6 +2,7 @@
 import { logoutSession } from '@/api/auth'
 import { getMyMemberCards } from '@/api/memberCards'
 import { getOrders } from '@/api/orders'
+import { getUserPoints } from '@/api/points'
 import type { OrderStatus } from '@/api/types/orders'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
@@ -19,9 +20,9 @@ const tokenStore = useTokenStore()
 const userStore = useUserStore()
 const staffEntering = ref(false)
 
-type StatAction = 'card' | 'coupon'
+type StatAction = 'card' | 'coupon' | 'points'
 type OrderAction = 'all' | 'pendingPayment' | 'pendingDispatch' | 'pendingConfirm' | 'pendingReview' | 'afterSales'
-type AppAction = 'address' | 'staffWorkbench' | 'applyStaff' | 'applyPartner' | 'faq' | 'customerService' | 'feedback' | 'settings'
+type AppAction = 'address' | 'staffWorkbench' | 'applyStaff' | 'faq' | 'customerService' | 'feedback' | 'settings'
 
 interface StatEntry {
   label: string
@@ -47,6 +48,7 @@ interface AppEntry {
 const emptyProfileStats = {
   cardCount: 0,
   couponCount: 0,
+  points: 0,
 }
 
 type OrderStats = Record<Exclude<OrderAction, 'all'>, number>
@@ -85,6 +87,11 @@ const statEntries = computed<StatEntry[]>(() => [
     action: 'coupon',
     value: tokenStore.hasLogin ? String(profileStats.value.couponCount) : '--',
   },
+  {
+    label: '我的积分',
+    action: 'points',
+    value: tokenStore.hasLogin ? String(profileStats.value.points) : '--',
+  },
 ])
 
 const orderEntries = computed<OrderEntry[]>(() => [
@@ -99,7 +106,6 @@ const appEntries: AppEntry[] = [
   { label: '我的地址', action: 'address', icon: 'i-carbon-location', color: '#1677FF', auth: true },
   { label: '师傅端', action: 'staffWorkbench', icon: 'i-carbon-user-certification', color: '#FF373D', auth: true },
   { label: '申请师傅', action: 'applyStaff', icon: 'i-carbon-user-role', color: '#20C997', auth: true },
-  { label: '申请合作商', action: 'applyPartner', icon: 'i-carbon-store', color: '#FF7A59', auth: true },
   { label: '常见问题', action: 'faq', icon: 'i-carbon-help', color: '#4D8DFF', auth: false },
   { label: '联系客服', action: 'customerService', icon: 'i-carbon-headset', color: '#F5A623', auth: false },
   { label: '问题反馈', action: 'feedback', icon: 'i-carbon-user-feedback', color: '#EC4899', auth: true },
@@ -162,6 +168,16 @@ function showPendingToast(title: string) {
   uni.showToast({ icon: 'none', title })
 }
 
+function navigateToPage(url: string) {
+  uni.navigateTo({
+    url,
+    fail: (err) => {
+      console.error('页面跳转失败:', err)
+      showPendingToast('页面暂不可用')
+    },
+  })
+}
+
 async function loadOrderStats() {
   if (!tokenStore.hasLogin) {
     orderStats.value = { ...emptyOrderStats }
@@ -191,10 +207,14 @@ async function loadProfileStats() {
   }
 
   try {
-    const cards = await getMyMemberCards()
+    const [cards, points] = await Promise.all([
+      getMyMemberCards(),
+      getUserPoints().catch(() => null),
+    ])
     profileStats.value = {
       ...profileStats.value,
       cardCount: cards.length,
+      points: points?.availablePoints || 0,
     }
   }
   catch {
@@ -232,9 +252,19 @@ function goCouponPage() {
   })
 }
 
+function goPointsPage() {
+  requireLogin(() => {
+    uni.navigateTo({ url: '/pages/points/index' })
+  })
+}
+
 function onStatEntryTap(action: StatAction) {
   if (action === 'card') {
     goCardPage()
+    return
+  }
+  if (action === 'points') {
+    goPointsPage()
     return
   }
   goCouponPage()
@@ -294,18 +324,17 @@ function onAppTap(item: AppEntry) {
   }
 
   if (item.action === 'settings') {
-    uni.navigateTo({ url: '/pages/settings/index' })
+    navigateToPage('/pages/settings/index')
     return
   }
 
-  const titleMap: Record<Exclude<AppAction, 'address' | 'staffWorkbench' | 'settings'>, string> = {
-    applyStaff: '请联系客服申请',
-    applyPartner: '请联系客服申请',
-    faq: '常见问题待配置',
-    customerService: '客服信息待配置',
-    feedback: '请联系客服反馈',
+  const routeMap: Record<Exclude<AppAction, 'address' | 'staffWorkbench' | 'settings'>, string> = {
+    applyStaff: '/pages/profile/apply-staff',
+    faq: '/pages/profile/faq',
+    customerService: '/pages/profile/contact-service',
+    feedback: '/pages/profile/feedback',
   }
-  showPendingToast(titleMap[item.action])
+  navigateToPage(routeMap[item.action])
 }
 
 onShow(() => {

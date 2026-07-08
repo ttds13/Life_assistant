@@ -1,5 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common'
 import { AdminAuthGuard } from '../admin-auth/admin-auth.guard'
+import { RequireAdminPermissions } from '../admin-auth/admin-permission.decorator'
+import { ADMIN_PERMISSION } from '../admin-auth/admin-permissions'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { getRequestId, RequestWithContext } from '../common/utils/request-context'
@@ -17,18 +19,21 @@ export class PromotionLinksController {
 
   @Get('admin/promotion-links/target-options')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.MARKETING_PROMOTION_LIST)
   listTargetOptions(@Query('targetType') targetType?: string, @Query('keyword') keyword?: string) {
     return this.service.listTargetOptions(targetType, keyword)
   }
 
   @Get('admin/promotion-links')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.MARKETING_PROMOTION_LIST)
   listAdminLinks(@Query() query: AdminPageQueryDto) {
     return this.service.listAdminLinks(query)
   }
 
   @Post('admin/promotion-links')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.MARKETING_PROMOTION_CREATE)
   @HttpCode(200)
   createAdminLink(@Req() request: RequestWithContext, @Body() body: Record<string, unknown>) {
     return this.service.createAdminLink(body, this.context(request))
@@ -36,6 +41,7 @@ export class PromotionLinksController {
 
   @Put('admin/promotion-links/:id')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.MARKETING_PROMOTION_UPDATE)
   @HttpCode(200)
   updateAdminLink(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
     return this.service.updateAdminLink(this.parseId(idText), body, this.context(request))
@@ -43,6 +49,7 @@ export class PromotionLinksController {
 
   @Put('admin/promotion-links/:id/status')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.MARKETING_PROMOTION_UPDATE)
   @HttpCode(200)
   updateAdminLinkStatus(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminStatusDto) {
     return this.service.updateAdminLinkStatus(this.parseId(idText), dto.status, this.context(request))
@@ -50,6 +57,7 @@ export class PromotionLinksController {
 
   @Delete('admin/promotion-links/:id')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.MARKETING_PROMOTION_DELETE)
   @HttpCode(200)
   deleteAdminLink(@Req() request: RequestWithContext, @Param('id') idText: string) {
     return this.service.deleteAdminLink(this.parseId(idText), this.context(request))

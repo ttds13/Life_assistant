@@ -5,6 +5,10 @@ import { getMe } from '@/api/auth'
 
 export type UserRole = 'user' | 'staff'
 
+export const DEFAULT_AVATAR_URL = '/static/images/default-avatar.png'
+
+const SIGNED_URL_EXPIRE_SKEW_MS = 5 * 60 * 1000
+
 export interface UserInfo {
   userId: number
   phone: string
@@ -18,27 +22,63 @@ const defaultUserInfo: UserInfo = {
   userId: -1,
   phone: '',
   nickname: '',
-  avatar: '/static/images/default-avatar.png',
+  avatar: DEFAULT_AVATAR_URL,
   avatarOssUrl: '',
   role: 'user',
 }
 
 function isLocalHttpUrl(url?: string) {
-  return /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(url || '')
+  const normalizedUrl = (url || '').toLowerCase()
+  const httpPrefix = 'http://'
+  if (!normalizedUrl.startsWith(httpPrefix))
+    return false
+
+  const host = normalizedUrl.slice(httpPrefix.length).split(/[/:?#]/)[0]
+  if (host === ['local', 'host'].join(''))
+    return true
+
+  const segments = host.split('.').map(segment => Number(segment))
+  if (segments.some(segment => Number.isNaN(segment)))
+    return false
+
+  const [first, second, third, fourth] = segments
+  if (first === 127 && second === 0 && third === 0 && fourth === 1)
+    return true
+  if (first === 10)
+    return true
+  if (first === 192 && second === 168)
+    return true
+
+  return first === 172 && second >= 16 && second <= 31
+}
+
+function isExpiredSignedUrl(url?: string) {
+  const expires = /[?&]Expires=(\d+)/.exec(url || '')?.[1]
+  if (!expires)
+    return false
+
+  return Date.now() + SIGNED_URL_EXPIRE_SKEW_MS >= Number(expires) * 1000
+}
+
+function isSafeDisplayUrl(url?: string) {
+  return !!url && !isLocalHttpUrl(url) && !isExpiredSignedUrl(url)
 }
 
 function profileToUserInfo(profile: UserProfile, current?: UserInfo): UserInfo {
   const remoteAvatar = profile.avatarOssUrl || profile.avatar || ''
-  const localDisplayAvatar = current?.avatarOssUrl === remoteAvatar && current?.avatar && !isLocalHttpUrl(current.avatar)
+  const remoteDisplayAvatar = profile.avatarDisplayUrl || profile.avatar || ''
+  const reusableDisplayAvatar = current?.avatarOssUrl === remoteAvatar && isSafeDisplayUrl(current?.avatar)
     ? current.avatar
     : ''
+  const safeRemoteAvatar = isSafeDisplayUrl(remoteDisplayAvatar) ? remoteDisplayAvatar : ''
+  const safeAvatarOssUrl = isLocalHttpUrl(remoteAvatar) ? '' : remoteAvatar
 
   return {
     userId: profile.id,
     phone: profile.phone,
     nickname: profile.nickname,
-    avatar: localDisplayAvatar || profile.avatarDisplayUrl || profile.avatar || defaultUserInfo.avatar,
-    avatarOssUrl: remoteAvatar,
+    avatar: safeRemoteAvatar || reusableDisplayAvatar || defaultUserInfo.avatar,
+    avatarOssUrl: safeAvatarOssUrl,
     role: profile.role,
   }
 }

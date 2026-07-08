@@ -12,13 +12,9 @@ const emit = defineEmits<{
 }>()
 
 const actionConfig = computed(() => {
-  if (props.task.group === 'grab' && props.task.status === 'pending_accept') {
-    return { primary: '立即接单', secondary: '' }
-  }
-
   const map: Record<StaffTaskStatus, { primary: string, secondary: string }> = {
     pending_accept: { primary: '接单', secondary: '拒单' },
-    accepted: { primary: '上门打卡', secondary: '' },
+    accepted: { primary: '出发', secondary: '' },
     on_the_way: { primary: '开始服务', secondary: '' },
     in_service: { primary: '完成服务', secondary: '上传照片' },
     pending_confirm: { primary: '查看详情', secondary: '' },
@@ -37,8 +33,8 @@ const actionConfig = computed(() => {
         <text class="block truncate text-[32rpx] leading-[42rpx] text-[#1F2937] font-700">
           {{ task.serviceName }}
         </text>
-        <text v-if="task.serviceSpec" class="block mt-[6rpx] truncate text-[24rpx] text-[#6B7280]">
-          {{ task.serviceSpec }}
+        <text v-if="task.serviceTypeText || task.serviceSpec" class="block mt-[6rpx] truncate text-[24rpx] text-[#6B7280]">
+          {{ task.serviceTypeText || task.serviceSpec }}
         </text>
       </view>
       <staff-status-tag :status="task.status" size="sm" />
@@ -53,16 +49,16 @@ const actionConfig = computed(() => {
         <text class="i-carbon-location mt-[4rpx] text-[28rpx] text-[#9CA3AF] mr-[12rpx]" />
         <text class="flex-1 text-[26rpx] leading-[38rpx] text-[#4B5563]">{{ task.addressText }}</text>
       </view>
-      <view v-if="task.remark" class="flex items-start mt-[14rpx]">
-        <text class="i-carbon-chat mt-[4rpx] text-[28rpx] text-[#9CA3AF] mr-[12rpx]" />
-        <text class="flex-1 text-[24rpx] leading-[34rpx] text-[#6B7280]">{{ task.remark }}</text>
+      <view v-if="task.memberCardTip" class="flex items-start mt-[14rpx]">
+        <text class="i-carbon-ticket mt-[4rpx] text-[28rpx] text-[#9CA3AF] mr-[12rpx]" />
+        <text class="flex-1 text-[24rpx] leading-[34rpx] text-[#6B7280]">{{ task.memberCardTip }}</text>
       </view>
     </view>
 
     <view class="mt-[22rpx] flex items-center justify-between">
       <view class="flex items-center min-w-0">
         <text class="i-carbon-location-current text-[28rpx] text-[#1677FF] mr-[8rpx]" />
-        <text class="text-[24rpx] text-[#6B7280] truncate">{{ task.distanceText || '距离待定位' }}</text>
+        <text class="text-[24rpx] text-[#6B7280] truncate">{{ task.distanceText || '已分配任务' }}</text>
         <text v-if="task.incomeAmount !== undefined" class="ml-[16rpx] text-[24rpx] text-[#EF4444]">预计 ¥{{ task.incomeAmount }}</text>
       </view>
 

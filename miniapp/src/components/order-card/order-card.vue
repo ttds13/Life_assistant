@@ -27,6 +27,8 @@ const actionConfig = computed(() => {
       return { primary: '确认完成', secondary: '' }
     case 'completed':
       return { primary: '去评价', secondary: '申请售后' }
+    case 'after_sales':
+      return { primary: '鏌ョ湅璇︽儏', secondary: '查看售后' }
     case 'cancelled':
       return { primary: '再次预约', secondary: '' }
     default:

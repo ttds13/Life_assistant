@@ -3,6 +3,7 @@ import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import type { RequestContext } from '../common/utils/request-context'
 import { ObjectStorageService } from '../storage/storage.service'
+import { isAllowedImageBizType, normalizeImageBizType } from '../storage/image-biz-types'
 import type { UploadActorType } from '../storage/storage.types'
 
 @Injectable()
@@ -20,7 +21,8 @@ export class UploadService {
     if (!options.user) {
       throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, 'not logged in', 401)
     }
-    this.assertOssReadyForPersistentImage(options.bizType)
+    const bizType = this.normalizeBizType(options.bizType)
+    this.assertOssReadyForPersistentImage(bizType)
 
     const rawBase64 = (options.imageBase64 || '').trim()
     if (!rawBase64) {
@@ -50,8 +52,9 @@ export class UploadService {
       buffer,
       mimeType,
       originalName: options.fileName || 'avatar',
-      bizType: options.bizType,
+      bizType,
       bizId: options.bizId,
+      source: this.sourceForUser(options.user),
       actor: {
         uploaderType,
         uploaderId: options.user.userId,
@@ -70,20 +73,35 @@ export class UploadService {
     if (!options.user) {
       throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, 'not logged in', 401)
     }
-    this.assertOssReadyForPersistentImage(options.bizType)
+    const bizType = this.normalizeBizType(options.bizType)
+    this.assertOssReadyForPersistentImage(bizType)
 
     const uploaderType: UploadActorType = options.user.userType === 'admin' ? 'admin' : 'user'
     return this.storage.putImage({
       buffer: file.buffer,
       mimeType: file.mimetype,
       originalName: file.originalname,
-      bizType: options.bizType,
+      bizType,
       bizId: options.bizId,
+      source: this.sourceForUser(options.user),
       actor: {
         uploaderType,
         uploaderId: options.user.userId,
       },
     })
+  }
+
+  private normalizeBizType(bizType?: string) {
+    if (bizType && !isAllowedImageBizType(bizType)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid image bizType', 400)
+    }
+    return normalizeImageBizType(bizType)
+  }
+
+  private sourceForUser(user?: RequestContext['user']) {
+    if (user?.userType === 'admin') return 'admin'
+    if (user?.userType === 'staff') return 'miniapp_staff'
+    return 'miniapp_user'
   }
 
   private assertOssReadyForPersistentImage(bizType?: string) {

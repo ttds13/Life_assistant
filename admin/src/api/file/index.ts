@@ -3,11 +3,15 @@ import type { FileInfo } from "./types";
 
 function normalizeFileInfo(file: Partial<FileInfo>): FileInfo {
   return {
+    id: file.id,
+    uuid: file.uuid,
     name: file.name || file.storageKey || file.url?.split("/").pop() || "",
     url: file.url || "",
     signedUrl: file.signedUrl,
     displayUrl: file.displayUrl || file.signedUrl || file.url,
     storageKey: file.storageKey,
+    bizType: file.bizType,
+    bizId: file.bizId,
     mimeType: file.mimeType,
     size: file.size,
     expiresIn: file.expiresIn,

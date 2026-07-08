@@ -6,6 +6,7 @@ import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import type { RequestWithContext } from '../common/utils/request-context'
 import { PrismaService } from '../prisma/prisma.service'
+import { IMAGE_BIZ_TYPE } from '../storage/image-biz-types'
 import { ObjectStorageService } from '../storage/storage.service'
 import { UserProfileRecord, UsersRepository } from '../users/users.repository'
 import type { UpdateProfileDto } from './dto/update-profile.dto'
@@ -191,6 +192,9 @@ export class AuthService {
     if (!user) {
       throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, 'user not found', 401)
     }
+    if (fields.avatar) {
+      await this.storage.bindFilesToBiz([fields.avatar], IMAGE_BIZ_TYPE.USER_AVATAR, userId)
+    }
     return this.formatUser(await this.resolveUserProfile(user))
   }
 
@@ -370,15 +374,14 @@ export class AuthService {
   }
 
   private formatUser(user: AuthUserProfile) {
-    const avatarOssUrl = user.avatar
-    const avatar = this.storage.signNullableUrl(avatarOssUrl) || avatarOssUrl
+    const avatarUrls = this.storage.resolveAvatarUrls(user.avatar)
     return {
       id: user.id,
       phone: user.phone,
       nickname: user.nickname,
-      avatar,
-      avatarOssUrl,
-      avatarDisplayUrl: avatar,
+      avatar: avatarUrls.avatar,
+      avatarOssUrl: avatarUrls.avatarOssUrl,
+      avatarDisplayUrl: avatarUrls.avatarDisplayUrl,
       role: user.role,
     }
   }

@@ -11,14 +11,19 @@ export interface PutImageInput {
   originalName?: string
   bizType?: string
   bizId?: string | number
+  source?: string
   actor: UploadActor
 }
 
 export interface PutImageResult {
+  id?: number
+  uuid?: string
   url: string
   signedUrl: string
   displayUrl?: string
   storageKey: string
+  bizType?: string
+  bizId?: number | null
   mimeType: string
   size: number
   expiresIn: number

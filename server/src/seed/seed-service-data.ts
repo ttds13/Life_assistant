@@ -301,6 +301,7 @@ async function upsertSingleService(
     cardType: seedCardType(seed),
     consumeUnit: seedConsumeUnit(seed),
     consultationRequired: seed.consultationRequired ?? seedCardType(seed) === 'consultation',
+    ...(seed.coverImage ? { coverImage: seed.coverImage } : {}),
     sortOrder: seed.sortOrder,
     status: 1,
     deletedAt: null,
@@ -343,24 +344,20 @@ async function ensureTestUser(prisma: PrismaClient) {
   const nickname = process.env.SEED_USER_NICKNAME?.trim() || '测试用户'
   const mockOpenid = `mock_${phone}`
 
-  const existingUser = await prisma.user.findFirst({
-    where: {
-      OR: [
-        { phone },
-        { openid: mockOpenid },
-      ],
-      deletedAt: null,
-    },
-    orderBy: { id: 'asc' },
-  })
+  const [phoneUser, openidUser] = await Promise.all([
+    prisma.user.findFirst({
+      where: { phone },
+      orderBy: [{ deletedAt: 'asc' }, { id: 'asc' }],
+    }),
+    prisma.user.findFirst({
+      where: { openid: mockOpenid },
+      orderBy: [{ deletedAt: 'asc' }, { id: 'asc' }],
+    }),
+  ])
+
+  const existingUser = phoneUser || openidUser
   if (existingUser) {
-    const openidInUse = await prisma.user.findFirst({
-      where: {
-        openid: mockOpenid,
-        id: { not: existingUser.id },
-      },
-      select: { id: true },
-    })
+    const openidInUse = openidUser && openidUser.id !== existingUser.id
 
     return prisma.user.update({
       where: { id: existingUser.id },

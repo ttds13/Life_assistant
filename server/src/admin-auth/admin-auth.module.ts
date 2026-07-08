@@ -2,13 +2,16 @@ import { Module } from '@nestjs/common'
 import { ConfigModule, ConfigService } from '@nestjs/config'
 import { JwtModule } from '@nestjs/jwt'
 import { PrismaModule } from '../prisma/prisma.module'
+import { StorageModule } from '../storage/storage.module'
 import { AdminAuthController } from './admin-auth.controller'
 import { AdminAuthGuard } from './admin-auth.guard'
 import { AdminAuthService } from './admin-auth.service'
+import { AdminProfileController } from './admin-profile.controller'
 
 @Module({
   imports: [
     PrismaModule,
+    StorageModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -17,7 +20,7 @@ import { AdminAuthService } from './admin-auth.service'
       }),
     }),
   ],
-  controllers: [AdminAuthController],
+  controllers: [AdminAuthController, AdminProfileController],
   providers: [AdminAuthService, AdminAuthGuard],
   exports: [AdminAuthService, AdminAuthGuard, JwtModule],
 })

@@ -609,17 +609,41 @@ const handleFileChange = async (event: Event) => {
   const target = event.target as HTMLInputElement;
   const file = target.files ? target.files[0] : null;
   if (file) {
-    const data = await FileAPI.uploadFile(file);
-    await UserAPI.updateProfile({
-      avatar: data.url,
-    });
-    userStore.userInfo.avatar = data.displayUrl || data.signedUrl || data.url;
+    try {
+      const data = await FileAPI.uploadFile(file, { bizType: "admin_avatar" });
+      const profile = await UserAPI.updateProfile({
+        avatar: data.url,
+      });
+      const displayAvatar = profile.avatarDisplayUrl || profile.avatar || data.displayUrl || data.signedUrl || data.url;
+      userProfile.value = {
+        ...profile,
+        avatar: displayAvatar,
+        avatarOssUrl: profile.avatarOssUrl || data.url,
+        avatarDisplayUrl: displayAvatar,
+      };
+      userStore.userInfo.avatar = displayAvatar;
+      userStore.userInfo.avatarOssUrl = userProfile.value.avatarOssUrl;
+      ElMessage.success("头像更新成功");
+    } finally {
+      target.value = "";
+    }
   }
 };
 
 const loadUserProfile = async () => {
   const data = await UserAPI.getProfile();
-  userProfile.value = data;
+  const displayAvatar = data.avatarDisplayUrl || data.avatar || userStore.userInfo.avatar || "";
+  userProfile.value = {
+    ...data,
+    avatar: displayAvatar,
+    avatarDisplayUrl: displayAvatar,
+  };
+  if (displayAvatar) {
+    userStore.userInfo.avatar = displayAvatar;
+  }
+  if (data.avatarOssUrl) {
+    userStore.userInfo.avatarOssUrl = data.avatarOssUrl;
+  }
 };
 
 onMounted(async () => {

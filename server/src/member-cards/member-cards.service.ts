@@ -4,6 +4,7 @@ import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { PrismaService } from '../prisma/prisma.service'
+import { ORDER_STATUS } from '../orders/constants/order-status'
 import { ORDER_TYPE } from '../orders/constants/order-type'
 import {
   MEMBER_CARD_RECORD_TYPE,
@@ -60,6 +61,14 @@ interface CompleteParams {
 }
 
 const MEMBER_CARD_PURCHASE_SERVICE_CODE = 'member_card_purchase'
+const NON_MEMBER_CARD_TYPE = 'none'
+const CONSULTATION_PRICE_UNITS = new Set(['\u54a8\u8be2'])
+const TIME_PRICE_UNITS = new Set(['\u5c0f\u65f6', '\u5206\u949f'])
+const TIMES_PRICE_UNITS = new Set(['\u6b21', '\u53f0', '\u5f20', '\u5355', '\u4ef6'])
+const MEMBER_CARD_SERVICE_TYPES = new Set<string>([
+  MEMBER_CARD_TYPE.TIME,
+  MEMBER_CARD_TYPE.TIMES,
+])
 
 @Injectable()
 export class MemberCardsService {
@@ -75,13 +84,17 @@ export class MemberCardsService {
         userId: BigInt(userId),
         status: USER_MEMBER_CARD_STATUS.ACTIVE,
         expireAt: { gt: now },
+        card: { status: 1 },
       },
       include: { card: true },
       orderBy: [{ expireAt: 'asc' }, { id: 'desc' }],
     })
 
     let service: ServiceCardRule | null = null
-    if (serviceId) service = await this.findServiceForCard(this.prisma, BigInt(serviceId))
+    if (serviceId) {
+      service = await this.findServiceForCard(this.prisma, BigInt(serviceId))
+      if (!service) return []
+    }
 
     return cards
       .map((item) => {
@@ -294,6 +307,112 @@ export class MemberCardsService {
     })
 
     return userCard
+  }
+
+  async revokePurchaseGrantForRefund(
+    tx: Prisma.TransactionClient,
+    order: {
+      id: bigint
+      userId: bigint
+      orderType: string
+      purchaseCardId?: bigint | null
+      memberCardId?: bigint | null
+      grantedUserMemberCardId?: bigint | null
+    },
+    operatorType = 'system',
+    operatorId: bigint = BigInt(0),
+    remark = 'revoke member card after purchase refund',
+  ) {
+    if (order.orderType !== ORDER_TYPE.MEMBER_CARD_PURCHASE) return null
+
+    const userCard = order.grantedUserMemberCardId
+      ? await tx.userMemberCard.findUnique({
+        where: { id: order.grantedUserMemberCardId },
+        include: { card: true },
+      })
+      : null
+
+    const grantRecord = await tx.memberCardRecord.findFirst({
+      where: {
+        orderId: order.id,
+        recordType: MEMBER_CARD_RECORD_TYPE.GRANT,
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    })
+
+    const card = userCard || (grantRecord
+      ? await tx.userMemberCard.findUnique({
+        where: { id: grantRecord.userMemberCardId },
+        include: { card: true },
+      })
+      : null)
+
+    if (!card) return null
+
+    const existingRevoke = await tx.memberCardRecord.findFirst({
+      where: {
+        userMemberCardId: card.id,
+        orderId: order.id,
+        recordType: MEMBER_CARD_RECORD_TYPE.REFUND_REVOKE,
+      },
+    })
+    if (existingRevoke || card.status === USER_MEMBER_CARD_STATUS.REFUNDED) {
+      return card
+    }
+
+    const nonGrantRecords = await tx.memberCardRecord.count({
+      where: {
+        userMemberCardId: card.id,
+        recordType: { notIn: [MEMBER_CARD_RECORD_TYPE.GRANT] },
+      },
+    })
+    if (nonGrantRecords > 0) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card has usage records, refund requires after-sales review', 409)
+    }
+
+    const activeBookings = await tx.order.count({
+      where: {
+        memberCardId: card.id,
+        id: { not: order.id },
+        status: { notIn: [ORDER_STATUS.CANCELLED, ORDER_STATUS.REFUNDED] },
+      },
+    })
+    if (activeBookings > 0) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card is linked to active bookings, refund requires after-sales review', 409)
+    }
+
+    const grantedUnits = grantRecord?.units || card.card.totalUnits || card.remainingUnits
+    if (card.frozenUnits > 0 || card.remainingUnits !== grantedUnits) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card has been used or frozen, refund requires after-sales review', 409)
+    }
+
+    const updated = await tx.userMemberCard.update({
+      where: { id: card.id },
+      data: {
+        remainingUnits: 0,
+        frozenUnits: 0,
+        remainingTimes: 0,
+        status: USER_MEMBER_CARD_STATUS.REFUNDED,
+      },
+      include: { card: true },
+    })
+
+    await tx.memberCardRecord.create({
+      data: {
+        userMemberCardId: card.id,
+        orderId: order.id,
+        recordType: MEMBER_CARD_RECORD_TYPE.REFUND_REVOKE,
+        timesUsed: this.unitsToLegacyTimes(card.card, grantedUnits),
+        units: grantedUnits,
+        beforeUnits: card.remainingUnits,
+        afterUnits: updated.remainingUnits,
+        operatorType,
+        operatorId,
+        remark,
+      },
+    })
+
+    return updated
   }
 
   async grantCard(dto: GrantMemberCardDto, context: AdminContext) {
@@ -531,16 +650,20 @@ export class MemberCardsService {
     cardType?: string | null
     consultationRequired?: boolean | null
   }) {
-    if (service.consultationRequired || service.cardType === MEMBER_CARD_TYPE.CONSULTATION || service.priceUnit === '咨询') {
+    const explicitType = service.cardType || ''
+    if (service.consultationRequired || explicitType === MEMBER_CARD_TYPE.CONSULTATION || CONSULTATION_PRICE_UNITS.has(service.priceUnit)) {
       return MEMBER_CARD_TYPE.CONSULTATION
     }
-    if (service.cardType === MEMBER_CARD_TYPE.TIME || service.priceUnit === '小时' || (service.durationMinutes || 0) > 0) {
+    if (explicitType === NON_MEMBER_CARD_TYPE) {
+      return NON_MEMBER_CARD_TYPE
+    }
+    if (explicitType === MEMBER_CARD_TYPE.TIME || TIME_PRICE_UNITS.has(service.priceUnit) || (service.durationMinutes || 0) > 0) {
       return MEMBER_CARD_TYPE.TIME
     }
-    if (service.cardType === MEMBER_CARD_TYPE.TIMES || ['次', '台', '张'].includes(service.priceUnit)) {
+    if (explicitType === MEMBER_CARD_TYPE.TIMES || TIMES_PRICE_UNITS.has(service.priceUnit)) {
       return MEMBER_CARD_TYPE.TIMES
     }
-    return 'none'
+    return NON_MEMBER_CARD_TYPE
   }
 
   private async findUserCardForUse(client: MemberCardClient, userId: number, userMemberCardId: number) {
@@ -550,6 +673,7 @@ export class MemberCardsService {
         userId: BigInt(userId),
         status: USER_MEMBER_CARD_STATUS.ACTIVE,
         expireAt: { gt: new Date() },
+        card: { status: 1 },
       },
       include: { card: true },
     })
@@ -573,7 +697,7 @@ export class MemberCardsService {
 
   private isCardApplicable(userCard: CardWithTemplate, service: ConsumeParams['service']) {
     const serviceCardType = this.calculateServiceCardType(service)
-    if (serviceCardType === MEMBER_CARD_TYPE.CONSULTATION || serviceCardType === 'none') return false
+    if (!MEMBER_CARD_SERVICE_TYPES.has(serviceCardType)) return false
     if (userCard.card.cardType !== serviceCardType) return false
     if (userCard.remainingUnits - userCard.frozenUnits <= 0) return false
 

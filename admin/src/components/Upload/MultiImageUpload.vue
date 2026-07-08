@@ -81,6 +81,10 @@ const props = defineProps({
     type: String,
     default: "image/*", // 默认支持所有图片格式，如果需要指定格式，格式如下：.png,.jpg,.jpeg,.gif,.bmp
   },
+  displayUrls: {
+    type: Array,
+    default: () => [],
+  },
 });
 
 const previewVisible = ref(false); // 是否显示预览
@@ -96,7 +100,9 @@ const displayUrlMap = ref<Record<string, string>>({});
 const previewUrls = computed(() => modelValue.value.map(url => displayUrlFor(url)));
 
 function displayUrlFor(url?: string) {
-  return url ? displayUrlMap.value[url] || url : "";
+  if (!url) return "";
+  const index = modelValue.value.indexOf(url);
+  return displayUrlMap.value[url] || (props.displayUrls as string[])[index] || url;
 }
 
 /**
@@ -159,7 +165,7 @@ function handleUpload(options: UploadRequestOptions) {
 
     // 处理附加参数
     Object.keys(props.data).forEach((key) => {
-      formData.append(key, props.data[key]);
+      formData.append(key, String(props.data[key]));
     });
 
     FileAPI.upload(formData).then(

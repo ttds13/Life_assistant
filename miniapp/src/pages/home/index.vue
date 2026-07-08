@@ -224,17 +224,6 @@ onShow(() => {
                   class="w-full h-full"
                   mode="aspectFill"
                 />
-                <view class="absolute left-0 right-0 bottom-0 px-5 py-4 banner-overlay">
-                  <text class="block text-[34rpx] leading-[44rpx] font-700 text-white truncate">
-                    {{ item.title }}
-                  </text>
-                  <text
-                    v-if="item.subtitle"
-                    class="block mt-1 text-[24rpx] leading-[32rpx] text-white opacity-90 truncate"
-                  >
-                    {{ item.subtitle }}
-                  </text>
-                </view>
               </swiper-item>
             </swiper>
 
@@ -358,8 +347,3 @@ onShow(() => {
   </view>
 </template>
 
-<style scoped>
-.banner-overlay {
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.48) 100%);
-}
-</style>

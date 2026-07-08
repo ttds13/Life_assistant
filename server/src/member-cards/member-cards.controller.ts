@@ -1,5 +1,7 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query, Req, UseGuards } from '@nestjs/common'
 import { AdminAuthGuard } from '../admin-auth/admin-auth.guard'
+import { RequireAdminPermissions } from '../admin-auth/admin-permission.decorator'
+import { ADMIN_PERMISSION } from '../admin-auth/admin-permissions'
 import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
@@ -39,6 +41,7 @@ export class MemberCardsController {
 
   @Post('admin/member-cards/grant')
   @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_GRANT)
   @HttpCode(200)
   grantCard(@Req() request: RequestWithContext, @Body() dto: GrantMemberCardDto) {
     const adminId = request.user?.adminId || request.user?.userId

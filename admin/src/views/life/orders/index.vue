@@ -39,6 +39,7 @@
             录入订单
           </el-button>
           <el-button
+            v-if="canDeleteOrders"
             type="danger"
             icon="delete"
             :disabled="selectedOrders.length === 0"
@@ -60,7 +61,7 @@
       </div>
 
       <el-table v-loading="loading || batchDeleting" :data="orders" border @selection-change="handleSelectionChange">
-        <el-table-column type="selection" width="55" align="center" fixed="left" />
+        <el-table-column v-if="canDeleteOrders" type="selection" width="55" align="center" fixed="left" />
         <el-table-column label="订单类型" width="120">
           <template #default="{ row }">
             <el-tag :type="orderTypeMeta(row.orderType).type">{{ orderTypeMeta(row.orderType).label }}</el-tag>
@@ -101,12 +102,11 @@
             <el-button type="primary" link size="small" icon="view" @click="openDetail(row.id)">
               详情
             </el-button>
-            <el-button type="primary" link size="small" icon="edit" @click="openEdit(row)">
+            <el-button v-if="canUpdateOrders" type="primary" link size="small" icon="edit" @click="openEdit(row)">
               编辑
             </el-button>
             <el-button
-              v-if="row.status === 'pending_dispatch'"
-              v-show="canAssign(row)"
+              v-if="canAssignOrders && canAssign(row)"
               type="success"
               link
               size="small"
@@ -115,7 +115,7 @@
             >
               派单
             </el-button>
-            <el-button type="danger" link size="small" icon="delete" @click="deleteOrder(row)">
+            <el-button v-if="canDeleteOrders" type="danger" link size="small" icon="delete" @click="deleteOrder(row)">
               删除
             </el-button>
           </template>
@@ -143,6 +143,14 @@
         <el-form-item label="订单号">
           <el-text>{{ currentOrder?.orderNo }}</el-text>
         </el-form-item>
+        <el-form-item v-if="dispatchWarnings.length" label="诊断提醒">
+          <el-alert
+            type="warning"
+            show-icon
+            :closable="false"
+            :title="dispatchWarnings.join('；')"
+          />
+        </el-form-item>
         <el-form-item label="选择师傅">
           <el-select v-model="assignForm.staffId" placeholder="请选择师傅" style="width: 100%">
             <el-option
@@ -159,9 +167,130 @@
       </el-form>
       <template #footer>
         <el-button @click="assignVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="!assignForm.staffId" @click="submitAssign">
+        <el-button type="primary" :loading="assignSubmitting" :disabled="!assignForm.staffId" @click="submitAssign">
           确认派单
         </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="createVisible" title="录入外来订单" width="780px">
+      <el-alert
+        title="外来订单创建后直接进入待派单状态，可用于电话、线下和推广来源订单。"
+        type="info"
+        show-icon
+        :closable="false"
+        class="mb-4"
+      />
+      <el-form label-width="110px" class="order-edit-form">
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="已有用户ID">
+              <el-input-number v-model="createForm.userId" :min="1" :step="1" clearable style="width: 100%" />
+              <div class="form-tip">留空时会按手机号匹配或创建客户。</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="服务ID" required>
+              <el-input-number v-model="createForm.serviceId" :min="1" :step="1" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="客户姓名">
+              <el-input v-model="createForm.customerName" maxlength="64" placeholder="新客户或手机号匹配客户姓名" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="客户手机号" required>
+              <el-input v-model="createForm.customerPhone" maxlength="20" placeholder="无用户ID时必填" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="预约开始" required>
+              <el-date-picker v-model="createForm.appointmentStartTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="预约结束" required>
+              <el-date-picker v-model="createForm.appointmentEndTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="已有地址ID">
+              <el-input-number v-model="createForm.addressId" :min="1" :step="1" clearable style="width: 100%" />
+              <div class="form-tip">留空时使用下面地址创建客户服务地址。</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="来源">
+              <el-select v-model="createForm.source" style="width: 100%">
+                <el-option label="后台录入" value="admin" />
+                <el-option label="电话订单" value="phone" />
+                <el-option label="线下订单" value="offline" />
+                <el-option label="推广订单" value="promotion" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="联系人" required>
+              <el-input v-model="createForm.contactName" maxlength="64" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="联系电话" required>
+              <el-input v-model="createForm.contactPhone" maxlength="20" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="城市">
+              <el-input v-model="createForm.cityName" maxlength="32" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="区县">
+              <el-input v-model="createForm.districtName" maxlength="32" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="小区/地点">
+              <el-input v-model="createForm.addressTitle" maxlength="128" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="详细地址" required>
+          <el-input v-model="createForm.detailAddress" type="textarea" :rows="2" maxlength="256" show-word-limit />
+        </el-form-item>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="门牌号">
+              <el-input v-model="createForm.houseNumber" maxlength="64" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="应付金额">
+              <el-input-number v-model="createForm.payableAmount" :min="0" :precision="2" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="用户备注">
+          <el-input v-model="createForm.remark" type="textarea" :rows="2" maxlength="512" show-word-limit />
+        </el-form-item>
+        <el-form-item label="后台备注">
+          <el-input v-model="createForm.adminRemark" type="textarea" :rows="2" maxlength="512" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="submitCreateOrder">创建待派单订单</el-button>
       </template>
     </el-dialog>
 
@@ -234,7 +363,8 @@
 defineOptions({ name: "LifeOrderList" });
 
 import LifeAPI from "@/api/life";
-import type { OrderListItem, StaffOption, UpdateOrderPayload } from "@/api/life";
+import type { AdminCreateOrderPayload, OrderListItem, StaffOption, UpdateOrderPayload } from "@/api/life";
+import { hasPerm } from "@/utils/auth";
 
 const route = useRoute();
 const router = useRouter();
@@ -245,6 +375,9 @@ const initialOrderType = computed(() =>
 );
 const isFixedOrderType = computed(() => initialOrderType.value !== "all");
 const isMemberCardPurchasePage = computed(() => initialOrderType.value === "member_card_purchase");
+const canUpdateOrders = computed(() => hasPerm("order:update"));
+const canAssignOrders = computed(() => hasPerm("order:assign"));
+const canDeleteOrders = computed(() => hasPerm("order:delete"));
 
 const loading = ref(false);
 const batchDeleting = ref(false);
@@ -254,6 +387,10 @@ const selectedOrders = ref<OrderListItem[]>([]);
 const staffOptions = ref<StaffOption[]>([]);
 const assignVisible = ref(false);
 const editVisible = ref(false);
+const createVisible = ref(false);
+const creating = ref(false);
+const assignSubmitting = ref(false);
+const dispatchWarnings = ref<string[]>([]);
 const currentOrder = ref<OrderListItem>();
 const queryParams = reactive({
   pageNum: 1,
@@ -265,6 +402,28 @@ const queryParams = reactive({
 const assignForm = reactive({
   staffId: "",
   remark: "",
+});
+const createForm = reactive({
+  userId: undefined as number | undefined,
+  customerName: "",
+  customerPhone: "",
+  serviceId: undefined as number | undefined,
+  addressId: undefined as number | undefined,
+  appointmentStartTime: "",
+  appointmentEndTime: "",
+  source: "admin",
+  contactName: "",
+  contactPhone: "",
+  provinceName: "",
+  cityName: "",
+  districtName: "",
+  streetName: "",
+  addressTitle: "",
+  detailAddress: "",
+  houseNumber: "",
+  payableAmount: 0,
+  remark: "",
+  adminRemark: "",
 });
 const editForm = reactive({
   status: "",
@@ -324,7 +483,8 @@ function handleReset() {
 }
 
 function handleCreateOrder() {
-  ElMessage.info("管理员录入订单表单后续接入，当前先由小程序端下单。");
+  resetCreateForm();
+  createVisible.value = true;
 }
 
 function openDetail(id: string) {
@@ -339,11 +499,40 @@ async function openAssign(row: OrderListItem) {
   currentOrder.value = row;
   assignForm.staffId = "";
   assignForm.remark = "";
+  dispatchWarnings.value = [];
+  const check = await LifeAPI.getOrderDispatchCheck(row.id);
+  if (!check.canAssign) {
+    await ElMessageBox.alert(check.blockingReasons.join("\n") || "当前订单不满足派单条件", "无法派单", {
+      type: "warning",
+      confirmButtonText: "知道了",
+    });
+    return;
+  }
+  dispatchWarnings.value = check.warnings || [];
   staffOptions.value = await LifeAPI.getStaffOptions();
   assignVisible.value = true;
 }
 
+async function submitCreateOrder() {
+  const payload = buildCreateOrderPayload();
+  if (!payload) return;
+
+  creating.value = true;
+  try {
+    const created = await LifeAPI.createAdminOrder(payload);
+    ElMessage.success("外来订单已创建，当前为待派单状态");
+    createVisible.value = false;
+    await fetchOrders();
+    if (created?.id) {
+      currentOrder.value = created;
+    }
+  } finally {
+    creating.value = false;
+  }
+}
+
 function openEdit(row: OrderListItem) {
+  if (!canUpdateOrders.value) return;
   currentOrder.value = row;
   editForm.status = row.status;
   editForm.staffId = row.staffId ?? undefined;
@@ -379,6 +568,7 @@ async function submitEdit() {
 }
 
 async function deleteOrder(row: OrderListItem) {
+  if (!canDeleteOrders.value) return;
   await ElMessageBox.confirm(
     `确认删除订单「${row.orderNo}」吗？该操作会直接删除订单和相关支付、派单、履约记录。`,
     "删除订单确认",
@@ -390,6 +580,7 @@ async function deleteOrder(row: OrderListItem) {
 }
 
 async function batchDeleteOrders() {
+  if (!canDeleteOrders.value) return;
   const rows = selectedOrders.value;
   if (rows.length === 0) return;
 
@@ -412,10 +603,101 @@ async function batchDeleteOrders() {
 
 async function submitAssign() {
   if (!currentOrder.value) return;
-  await LifeAPI.assignOrder(currentOrder.value.id, assignForm);
-  ElMessage.success("派单成功，操作已进入审计记录");
-  assignVisible.value = false;
-  fetchOrders();
+  assignSubmitting.value = true;
+  try {
+    await LifeAPI.assignOrder(currentOrder.value.id, assignForm);
+    ElMessage.success("派单成功，已生成师傅站内通知");
+    assignVisible.value = false;
+    fetchOrders();
+  } finally {
+    assignSubmitting.value = false;
+  }
+}
+
+function resetCreateForm() {
+  createForm.userId = undefined;
+  createForm.customerName = "";
+  createForm.customerPhone = "";
+  createForm.serviceId = undefined;
+  createForm.addressId = undefined;
+  createForm.appointmentStartTime = "";
+  createForm.appointmentEndTime = "";
+  createForm.source = "admin";
+  createForm.contactName = "";
+  createForm.contactPhone = "";
+  createForm.provinceName = "";
+  createForm.cityName = "";
+  createForm.districtName = "";
+  createForm.streetName = "";
+  createForm.addressTitle = "";
+  createForm.detailAddress = "";
+  createForm.houseNumber = "";
+  createForm.payableAmount = 0;
+  createForm.remark = "";
+  createForm.adminRemark = "";
+}
+
+function buildCreateOrderPayload(): AdminCreateOrderPayload | null {
+  if (!createForm.serviceId) {
+    ElMessage.warning("请填写服务ID");
+    return null;
+  }
+  if (!createForm.appointmentStartTime || !createForm.appointmentEndTime) {
+    ElMessage.warning("请选择预约开始和结束时间");
+    return null;
+  }
+  if (!createForm.userId && !createForm.customerPhone.trim()) {
+    ElMessage.warning("请填写已有用户ID，或填写客户手机号");
+    return null;
+  }
+  if (!createForm.addressId && (!createForm.contactName.trim() || !createForm.contactPhone.trim() || !createForm.detailAddress.trim())) {
+    ElMessage.warning("请填写联系人、联系电话和详细地址，或填写已有地址ID");
+    return null;
+  }
+
+  const payload: AdminCreateOrderPayload = {
+    serviceId: createForm.serviceId,
+    appointmentStartTime: createForm.appointmentStartTime,
+    appointmentEndTime: createForm.appointmentEndTime,
+    source: createForm.source,
+    payableAmount: createForm.payableAmount,
+    remark: trimOrUndefined(createForm.remark),
+    adminRemark: trimOrUndefined(createForm.adminRemark),
+  };
+
+  if (createForm.userId) {
+    payload.userId = createForm.userId;
+  } else {
+    payload.customer = {
+      nickname: trimOrUndefined(createForm.customerName) || createForm.customerPhone.trim(),
+      phone: createForm.customerPhone.trim(),
+      adminRemark: trimOrUndefined(createForm.adminRemark),
+    };
+  }
+
+  if (createForm.addressId) {
+    payload.addressId = createForm.addressId;
+  } else {
+    payload.address = {
+      contactName: createForm.contactName.trim(),
+      contactPhone: createForm.contactPhone.trim(),
+      provinceName: trimOrUndefined(createForm.provinceName),
+      cityName: trimOrUndefined(createForm.cityName),
+      districtName: trimOrUndefined(createForm.districtName),
+      streetName: trimOrUndefined(createForm.streetName),
+      addressTitle: trimOrUndefined(createForm.addressTitle),
+      detailAddress: createForm.detailAddress.trim(),
+      houseNumber: trimOrUndefined(createForm.houseNumber),
+      isDefault: true,
+    };
+  }
+
+  return payload;
+}
+
+function trimOrUndefined(value?: string) {
+  const text = value?.trim();
+  return text || undefined;
 }
 
 function statusMeta(status: string): { label: string; type: "primary" | "success" | "warning" | "danger" | "info" } {

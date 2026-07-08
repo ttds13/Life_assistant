@@ -2,7 +2,8 @@
 import { useProfileEditor } from '@/hooks/useProfileEditor'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
-import { assertImageSize } from '@/utils/uploadImage'
+import { avatarDebugLog, clearAvatarDebugLogs } from '@/utils/avatarDebugLog'
+import { assertImageSize, getChooseImageErrorMessage } from '@/utils/uploadImage'
 
 definePage({
   style: {
@@ -40,6 +41,8 @@ function ensureLogin() {
 function openAvatarPanel() {
   if (!ensureLogin())
     return
+  clearAvatarDebugLogs()
+  avatarDebugLog('avatar panel opened')
   avatarPanelVisible.value = true
 }
 
@@ -75,6 +78,7 @@ async function saveAvatarFile(filePath: string) {
     uni.showToast({ icon: 'success', title: '头像已更新' })
   }
   catch (err: any) {
+    avatarDebugLog('save avatar failed', err, 'error')
     const message = err?.message || err?.errMsg || '头像上传失败'
     uni.showToast({ icon: 'none', title: message.slice(0, 20) })
   }
@@ -84,6 +88,7 @@ async function saveAvatarFile(filePath: string) {
 }
 
 function onChooseWechatAvatar(e: any) {
+  avatarDebugLog('choose avatar payload', e)
   const avatarUrl = e.detail?.avatarUrl
   if (!avatarUrl) {
     uni.showToast({ icon: 'none', title: '未获取到头像' })
@@ -101,6 +106,7 @@ function onChooseLocalAvatar() {
     sizeType: ['compressed'],
     sourceType: ['album', 'camera'],
     success: (res) => {
+      avatarDebugLog('choose local avatar payload', res)
       const filePath = res.tempFilePaths[0]
       const file = Array.isArray(res.tempFiles) ? res.tempFiles[0] : undefined
       if (!filePath || !assertImageSize(file?.size))
@@ -108,8 +114,11 @@ function onChooseLocalAvatar() {
       saveAvatarFile(filePath)
     },
     fail: (err) => {
-      if (!String(err?.errMsg || '').includes('cancel'))
-        uni.showToast({ icon: 'none', title: '选择头像失败' })
+      avatarDebugLog('choose local avatar failed', err, 'error')
+      const message = getChooseImageErrorMessage(err, '选择头像失败')
+      if (message) {
+        uni.showToast({ icon: 'none', title: message })
+      }
     },
   })
 }

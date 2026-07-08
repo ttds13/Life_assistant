@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { mockLogin, wechatLogin } from '@/api/auth'
+import { wechatLogin } from '@/api/auth'
 import type { LoginResult } from '@/api/types/auth'
 import ProfileCompleteDialog from '@/components/profile-complete-dialog/profile-complete-dialog.vue'
 import {
@@ -24,26 +24,6 @@ const loading = ref(false)
 const profileSaving = ref(false)
 const profileDialogVisible = ref(false)
 const agreed = ref(false)
-const isLocalDebugLogin = import.meta.env.VITE_LOCAL_DEBUG_LOGIN === 'true'
-const promptLocalDebugProfile = import.meta.env.VITE_LOCAL_DEBUG_PROFILE_COMPLETE === 'true'
-
-async function onLocalDebugLogin() {
-  if (loading.value)
-    return
-
-  loading.value = true
-  try {
-    const result = await mockLogin({ phone: import.meta.env.VITE_LOCAL_DEBUG_LOGIN_PHONE || undefined })
-    handleLoginSuccess(result, promptLocalDebugProfile)
-  }
-  catch (err: any) {
-    const message = err?.message || err?.errMsg || '本地调试登录失败'
-    uni.showToast({ icon: 'none', title: message.slice(0, 20) })
-  }
-  finally {
-    loading.value = false
-  }
-}
 
 async function onGetPhoneNumber(e: any) {
   if (!agreed.value) {
@@ -67,7 +47,7 @@ async function onGetPhoneNumber(e: any) {
     handleLoginSuccess(result, true)
   }
   catch (err: any) {
-    const message = err?.message || err?.errMsg || '微信登录失败'
+    const message = String(err?.message || err?.errMsg || '绑定手机号失败').replace(/\u5fae\u4fe1/g, '手机号')
     uni.showToast({ icon: 'none', title: message.slice(0, 20) })
   }
   finally {
@@ -76,7 +56,11 @@ async function onGetPhoneNumber(e: any) {
 }
 
 function onH5LoginTap() {
-  uni.showToast({ icon: 'none', title: '请在微信小程序中登录' })
+  uni.showToast({ icon: 'none', title: '请在小程序中绑定手机号' })
+}
+
+function openLegalPage(url: string) {
+  uni.navigateTo({ url })
 }
 
 function handleLoginSuccess(result: LoginResult, allowProfilePrompt: boolean) {
@@ -143,51 +127,53 @@ function navigateBack() {
     </text>
 
     <view class="w-full mt-[100rpx]">
-      <button
-        v-if="isLocalDebugLogin"
-        class="w-full h-[88rpx] bg-[#1677FF] text-white text-[30rpx] rounded-full flex items-center justify-center"
-        :loading="loading"
-        @tap="onLocalDebugLogin"
-      >
-        本地调试登录
-      </button>
-
       <!-- #ifdef MP-WEIXIN -->
       <button
-        v-if="!isLocalDebugLogin"
         open-type="getPhoneNumber"
-        class="w-full h-[88rpx] bg-[#07C160] text-white text-[30rpx] rounded-full flex items-center justify-center"
+        class="w-full h-[88rpx] bg-[#1677FF] text-white text-[30rpx] rounded-full flex items-center justify-center"
         :loading="loading"
         @getphonenumber="onGetPhoneNumber"
       >
-        微信手机号快捷登录
+        绑定手机号
       </button>
       <!-- #endif -->
 
       <!-- #ifdef H5 -->
       <button
-        v-if="!isLocalDebugLogin"
         class="w-full h-[88rpx] bg-[#1677FF] text-white text-[30rpx] rounded-full flex items-center justify-center"
         :loading="loading"
         @tap="onH5LoginTap"
       >
-        微信小程序登录
+        绑定手机号
       </button>
       <!-- #endif -->
     </view>
 
-    <view class="flex items-center mt-8" @tap="agreed = !agreed">
+    <view class="flex items-start mt-8 w-full" @tap="agreed = !agreed">
       <view
-        class="w-[32rpx] h-[32rpx] rounded-full border-2 mr-2 flex items-center justify-center"
-        :class="agreed ? 'border-[#1677FF] bg-[#1677FF]' : 'border-gray-300'"
+        class="agreement-checkbox w-[32rpx] h-[32rpx] rounded-full mr-2 mt-[2rpx] flex items-center justify-center shrink-0"
+        :class="{ 'is-agreed': agreed }"
       >
         <text v-if="agreed" class="text-white text-[20rpx]">
           ✓
         </text>
       </view>
-      <text class="text-[24rpx] text-gray-500">
-        已阅读并同意《用户协议》和《隐私政策》
-      </text>
+      <view class="flex-1 flex flex-row flex-wrap items-center">
+        <text class="text-[24rpx] text-gray-500">已阅读并同意</text>
+        <text
+          class="text-[24rpx] text-[#1677FF]"
+          @tap.stop="openLegalPage('/pages/legal/user-agreement')"
+        >
+          《用户协议》
+        </text>
+        <text class="text-[24rpx] text-gray-500">和</text>
+        <text
+          class="text-[24rpx] text-[#1677FF]"
+          @tap.stop="openLegalPage('/pages/legal/privacy-policy')"
+        >
+          《隐私政策》
+        </text>
+      </view>
     </view>
 
     <ProfileCompleteDialog
@@ -200,3 +186,15 @@ function navigateBack() {
     />
   </view>
 </template>
+
+<style scoped>
+.agreement-checkbox {
+  box-sizing: border-box;
+  border: 2rpx solid #111827;
+  background: #fff;
+}
+
+.agreement-checkbox.is-agreed {
+  background: #111827;
+}
+</style>

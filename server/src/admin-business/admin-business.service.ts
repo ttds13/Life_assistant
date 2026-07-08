@@ -6,7 +6,11 @@ import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { ORDER_STATUS } from '../orders/constants/order-status'
 import { PrismaService } from '../prisma/prisma.service'
+import { RefundsService } from '../refunds/refunds.service'
+import { IMAGE_BIZ_TYPE } from '../storage/image-biz-types'
 import { ObjectStorageService } from '../storage/storage.service'
+import { WITHDRAW_STATUS } from '../withdrawals/constants/withdraw-status'
+import { WithdrawalsService } from '../withdrawals/withdrawals.service'
 import type { AdminAuditReviewDto, AdminPageQueryDto, AdminStatusDto, AdminUserRoleDto } from './dto/admin-business.dto'
 
 type JsonRecord = Record<string, unknown>
@@ -39,6 +43,8 @@ export class AdminBusinessService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(AdminAuditService) private readonly audit: AdminAuditService,
     @Inject(ObjectStorageService) private readonly storage: ObjectStorageService,
+    @Inject(RefundsService) private readonly refunds: RefundsService,
+    @Inject(WithdrawalsService) private readonly withdrawals: WithdrawalsService,
   ) {}
 
   async getDashboard() {
@@ -71,7 +77,7 @@ export class AdminBusinessService {
       this.prisma.order.count({ where: { status: ORDER_STATUS.PENDING_DISPATCH } }),
       this.prisma.staff.count({ where: { status: 2, deletedAt: null } }),
       this.prisma.refund.count({ where: { status: 'pending' } }),
-      this.prisma.withdrawRequest.count({ where: { status: 'pending' } }),
+      this.prisma.withdrawRequest.count({ where: { status: { in: [WITHDRAW_STATUS.LEGACY_PENDING, WITHDRAW_STATUS.PENDING_REVIEW] } } }),
       this.prisma.ticket.count({ where: { status: { in: ['open', 'pending'] } } }),
       this.prisma.order.findMany({
         where: { createdAt: { gte: trendStart } },
@@ -201,12 +207,67 @@ export class AdminBusinessService {
         gender: user.gender,
         cityCode: user.cityCode || '',
         city: user.cityCode || '',
+        source: user.source || 'miniapp',
+        adminRemark: user.adminRemark || '',
         orderCount: user._count.orders,
         totalPaid: user.orders.reduce((sum, order) => sum + this.decimalToNumber(order.paidAmount), 0),
         status: this.activeStatus(user.status),
         createdAt: this.formatDateTime(user.createdAt),
       }
     }), page, total)
+  }
+
+  async createUser(body: JsonRecord, context: AdminWriteContext) {
+    const phone = this.requiredString(body.phone, 'phone required')
+    const existing = await this.prisma.user.findFirst({
+      where: { phone, deletedAt: null },
+      select: { id: true },
+    })
+    if (existing) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'customer already exists', 409, {
+        existingUserId: Number(existing.id),
+      })
+    }
+
+    const source = this.normalizeUserSource(body.source)
+    const addressBody = this.optionalObject(body.address)
+    const created = await this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          nickname: this.optionalString(body.nickname) || this.optionalString(body.name) || phone,
+          phone,
+          gender: this.optionalNumber(body.gender, 0),
+          cityCode: this.optionalString(body.cityCode) || null,
+          source,
+          adminRemark: this.optionalString(body.adminRemark) || null,
+          status: body.status ? this.activeStatusToNumber(String(body.status)) : 1,
+        },
+      })
+
+      const address = addressBody
+        ? await this.createUserServiceAddress(tx, user.id, addressBody)
+        : null
+
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'user:create',
+        module: 'user',
+        targetType: 'user',
+        targetId: user.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: {
+          userId: Number(user.id),
+          source,
+          phone,
+          addressId: address ? Number(address.id) : null,
+        },
+      })
+
+      return user
+    })
+
+    return this.getUser(Number(created.id))
   }
 
   async getUser(id: number) {
@@ -225,6 +286,8 @@ export class AdminBusinessService {
     if (!user) throw this.notFound('user not found')
     return {
       ...user,
+      source: user.source || 'miniapp',
+      adminRemark: user.adminRemark || '',
       addresses: addresses.map(address => this.presentAddress(address)),
     }
   }
@@ -238,6 +301,8 @@ export class AdminBusinessService {
     if (Object.prototype.hasOwnProperty.call(body, 'phone')) data.phone = this.optionalString(body.phone) ?? null
     if (Object.prototype.hasOwnProperty.call(body, 'gender')) data.gender = this.optionalNumber(body.gender, current.gender)
     if (Object.prototype.hasOwnProperty.call(body, 'cityCode')) data.cityCode = this.optionalString(body.cityCode) ?? null
+    if (Object.prototype.hasOwnProperty.call(body, 'source')) data.source = this.normalizeUserSource(body.source)
+    if (Object.prototype.hasOwnProperty.call(body, 'adminRemark')) data.adminRemark = this.optionalString(body.adminRemark) ?? null
     if (Object.prototype.hasOwnProperty.call(body, 'status')) data.status = this.activeStatusToNumber(String(body.status))
 
     await this.prisma.$transaction(async (tx) => {
@@ -638,7 +703,7 @@ export class AdminBusinessService {
       this.prisma.service.count({ where }),
       this.prisma.service.findMany({
         where,
-        include: { category: true, images: { orderBy: { sortOrder: 'asc' }, take: 3 } },
+        include: { category: true, images: { orderBy: { sortOrder: 'asc' } } },
         orderBy: [{ sortOrder: 'asc' }, { id: 'desc' }],
         skip: this.skip(page),
         take: page.pageSize,
@@ -667,6 +732,9 @@ export class AdminBusinessService {
       coverImage: this.storage.signNullableUrl(service.coverImage) || service.coverImage || '',
       coverImageOssUrl: service.coverImage || '',
       coverImageDisplayUrl: this.storage.signNullableUrl(service.coverImage) || service.coverImage || '',
+      images: this.storage.signUrlList(service.images.map(image => image.url).filter(Boolean)),
+      imageOssUrls: service.images.map(image => image.url).filter(Boolean),
+      imageDisplayUrls: this.storage.signUrlList(service.images.map(image => image.url).filter(Boolean)),
       updatedAt: this.formatDateTime(service.updatedAt),
     })), page, total)
   }
@@ -679,6 +747,8 @@ export class AdminBusinessService {
         : await this.nextUniqueServiceCode(tx, this.optionalString(body.name))
       const coverImage = this.optionalString(body.coverImage)
       this.storage.assertPermanentOssUrl(coverImage)
+      const imageUrls = this.parseImageUrlList(body.images)
+      imageUrls.forEach(url => this.storage.assertPermanentOssUrl(url))
       const service = await tx.service.create({
         data: {
           code,
@@ -701,6 +771,7 @@ export class AdminBusinessService {
           status: this.activeStatusToNumber(this.optionalString(body.status) || 'active'),
         },
       })
+      await this.replaceServiceImages(tx, service.id, imageUrls)
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
         action: 'service:create',
@@ -713,6 +784,8 @@ export class AdminBusinessService {
       })
       return service
     })
+    await this.storage.bindFilesToBiz([created.coverImage], IMAGE_BIZ_TYPE.SERVICE_COVER, created.id)
+    await this.storage.bindFilesToBiz(this.parseImageUrlList(body.images), IMAGE_BIZ_TYPE.SERVICE_IMAGE, created.id)
     return created
   }
 
@@ -720,8 +793,13 @@ export class AdminBusinessService {
     const current = await this.prisma.service.findFirst({ where: { id: BigInt(id), deletedAt: null } })
     if (!current) throw this.notFound('service not found')
     const updated = await this.prisma.$transaction(async (tx) => {
-      const coverImage = this.optionalString(body.coverImage)
+      const coverImage = Object.prototype.hasOwnProperty.call(body, 'coverImage')
+        ? this.optionalString(body.coverImage)
+        : current.coverImage || undefined
       this.storage.assertPermanentOssUrl(coverImage)
+      const hasImages = Object.prototype.hasOwnProperty.call(body, 'images')
+      const imageUrls = hasImages ? this.parseImageUrlList(body.images) : undefined
+      imageUrls?.forEach(url => this.storage.assertPermanentOssUrl(url))
       const service = await tx.service.update({
         where: { id: BigInt(id) },
         data: {
@@ -745,6 +823,9 @@ export class AdminBusinessService {
           status: body.status ? this.activeStatusToNumber(String(body.status)) : current.status,
         },
       })
+      if (imageUrls) {
+        await this.replaceServiceImages(tx, service.id, imageUrls)
+      }
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
         action: 'service:update',
@@ -760,6 +841,10 @@ export class AdminBusinessService {
       })
       return service
     })
+    await this.storage.bindFilesToBiz([updated.coverImage], IMAGE_BIZ_TYPE.SERVICE_COVER, updated.id)
+    if (Object.prototype.hasOwnProperty.call(body, 'images')) {
+      await this.storage.bindFilesToBiz(this.parseImageUrlList(body.images), IMAGE_BIZ_TYPE.SERVICE_IMAGE, updated.id)
+    }
     return updated
   }
 
@@ -867,6 +952,7 @@ export class AdminBusinessService {
       return banner
     })
 
+    await this.storage.bindFilesToBiz([created.imageUrl], IMAGE_BIZ_TYPE.HOME_BANNER, created.id)
     return this.presentHomeBanner(created)
   }
 
@@ -914,6 +1000,7 @@ export class AdminBusinessService {
       return banner
     })
 
+    await this.storage.bindFilesToBiz([updated.imageUrl], IMAGE_BIZ_TYPE.HOME_BANNER, updated.id)
     return this.presentHomeBanner(updated)
   }
 
@@ -1073,6 +1160,8 @@ export class AdminBusinessService {
     const phone = this.requiredString(body.phone, 'phone required')
     const avatarUrl = this.optionalString(body.avatarUrl)
     this.storage.assertPermanentOssUrl(avatarUrl, { force: true })
+    const applicationImages = this.parseImageUrlList(body.applicationImages)
+    applicationImages.forEach(url => this.storage.assertPermanentOssUrl(url))
     const cityCode = this.optionalString(body.cityCode)
     const userId = this.optionalPositiveInt(body.userId)
     const status = this.staffStatusToNumber(this.optionalString(body.status) || 'active')
@@ -1087,6 +1176,8 @@ export class AdminBusinessService {
         idCard: this.optionalString(body.idCard),
         skills: this.parseJsonArray(body.skills),
         cityCode,
+        applicationNote: this.optionalString(body.applicationNote),
+        applicationImages,
         status,
         workStatus: status === 1 ? 1 : 0,
         deletedAt: null,
@@ -1114,6 +1205,8 @@ export class AdminBusinessService {
       })
       return staff
     })
+    await this.storage.bindFilesToBiz([created.avatarUrl], IMAGE_BIZ_TYPE.STAFF_AVATAR, created.id)
+    await this.storage.bindFilesToBiz(applicationImages, IMAGE_BIZ_TYPE.STAFF_APPLICATION, created.id)
     return this.presentStaff(created)
   }
 
@@ -1124,6 +1217,9 @@ export class AdminBusinessService {
     const phone = this.optionalString(body.phone) ?? current.phone
     const avatarUrl = this.optionalString(body.avatarUrl)
     this.storage.assertPermanentOssUrl(avatarUrl, { force: true })
+    const hasApplicationImages = Object.prototype.hasOwnProperty.call(body, 'applicationImages')
+    const applicationImages = hasApplicationImages ? this.parseImageUrlList(body.applicationImages) : undefined
+    applicationImages?.forEach(url => this.storage.assertPermanentOssUrl(url))
     const cityCode = this.optionalString(body.cityCode)
     const updated = await this.prisma.$transaction(async (tx) => {
       const user = await this.ensureUserForStaff(tx, {
@@ -1143,6 +1239,8 @@ export class AdminBusinessService {
           idCard: this.optionalString(body.idCard),
           skills: body.skills === undefined ? current.skills as Prisma.InputJsonValue : this.parseJsonArray(body.skills),
           cityCode,
+          applicationNote: body.applicationNote === undefined ? current.applicationNote : this.optionalString(body.applicationNote),
+          applicationImages: applicationImages === undefined ? current.applicationImages as Prisma.InputJsonValue : applicationImages,
           status: body.status ? this.staffStatusToNumber(String(body.status)) : current.status,
           workStatus: body.workStatus ? this.workStatusToNumber(String(body.workStatus)) : current.workStatus,
         },
@@ -1159,6 +1257,10 @@ export class AdminBusinessService {
       })
       return staff
     })
+    await this.storage.bindFilesToBiz([updated.avatarUrl], IMAGE_BIZ_TYPE.STAFF_AVATAR, updated.id)
+    if (applicationImages) {
+      await this.storage.bindFilesToBiz(applicationImages, IMAGE_BIZ_TYPE.STAFF_APPLICATION, updated.id)
+    }
     return this.presentStaff(updated)
   }
 
@@ -1253,7 +1355,7 @@ export class AdminBusinessService {
       channel: this.paymentChannel(payment.channel),
       transactionNo: payment.transactionNo || '',
       amount: this.decimalToNumber(payment.amount),
-      status: payment.refunds.some(refund => refund.status === 'approved' || refund.status === 'refunded')
+      status: payment.status === 'refunded' || payment.refunds.some(refund => refund.status === 'refunded')
         ? 'refunded'
         : this.paymentStatus(payment.status),
       paidAt: payment.paidAt ? this.formatDateTime(payment.paidAt) : this.formatDateTime(payment.createdAt),
@@ -1741,10 +1843,11 @@ export class AdminBusinessService {
     })), page, total)
   }
 
-  async listAuditItems(type: string | undefined, query: AdminPageQueryDto) {
+  async listAuditItems(type: string | undefined, query: AdminPageQueryDto, allowedTypes?: string[]) {
     const page = this.getPage(query)
     const keyword = page.keyword
     const requestedType = type || query.type || 'all'
+    const allowed = new Set(allowedTypes ?? ['staff', 'refund', 'withdraw', 'ticket'])
     const items: Array<{
       id: string
       type: string
@@ -1752,7 +1855,7 @@ export class AdminBusinessService {
       applicant: string
       bizNo: string
       amount?: number
-      status: 'pending' | 'approved' | 'rejected'
+      status: string
       priority: 'normal' | 'high' | 'urgent'
       submittedAt: string
       reviewedAt?: string
@@ -1762,7 +1865,7 @@ export class AdminBusinessService {
       rawTime: Date
     }> = []
 
-    if (requestedType === 'all' || requestedType === 'staff') {
+    if ((requestedType === 'all' || requestedType === 'staff') && allowed.has('staff')) {
       const staff = await this.prisma.staff.findMany({
         where: { status: 2, deletedAt: null },
         orderBy: [{ createdAt: 'desc' }],
@@ -1779,15 +1882,20 @@ export class AdminBusinessService {
           priority: 'high',
           submittedAt: this.formatDateTime(item.createdAt),
           reason: '师傅资料待管理员审核',
-          detail: `姓名：${item.name}，电话：${item.phone}`,
+          detail: [
+            `姓名：${item.name}`,
+            `电话：${item.phone}`,
+            item.cityCode ? `城市：${item.cityCode}` : '',
+            item.applicationNote ? `说明：${item.applicationNote}` : '',
+          ].filter(Boolean).join('，'),
           rawTime: item.createdAt,
         })
       }
     }
 
-    if (requestedType === 'all' || requestedType === 'refund') {
+    if ((requestedType === 'all' || requestedType === 'refund') && allowed.has('refund')) {
       const refunds = await this.prisma.refund.findMany({
-        where: { status: 'pending' },
+        where: { status: { in: ['pending', 'failed'] } },
         include: { payment: { include: { order: { include: { user: true } } } } },
         orderBy: [{ createdAt: 'desc' }],
         take: 100,
@@ -1800,7 +1908,7 @@ export class AdminBusinessService {
           applicant: item.payment.order.user.nickname || item.payment.order.user.phone || '用户',
           bizNo: item.refundNo,
           amount: this.decimalToNumber(item.amount),
-          status: 'pending',
+          status: item.status,
           priority: 'urgent',
           submittedAt: this.formatDateTime(item.createdAt),
           reason: item.reason || '用户申请退款',
@@ -1810,9 +1918,9 @@ export class AdminBusinessService {
       }
     }
 
-    if (requestedType === 'all' || requestedType === 'withdraw') {
+    if ((requestedType === 'all' || requestedType === 'withdraw') && allowed.has('withdraw')) {
       const withdraws = await this.prisma.withdrawRequest.findMany({
-        where: { status: 'pending' },
+        where: { status: { in: [WITHDRAW_STATUS.LEGACY_PENDING, WITHDRAW_STATUS.PENDING_REVIEW] } },
         orderBy: [{ createdAt: 'desc' }],
         take: 100,
       })
@@ -1823,9 +1931,9 @@ export class AdminBusinessService {
           type: 'withdraw',
           title: '师傅提现审核',
           applicant: staffMap.get(String(item.staffId)) || `师傅${Number(item.staffId)}`,
-          bizNo: `WD${Number(item.id)}`,
+          bizNo: item.withdrawNo || `WD${Number(item.id)}`,
           amount: this.decimalToNumber(item.amount),
-          status: 'pending',
+          status: WITHDRAW_STATUS.PENDING_REVIEW,
           priority: 'normal',
           submittedAt: this.formatDateTime(item.createdAt),
           reason: '师傅申请提现',
@@ -1835,7 +1943,7 @@ export class AdminBusinessService {
       }
     }
 
-    if (requestedType === 'all' || requestedType === 'ticket') {
+    if ((requestedType === 'all' || requestedType === 'ticket') && allowed.has('ticket')) {
       const tickets = await this.prisma.ticket.findMany({
         where: { status: { in: ['open', 'pending'] } },
         include: { user: true, order: true },
@@ -1891,57 +1999,14 @@ export class AdminBusinessService {
   }
 
   async reviewRefund(id: number, dto: AdminAuditReviewDto, context: AdminWriteContext) {
-    const current = await this.prisma.refund.findUnique({ where: { id: BigInt(id) } })
-    if (!current) throw this.notFound('refund not found')
-    const status = dto.action === 'approve' ? 'approved' : 'rejected'
-    await this.prisma.$transaction(async (tx) => {
-      await tx.refund.update({
-        where: { id: BigInt(id) },
-        data: {
-          status,
-          operatedBy: BigInt(context.adminId),
-          refundedAt: dto.action === 'approve' ? new Date() : current.refundedAt,
-        },
-      })
-      await this.audit.writeWithClient(tx, {
-        adminId: context.adminId,
-        action: `refund:${dto.action}`,
-        module: 'finance',
-        targetType: 'refund',
-        targetId: id,
-        requestId: context.requestId,
-        ip: context.ip,
-        detail: { before: current.status, after: status, remark: dto.remark || '' },
-      })
-    })
-    return { id, status }
+    if (dto.action === 'approve') {
+      return this.refunds.approveRefund(id, { remark: dto.remark }, context)
+    }
+    return this.refunds.rejectRefund(id, { remark: dto.remark, nextOrderStatus: ORDER_STATUS.AFTER_SALES }, context)
   }
 
   async reviewWithdraw(id: number, dto: AdminAuditReviewDto, context: AdminWriteContext) {
-    const current = await this.prisma.withdrawRequest.findUnique({ where: { id: BigInt(id) } })
-    if (!current) throw this.notFound('withdraw request not found')
-    const status = dto.action === 'approve' ? 'approved' : 'rejected'
-    await this.prisma.$transaction(async (tx) => {
-      await tx.withdrawRequest.update({
-        where: { id: BigInt(id) },
-        data: {
-          status,
-          handledBy: BigInt(context.adminId),
-          handledAt: new Date(),
-        },
-      })
-      await this.audit.writeWithClient(tx, {
-        adminId: context.adminId,
-        action: `withdraw:${dto.action}`,
-        module: 'finance',
-        targetType: 'withdraw_request',
-        targetId: id,
-        requestId: context.requestId,
-        ip: context.ip,
-        detail: { before: current.status, after: status, remark: dto.remark || '' },
-      })
-    })
-    return { id, status }
+    return this.withdrawals.reviewWithdraw(id, dto, context)
   }
 
   async reviewTicket(id: number, dto: AdminAuditReviewDto, context: AdminWriteContext) {
@@ -1981,12 +2046,14 @@ export class AdminBusinessService {
     return { id, status }
   }
 
-  async addTicketMessage(id: number, content: string, context: AdminWriteContext) {
+  async addTicketMessage(id: number, content: string, images: string[] | undefined, context: AdminWriteContext) {
     const current = await this.prisma.ticket.findUnique({ where: { id: BigInt(id) } })
     if (!current) throw this.notFound('ticket not found')
     if (!content.trim()) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'content required', 400)
     }
+    const imageUrls = this.parseImageUrlList(images)
+    imageUrls.forEach(url => this.storage.assertPermanentOssUrl(url))
 
     const message = await this.prisma.$transaction(async (tx) => {
       const created = await tx.ticketMessage.create({
@@ -1995,6 +2062,7 @@ export class AdminBusinessService {
           senderType: 'admin',
           senderId: BigInt(context.adminId),
           content: content.trim(),
+          images: imageUrls.length ? imageUrls : undefined,
         },
       })
       await tx.ticket.update({
@@ -2013,10 +2081,12 @@ export class AdminBusinessService {
       })
       return created
     })
+    await this.storage.bindFilesToBiz(imageUrls, IMAGE_BIZ_TYPE.AFTER_SALES_IMAGE, current.id)
     return {
       id: Number(message.id),
       ticketId: id,
       content: message.content,
+      images: this.storage.signUrlList(imageUrls),
       createdAt: this.formatDateTime(message.createdAt),
     }
   }
@@ -2060,8 +2130,11 @@ export class AdminBusinessService {
     name: string
     phone: string
     avatarUrl?: string | null
+    idCard?: string | null
     skills: Prisma.JsonValue | null
     cityCode: string | null
+    applicationNote?: string | null
+    applicationImages?: Prisma.JsonValue | null
     rating: Prisma.Decimal
     totalOrders: number
     status: number
@@ -2069,6 +2142,7 @@ export class AdminBusinessService {
     createdAt: Date
     user?: { id: bigint, nickname: string | null, phone: string | null, status: number } | null
   }) {
+    const avatarUrls = this.storage.resolveAvatarUrls(item.avatarUrl)
     return {
       id: String(item.id),
       userId: item.userId ? String(item.userId) : '',
@@ -2077,12 +2151,17 @@ export class AdminBusinessService {
       userStatus: item.user ? this.activeStatus(item.user.status) : '',
       name: item.name,
       phone: item.phone,
-      avatarUrl: this.storage.signNullableUrl(item.avatarUrl || '') || item.avatarUrl || '',
-      avatarOssUrl: item.avatarUrl || '',
-      avatarDisplayUrl: this.storage.signNullableUrl(item.avatarUrl || '') || item.avatarUrl || '',
+      idCard: item.idCard || '',
+      avatarUrl: avatarUrls.avatar,
+      avatarOssUrl: avatarUrls.avatarOssUrl,
+      avatarDisplayUrl: avatarUrls.avatarDisplayUrl,
       skills: this.formatSkills(item.skills),
       city: item.cityCode || '',
       cityCode: item.cityCode || '',
+      applicationNote: item.applicationNote || '',
+      applicationImages: this.storage.signUrlList(this.jsonStringArray(item.applicationImages)),
+      applicationImageOssUrls: this.jsonStringArray(item.applicationImages),
+      applicationImageCount: this.jsonStringArray(item.applicationImages).length,
       rating: this.decimalToNumber(item.rating),
       totalOrders: item.totalOrders,
       status: this.staffStatus(item.status),
@@ -2156,11 +2235,95 @@ export class AdminBusinessService {
     })
   }
 
+  private async createUserServiceAddress(
+    tx: Prisma.TransactionClient,
+    userId: bigint,
+    body: JsonRecord,
+  ) {
+    const ownerId = Number(userId)
+    const addressType = this.optionalString(body.addressType) || 'service'
+    const shouldBeDefault = this.optionalBoolean(body.isDefault, true)
+    if (shouldBeDefault) {
+      await tx.address.updateMany({
+        where: {
+          ownerType: 'user',
+          ownerId: userId,
+          addressType,
+          status: 1,
+          deletedAt: null,
+        },
+        data: { isDefault: false },
+      })
+    }
+
+    const contactName = this.requiredString(body.contactName || body.name, 'address contactName required')
+    const contactPhone = this.requiredString(body.contactPhone || body.phone, 'address contactPhone required')
+    const detailAddress = this.requiredString(body.detailAddress || body.address || body.detail, 'detailAddress required')
+    const addressData = {
+      provinceName: this.optionalString(body.provinceName || body.province),
+      cityName: this.optionalString(body.cityName || body.city),
+      districtName: this.optionalString(body.districtName || body.district),
+      streetName: this.optionalString(body.streetName || body.street),
+      addressTitle: this.optionalString(body.addressTitle || body.title),
+      detailAddress,
+      houseNumber: this.optionalString(body.houseNumber),
+    }
+
+    return tx.address.create({
+      data: {
+        ownerType: 'user',
+        ownerId: BigInt(ownerId),
+        addressType,
+        contactName,
+        contactPhone,
+        country: this.optionalString(body.country) || '中国',
+        province: addressData.provinceName || null,
+        city: addressData.cityName || null,
+        district: addressData.districtName || null,
+        street: addressData.streetName || null,
+        addressTitle: addressData.addressTitle || null,
+        detailAddress,
+        houseNumber: addressData.houseNumber || null,
+        formattedAddress: this.composeAdminAddressText(addressData),
+        latitude: this.optionalDecimal(body.latitude),
+        longitude: this.optionalDecimal(body.longitude),
+        coordinateType: this.optionalString(body.coordinateType) || 'gcj02',
+        poiId: this.optionalString(body.poiId) || null,
+        mapProvider: this.optionalString(body.mapProvider) || null,
+        isDefault: shouldBeDefault,
+        source: 'admin',
+        status: 1,
+      },
+    })
+  }
+
+  private composeAdminAddressText(address: {
+    provinceName?: string
+    cityName?: string
+    districtName?: string
+    streetName?: string
+    addressTitle?: string
+    detailAddress: string
+    houseNumber?: string
+  }) {
+    return [
+      address.provinceName,
+      address.cityName,
+      address.districtName,
+      address.streetName,
+      address.addressTitle,
+      address.detailAddress,
+      address.houseNumber,
+    ].map(value => value?.trim()).filter(Boolean).join('')
+  }
+
   private userAuditSnapshot(user: {
     nickname: string | null
     phone: string | null
     gender: number
     cityCode: string | null
+    source?: string | null
+    adminRemark?: string | null
     status: number
     deletedAt: Date | null
   }) {
@@ -2169,6 +2332,8 @@ export class AdminBusinessService {
       phone: user.phone,
       gender: user.gender,
       cityCode: user.cityCode,
+      source: user.source || null,
+      adminRemark: user.adminRemark || null,
       status: user.status,
       deletedAt: user.deletedAt?.toISOString() || null,
     }
@@ -2430,6 +2595,11 @@ export class AdminBusinessService {
     throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid status', 400)
   }
 
+  private normalizeUserSource(value: unknown) {
+    const source = this.optionalString(value) || 'admin'
+    return /^[a-zA-Z0-9_-]{1,16}$/.test(source) ? source : 'admin'
+  }
+
   private staffStatus(value: number) {
     if (value === 2) return 'pending'
     return value === 1 ? 'active' : 'disabled'
@@ -2553,6 +2723,45 @@ export class AdminBusinessService {
     return ''
   }
 
+  private jsonStringArray(value: Prisma.JsonValue | null | undefined) {
+    if (!Array.isArray(value)) return []
+    return value.map(item => typeof item === 'string' ? item : '').filter(Boolean)
+  }
+
+  private parseImageUrlList(value: unknown) {
+    if (value === undefined || value === null || value === '') return []
+    if (Array.isArray(value)) {
+      return value.map(item => String(item || '').trim()).filter(Boolean)
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (!trimmed) return []
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        if (Array.isArray(parsed)) {
+          return parsed.map(item => String(item || '').trim()).filter(Boolean)
+        }
+      }
+      catch {
+        return trimmed.split(/[\s,\uFF0C\u3001]+/).map(item => item.trim()).filter(Boolean)
+      }
+      return trimmed.split(/[\s,\uFF0C\u3001]+/).map(item => item.trim()).filter(Boolean)
+    }
+    return []
+  }
+
+  private async replaceServiceImages(tx: Prisma.TransactionClient, serviceId: bigint, urls: string[]) {
+    await tx.serviceImage.deleteMany({ where: { serviceId } })
+    if (!urls.length) return
+    await tx.serviceImage.createMany({
+      data: urls.map((url, index) => ({
+        serviceId,
+        url,
+        sortOrder: index,
+      })),
+    })
+  }
+
   private requiredString(value: unknown, message: string) {
     const text = this.optionalString(value)
     if (!text) throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, message, 400)
@@ -2563,6 +2772,25 @@ export class AdminBusinessService {
     if (value === undefined || value === null) return undefined
     const text = String(value).trim()
     return text || undefined
+  }
+
+  private optionalObject(value: unknown): JsonRecord | undefined {
+    if (!value) return undefined
+    if (typeof value === 'object' && !Array.isArray(value)) return value as JsonRecord
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (!trimmed) return undefined
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as JsonRecord
+        }
+      }
+      catch {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid object', 400)
+      }
+    }
+    throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid object', 400)
   }
 
   private requiredNumber(value: unknown, message: string) {

@@ -42,6 +42,10 @@ function formatAppointment(order: OrderDetailRecord) {
   return `${formatDate(order.appointmentStartTime)}-${formatTime(order.appointmentEndTime)}`
 }
 
+function isoDate(date?: Date | null) {
+  return date ? date.toISOString() : null
+}
+
 function addressText(snapshot: JsonRecord) {
   const formattedAddress = stringValue(snapshot.formattedAddress)
   if (formattedAddress) return formattedAddress
@@ -72,6 +76,8 @@ export function presentUserOrder(order: OrderDetailRecord) {
   const addressSnapshot = jsonRecord(order.addressSnapshot)
   const totalAmount = decimalToNumber(order.originalAmount)
   const payableAmount = decimalToNumber(order.payableAmount)
+  const memberCardUsage = presentMemberCardUsage(order)
+  const fulfillment = presentFulfillment(order)
 
   return {
     id: Number(order.id),
@@ -86,6 +92,8 @@ export function presentUserOrder(order: OrderDetailRecord) {
     grantedUserMemberCardId: order.grantedUserMemberCardId ? Number(order.grantedUserMemberCardId) : null,
     serviceCode: stringValue(serviceSnapshot.code, order.service?.code || ''),
     serviceName: stringValue(serviceSnapshot.name, order.service?.name || ''),
+    serviceCardType: stringValue(serviceSnapshot.cardType, order.service?.cardType || ''),
+    serviceConsumeUnit: numberValue(serviceSnapshot.consumeUnit, order.service?.consumeUnit || 0),
     serviceImage: stringValue(serviceSnapshot.coverImage, order.service?.coverImage || ''),
     appointmentStartTime: order.appointmentStartTime.toISOString(),
     appointmentEndTime: order.appointmentEndTime.toISOString(),
@@ -97,8 +105,18 @@ export function presentUserOrder(order: OrderDetailRecord) {
     staffName: order.staff?.name || '',
     staffPhone: order.staff?.phone || '',
     staffRating: order.staff ? decimalToNumber(order.staff.rating) : undefined,
+    memberCardName: memberCardUsage.memberCardName,
+    memberCardUnitName: memberCardUsage.memberCardUnitName,
+    plannedConsumeUnits: memberCardUsage.plannedConsumeUnits,
+    actualConsumeUnits: memberCardUsage.actualConsumeUnits,
+    releasedUnits: memberCardUsage.releasedUnits,
+    frozenUnits: memberCardUsage.frozenUnits,
+    acceptedAt: fulfillment.acceptedAt,
+    onTheWayAt: fulfillment.onTheWayAt,
+    checkinAt: fulfillment.checkinAt,
+    startedAt: fulfillment.startedAt,
     createdAt: order.createdAt.toISOString(),
-    completedAt: order.completedAt?.toISOString() || null,
+    completedAt: fulfillment.completedAt,
   }
 }
 
@@ -121,12 +139,154 @@ function presentStatusLog(log: OrderDetailRecord['statusLogs'][number]) {
   }
 }
 
+function presentRefund(refund: OrderDetailRecord['refunds'][number]) {
+  return {
+    id: Number(refund.id),
+    refundNo: refund.refundNo,
+    amount: decimalToNumber(refund.amount),
+    reason: refund.reason || '',
+    status: refund.status,
+    channel: refund.channel || '',
+    channelRefundNo: refund.channelRefundNo || '',
+    failureReason: refund.failureReason || '',
+    reviewedAt: refund.reviewedAt?.toISOString() || null,
+    processedAt: refund.processedAt?.toISOString() || null,
+    refundedAt: refund.refundedAt?.toISOString() || null,
+    createdAt: refund.createdAt.toISOString(),
+  }
+}
+
+function firstStatusLogTime(order: OrderDetailRecord, actions: string[]) {
+  return isoDate(order.statusLogs.find(log => actions.includes(log.action || ''))?.createdAt)
+}
+
+function firstCheckinTime(order: OrderDetailRecord, type: string) {
+  return isoDate(order.checkins.find(item => item.checkinType === type)?.createdAt)
+}
+
+function finishTime(order: OrderDetailRecord) {
+  return isoDate(order.completedAt)
+    || firstCheckinTime(order, 'finish')
+    || firstStatusLogTime(order, ['staff_complete', 'user_confirm', 'auto_confirm'])
+}
+
+function sumMemberCardRecordUnits(order: OrderDetailRecord, recordType: string) {
+  return order.memberCardRecords
+    .filter(record => record.recordType === recordType)
+    .reduce((sum, record) => sum + record.units, 0)
+}
+
+function firstMemberCardRecord(order: OrderDetailRecord) {
+  return order.memberCardRecords[0] || null
+}
+
+function memberCardUnitName(order: OrderDetailRecord) {
+  const record = firstMemberCardRecord(order)
+  if (record?.userMemberCard.card.unitName) return record.userMemberCard.card.unitName
+  const serviceSnapshot = jsonRecord(order.serviceSnapshot)
+  const cardType = stringValue(serviceSnapshot.cardType, order.service?.cardType || '')
+  return cardType === 'time' ? '分钟' : '次'
+}
+
+function presentMemberCardRecord(record: OrderDetailRecord['memberCardRecords'][number]) {
+  return {
+    id: Number(record.id),
+    userMemberCardId: Number(record.userMemberCardId),
+    orderId: record.orderId ? Number(record.orderId) : null,
+    recordType: record.recordType,
+    timesUsed: record.timesUsed,
+    units: record.units,
+    beforeUnits: record.beforeUnits,
+    afterUnits: record.afterUnits,
+    operatorType: record.operatorType || '',
+    operatorId: record.operatorId ? Number(record.operatorId) : null,
+    remark: record.remark || '',
+    createdAt: record.createdAt.toISOString(),
+    card: {
+      id: Number(record.userMemberCard.card.id),
+      name: record.userMemberCard.card.name,
+      cardType: record.userMemberCard.card.cardType,
+      unitName: record.userMemberCard.card.unitName,
+      unitMinutes: record.userMemberCard.card.unitMinutes || 0,
+    },
+  }
+}
+
+function presentMemberCardUsage(order: OrderDetailRecord) {
+  const record = firstMemberCardRecord(order)
+  const unitName = memberCardUnitName(order)
+  const frozenUnits = sumMemberCardRecordUnits(order, 'freeze')
+  const plannedConsumeUnits = order.memberCardConsumeUnits || frozenUnits
+  const actualConsumeUnits = sumMemberCardRecordUnits(order, 'consume')
+  const releasedUnits = sumMemberCardRecordUnits(order, 'release')
+
+  return {
+    memberCardName: record?.userMemberCard.card.name || '',
+    memberCardUnitName: unitName,
+    frozenUnits,
+    plannedConsumeUnits,
+    actualConsumeUnits,
+    releasedUnits,
+    memberCard: record
+      ? {
+          id: Number(record.userMemberCard.id),
+          cardId: Number(record.userMemberCard.cardId),
+          name: record.userMemberCard.card.name,
+          cardType: record.userMemberCard.card.cardType,
+          unitName,
+          unitMinutes: record.userMemberCard.card.unitMinutes || 0,
+          remainingUnits: record.userMemberCard.remainingUnits,
+          frozenUnits: record.userMemberCard.frozenUnits,
+          status: record.userMemberCard.status,
+        }
+      : null,
+    memberCardRecords: order.memberCardRecords.map(presentMemberCardRecord),
+  }
+}
+
+function presentFulfillment(order: OrderDetailRecord) {
+  return {
+    acceptedAt: firstStatusLogTime(order, ['staff_accept']) || isoDate(order.assignments[0]?.acceptedAt),
+    onTheWayAt: firstCheckinTime(order, 'on_the_way'),
+    checkinAt: firstCheckinTime(order, 'on_the_way'),
+    startedAt: firstCheckinTime(order, 'start'),
+    completedAt: finishTime(order),
+  }
+}
+
+function messageImages(value: Prisma.JsonValue) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function presentTicket(ticket: OrderDetailRecord['tickets'][number]) {
+  const latestMessage = ticket.messages[0]
+  return {
+    id: Number(ticket.id),
+    ticketNo: ticket.ticketNo,
+    type: ticket.type,
+    title: ticket.title,
+    description: ticket.description || '',
+    status: ticket.status,
+    priority: ticket.priority,
+    handledBy: ticket.handledBy ? Number(ticket.handledBy) : null,
+    resolvedAt: ticket.resolvedAt?.toISOString() || null,
+    latestMessage: latestMessage?.content || '',
+    latestImages: latestMessage ? messageImages(latestMessage.images) : [],
+    createdAt: ticket.createdAt.toISOString(),
+    updatedAt: ticket.updatedAt.toISOString(),
+  }
+}
+
 export function presentOrderDetail(order: OrderDetailRecord) {
   const base = presentUserOrder(order)
   const serviceSnapshot = jsonRecord(order.serviceSnapshot)
   const addressSnapshot = jsonRecord(order.addressSnapshot)
   const discountAmount = decimalToNumber(order.discountAmount)
   const payment = order.payments[0]
+  const refunds = order.refunds.map(presentRefund)
+  const tickets = order.tickets.map(presentTicket)
+  const fulfillment = presentFulfillment(order)
+  const memberCardUsage = presentMemberCardUsage(order)
 
   return {
     ...base,
@@ -183,6 +343,12 @@ export function presentOrderDetail(order: OrderDetailRecord) {
       { label: 'Service amount', amount: decimalToNumber(order.originalAmount) },
       { label: 'Discount', amount: discountAmount, type: 'discount' as const },
     ],
+    refunds,
+    latestRefund: refunds[0] || null,
+    tickets,
+    latestTicket: tickets[0] || null,
+    ...fulfillment,
+    ...memberCardUsage,
     servicePhotos: order.photos.map(photo => photo.url),
   }
 }
@@ -229,6 +395,8 @@ export function presentAdminOrderDetail(order: OrderDetailRecord) {
       assignType: assignment.assignType,
       assignStatus: assignment.assignStatus,
       assignedBy: Number(assignment.assignedBy),
+      notificationId: assignment.notificationId ? Number(assignment.notificationId) : null,
+      notificationStatus: assignment.notificationStatus || '',
       rejectReason: assignment.rejectReason || '',
       assignedAt: assignment.assignedAt.toISOString(),
       acceptedAt: assignment.acceptedAt?.toISOString() || null,

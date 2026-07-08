@@ -4,6 +4,8 @@ import { JwtService } from '@nestjs/jwt'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { PrismaService } from '../prisma/prisma.service'
+import { ObjectStorageService } from '../storage/storage.service'
+import { IMAGE_BIZ_TYPE } from '../storage/image-biz-types'
 import { getAdminPermissions, getAdminRoles, normalizeAdminRole } from './admin-permissions'
 import { verifyAdminPassword } from './admin-password'
 import type { AdminLoginDto } from './dto/admin-login.dto'
@@ -14,6 +16,7 @@ export class AdminAuthService {
     @Inject(ConfigService) private readonly config: ConfigService,
     @Inject(JwtService) private readonly jwt: JwtService,
     @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(ObjectStorageService) private readonly storage: ObjectStorageService,
   ) {}
 
   async login(dto: AdminLoginDto) {
@@ -61,14 +64,67 @@ export class AdminAuthService {
       throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, '管理员不存在或已禁用', 401)
     }
 
+    const avatarUrls = this.storage.resolveAvatarUrls(admin.avatarUrl)
     return {
       userId: String(admin.id),
       username: admin.username,
       nickname: admin.name,
-      avatar: '',
+      avatar: avatarUrls.avatar,
+      avatarOssUrl: avatarUrls.avatarOssUrl,
+      avatarDisplayUrl: avatarUrls.avatarDisplayUrl,
       roles: getAdminRoles(admin.role),
       perms: getAdminPermissions(admin.role),
     }
+  }
+
+  async getProfile(adminId: number) {
+    const admin = await this.prisma.adminUser.findUnique({ where: { id: BigInt(adminId) } })
+    if (!admin || admin.status !== 1) {
+      throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, '管理员不存在或已禁用', 401)
+    }
+
+    const avatarUrls = this.storage.resolveAvatarUrls(admin.avatarUrl)
+    return {
+      id: String(admin.id),
+      username: admin.username,
+      nickname: admin.name,
+      avatar: avatarUrls.avatar,
+      avatarOssUrl: avatarUrls.avatarOssUrl,
+      avatarDisplayUrl: avatarUrls.avatarDisplayUrl,
+      mobile: admin.phone || '',
+      roleNames: getAdminRoles(admin.role).join(','),
+      createTime: admin.createdAt,
+    }
+  }
+
+  async updateProfile(adminId: number, dto: { nickname?: string, avatar?: string, gender?: number }) {
+    const data: { name?: string, avatarUrl?: string } = {}
+    if (dto.nickname !== undefined) {
+      const nickname = dto.nickname.trim()
+      if (!nickname) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'nickname cannot be empty', 400)
+      }
+      if (nickname.length > 20) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'nickname too long', 400)
+      }
+      data.name = nickname
+    }
+    if (dto.avatar !== undefined) {
+      const avatar = dto.avatar.trim()
+      this.storage.assertPermanentOssUrl(avatar, { force: true })
+      data.avatarUrl = avatar
+    }
+
+    if (Object.keys(data).length) {
+      await this.prisma.adminUser.update({
+        where: { id: BigInt(adminId) },
+        data,
+      })
+      if (data.avatarUrl) {
+        await this.storage.bindFilesToBiz([data.avatarUrl], IMAGE_BIZ_TYPE.ADMIN_AVATAR, adminId)
+      }
+    }
+    return this.getProfile(adminId)
   }
 
   logout() {

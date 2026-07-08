@@ -242,6 +242,16 @@
               placeholder="可直接粘贴 OSS 图片地址"
             />
           </div>
+          <div v-else-if="item.type === 'images'" class="image-form-control">
+            <multi-image-upload
+              :model-value="arrayFormValue(item.prop)"
+              :display-urls="imageDisplayUrls(item.prop)"
+              :data="{ bizType: imageBizType(item.prop) }"
+              :limit="9"
+              :max-file-size="5"
+              @update:model-value="(value: string[]) => setFormValue(item.prop, value)"
+            />
+          </div>
           <el-switch
             v-else-if="item.type === 'switch'"
             :model-value="Boolean(formModel[item.prop])"
@@ -330,6 +340,96 @@
         <el-button type="primary" :loading="addressSaving" @click="submitOwnerAddress">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="customerVisible" title="新增客户" width="720px">
+      <el-alert
+        title="用于后台录入电话、线下或外来客户；手机号已存在时后端会阻止重复创建。"
+        type="info"
+        show-icon
+        :closable="false"
+        class="mb-4"
+      />
+      <el-form :model="customerForm" label-width="110px">
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="客户姓名">
+              <el-input v-model="customerForm.nickname" maxlength="64" placeholder="不填则使用手机号" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="手机号" required>
+              <el-input v-model="customerForm.phone" maxlength="20" placeholder="客户手机号" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="来源">
+              <el-select v-model="customerForm.source" style="width: 100%">
+                <el-option label="后台录入" value="admin" />
+                <el-option label="电话客户" value="phone" />
+                <el-option label="线下客户" value="offline" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="城市编码">
+              <el-input v-model="customerForm.cityCode" maxlength="20" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="客户备注">
+          <el-input v-model="customerForm.adminRemark" type="textarea" :rows="2" maxlength="512" show-word-limit />
+        </el-form-item>
+
+        <el-divider content-position="left">默认服务地址</el-divider>
+        <el-form-item label="同步创建">
+          <el-switch v-model="customerForm.createAddress" />
+        </el-form-item>
+        <template v-if="customerForm.createAddress">
+          <el-row :gutter="12">
+            <el-col :span="12">
+              <el-form-item label="联系人" required>
+                <el-input v-model="customerForm.contactName" maxlength="64" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="联系电话" required>
+                <el-input v-model="customerForm.contactPhone" maxlength="20" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12">
+            <el-col :span="8">
+              <el-form-item label="城市">
+                <el-input v-model="customerForm.cityName" maxlength="32" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="区县">
+                <el-input v-model="customerForm.districtName" maxlength="32" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="小区/地点">
+                <el-input v-model="customerForm.addressTitle" maxlength="128" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-form-item label="详细地址" required>
+            <el-input v-model="customerForm.detailAddress" type="textarea" :rows="2" maxlength="256" show-word-limit />
+          </el-form-item>
+          <el-form-item label="门牌号">
+            <el-input v-model="customerForm.houseNumber" maxlength="64" />
+          </el-form-item>
+        </template>
+      </el-form>
+      <template #footer>
+        <el-button @click="customerVisible = false">取消</el-button>
+        <el-button type="primary" :loading="customerSaving" @click="submitCustomer">创建客户</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="grantCardVisible" title="给用户发放会员卡" width="520px">
       <el-form :model="grantCardForm" label-width="110px">
         <el-form-item label="用户">
@@ -353,6 +453,48 @@
       <template #footer>
         <el-button @click="grantCardVisible = false">取消</el-button>
         <el-button type="primary" :loading="grantCardSaving" @click="submitGrantCard">确认发卡</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="feedbackDialogVisible" title="问题反馈详情" width="760px">
+      <el-descriptions v-if="selectedFeedback" :column="2" border>
+        <el-descriptions-item label="反馈编号">{{ selectedFeedback.feedbackNo || "-" }}</el-descriptions-item>
+        <el-descriptions-item label="状态">
+          <el-tag :type="resolveTagType(selectedFeedback.status)">
+            {{ formatValue(selectedFeedback.status, "tag") }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="类型">{{ formatValue(selectedFeedback.type, "tag") }}</el-descriptions-item>
+        <el-descriptions-item label="用户">{{ selectedFeedback.userName || selectedFeedback.userPhone || "-" }}</el-descriptions-item>
+        <el-descriptions-item label="联系电话">{{ selectedFeedback.contactPhone || "-" }}</el-descriptions-item>
+        <el-descriptions-item label="提交时间">{{ selectedFeedback.createdAt || "-" }}</el-descriptions-item>
+        <el-descriptions-item label="反馈内容" :span="2">
+          <div class="feedback-detail-text">{{ selectedFeedback.content || "-" }}</div>
+        </el-descriptions-item>
+        <el-descriptions-item label="当前回复" :span="2">
+          <div class="feedback-detail-text">{{ selectedFeedback.reply || "暂无回复" }}</div>
+        </el-descriptions-item>
+      </el-descriptions>
+      <div v-if="feedbackImages.length" class="feedback-images">
+        <el-image
+          v-for="image in feedbackImages"
+          :key="image"
+          class="feedback-image"
+          :src="image"
+          fit="cover"
+          :preview-src-list="feedbackImages"
+          preview-teleported
+        />
+      </div>
+      <el-form label-width="90px" class="feedback-reply-form">
+        <el-form-item label="处理回复">
+          <el-input v-model="feedbackReply" type="textarea" :rows="4" maxlength="1000" show-word-limit />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="feedbackDialogVisible = false">取消</el-button>
+        <el-button :loading="feedbackSaving" @click="markSelectedFeedbackProcessing">标记处理中</el-button>
+        <el-button type="primary" :loading="feedbackSaving" @click="submitFeedbackReply">回复并关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -391,9 +533,15 @@ const addressDialogVisible = ref(false);
 const addressFormVisible = ref(false);
 const addressLoading = ref(false);
 const addressSaving = ref(false);
+const customerVisible = ref(false);
+const customerSaving = ref(false);
 const grantCardVisible = ref(false);
 const grantCardSaving = ref(false);
 const grantCardUser = ref<LifeResourceRecord>();
+const feedbackDialogVisible = ref(false);
+const feedbackSaving = ref(false);
+const selectedFeedback = ref<LifeResourceRecord>();
+const feedbackReply = ref("");
 const promotionTargetOptions = ref<LifeSelectOption[]>([]);
 const promotionTargetLoading = ref(false);
 const addressOwner = ref<{ ownerType: "user" | "staff"; ownerId: string; title: string }>();
@@ -411,6 +559,23 @@ const addressFormModel = reactive({
   detailAddress: "",
   houseNumber: "",
   isDefault: false,
+});
+const customerForm = reactive({
+  nickname: "",
+  phone: "",
+  source: "admin",
+  cityCode: "",
+  adminRemark: "",
+  createAddress: true,
+  contactName: "",
+  contactPhone: "",
+  provinceName: "",
+  cityName: "",
+  districtName: "",
+  streetName: "",
+  addressTitle: "",
+  detailAddress: "",
+  houseNumber: "",
 });
 const grantCardForm = reactive({
   cardId: 0,
@@ -430,6 +595,7 @@ const formTitle = computed(() => `${editingRow.value ? "编辑" : "新增"}${pag
 const addressDialogTitle = computed(() => `地址管理 - ${addressOwner.value?.title || ""}`);
 const addressFormTitle = computed(() => `${editingAddress.value ? "编辑" : "新增"}地址`);
 const promotionTargetType = computed(() => String(formModel.targetType || "service"));
+const feedbackImages = computed(() => stringArrayValue(selectedFeedback.value?.images));
 const promotionTargetDisabled = computed(() => moduleKey.value !== "promotionLinks" || promotionTargetType.value === "home");
 const promotionTargetPlaceholder = computed(() => {
   if (promotionTargetType.value === "service") return "搜索并选择服务商品";
@@ -482,6 +648,11 @@ function handleCreate() {
     ElMessage.info("当前模块暂不支持新增");
     return;
   }
+  if (moduleKey.value === "users") {
+    resetCustomerForm();
+    customerVisible.value = true;
+    return;
+  }
   editingRow.value = undefined;
   resetFormModel();
   seedPromotionTargetOption();
@@ -490,6 +661,10 @@ function handleCreate() {
 }
 
 function handleView(row: LifeResourceRecord) {
+  if (moduleKey.value === "feedbacks") {
+    void openFeedbackDetail(row);
+    return;
+  }
   ElMessageBox.alert(buildDetailText(row), "详情", {
     confirmButtonText: "知道了",
     customClass: "life-detail-message",
@@ -507,6 +682,15 @@ function handleEdit(row: LifeResourceRecord) {
 function handleRowAction(action: string, row: LifeResourceRecord) {
   if (action === "addresses") {
     openOwnerAddresses(row);
+  }
+  if (action === "feedback_reply") {
+    void openFeedbackDetail(row);
+  }
+  if (action === "feedback_processing") {
+    void updateFeedbackStatus(row, "processing");
+  }
+  if (action === "feedback_close") {
+    void updateFeedbackStatus(row, "closed");
   }
 }
 
@@ -555,6 +739,62 @@ async function submitGrantCard() {
     grantCardVisible.value = false;
   } finally {
     grantCardSaving.value = false;
+  }
+}
+
+async function openFeedbackDetail(row: LifeResourceRecord) {
+  selectedFeedback.value = row;
+  feedbackReply.value = String(row.reply || "");
+  feedbackDialogVisible.value = true;
+  try {
+    const detail = await LifeAPI.getFeedback(String(row.id));
+    selectedFeedback.value = detail;
+    feedbackReply.value = String(detail.reply || "");
+  } catch {
+    // 列表数据已经足够展示，详情接口失败时保留当前行信息。
+  }
+}
+
+async function updateFeedbackStatus(row: LifeResourceRecord, status: "processing" | "closed") {
+  await ElMessageBox.confirm(`确认将该反馈标记为${status === "processing" ? "处理中" : "已关闭"}吗？`, "反馈处理", {
+    type: "warning",
+    confirmButtonText: "确认",
+    cancelButtonText: "取消",
+  });
+  await LifeAPI.updateResourceStatus("feedbacks", String(row.id), status);
+  ElMessage.success("反馈状态已更新");
+  await fetchPage();
+}
+
+async function markSelectedFeedbackProcessing() {
+  if (!selectedFeedback.value) return;
+  feedbackSaving.value = true;
+  try {
+    await LifeAPI.updateResourceStatus("feedbacks", String(selectedFeedback.value.id), "processing");
+    selectedFeedback.value = { ...selectedFeedback.value, status: "processing" };
+    ElMessage.success("已标记处理中");
+    await fetchPage();
+  } finally {
+    feedbackSaving.value = false;
+  }
+}
+
+async function submitFeedbackReply() {
+  if (!selectedFeedback.value) return;
+  const reply = feedbackReply.value.trim();
+  if (!reply) {
+    ElMessage.warning("请填写处理回复");
+    return;
+  }
+  feedbackSaving.value = true;
+  try {
+    const updated = await LifeAPI.replyFeedback(String(selectedFeedback.value.id), { reply, status: "closed" });
+    selectedFeedback.value = updated;
+    ElMessage.success("反馈已回复并关闭");
+    feedbackDialogVisible.value = false;
+    await fetchPage();
+  } finally {
+    feedbackSaving.value = false;
   }
 }
 
@@ -630,6 +870,21 @@ async function submitOwnerAddress() {
     await fetchPage();
   } finally {
     addressSaving.value = false;
+  }
+}
+
+async function submitCustomer() {
+  const payload = buildCustomerPayload();
+  if (!payload) return;
+
+  customerSaving.value = true;
+  try {
+    await LifeAPI.createResource("users", payload);
+    ElMessage.success("客户已创建");
+    customerVisible.value = false;
+    await fetchPage();
+  } finally {
+    customerSaving.value = false;
   }
 }
 
@@ -712,6 +967,8 @@ function resetFormModel(row?: LifeResourceRecord) {
       formModel[item.prop] = normalizeFormValue(item.prop, value);
     } else if (item.type === "number") {
       formModel[item.prop] = 0;
+    } else if (item.type === "images") {
+      formModel[item.prop] = [];
     } else if (item.type === "select") {
       formModel[item.prop] = item.options?.[0]?.value || "";
     } else {
@@ -742,6 +999,9 @@ function normalizeFormValue(prop: string, value: unknown) {
   if (prop === "coverImage") {
     return editingRow.value?.coverImageOssUrl || value;
   }
+  if (prop === "images") {
+    return stringArrayValue(editingRow.value?.imageOssUrls || value);
+  }
   if (prop === "imageUrl") {
     return editingRow.value?.imageOssUrl || value;
   }
@@ -769,6 +1029,24 @@ function resetAddressForm(row?: AddressRecord) {
   addressFormModel.isDefault = row?.isDefault === true;
 }
 
+function resetCustomerForm() {
+  customerForm.nickname = "";
+  customerForm.phone = "";
+  customerForm.source = "admin";
+  customerForm.cityCode = "";
+  customerForm.adminRemark = "";
+  customerForm.createAddress = true;
+  customerForm.contactName = "";
+  customerForm.contactPhone = "";
+  customerForm.provinceName = "";
+  customerForm.cityName = "";
+  customerForm.districtName = "";
+  customerForm.streetName = "";
+  customerForm.addressTitle = "";
+  customerForm.detailAddress = "";
+  customerForm.houseNumber = "";
+}
+
 function validateAddressForm() {
   if (!addressFormModel.contactName.trim()) return "请填写联系人";
   if (!/^1\d{10}$/.test(addressFormModel.contactPhone)) return "请填写正确的手机号";
@@ -792,9 +1070,61 @@ function buildAddressPayload() {
   };
 }
 
+function buildCustomerPayload() {
+  if (!customerForm.phone.trim()) {
+    ElMessage.warning("请填写客户手机号");
+    return null;
+  }
+  if (customerForm.createAddress) {
+    if (!customerForm.contactName.trim()) {
+      ElMessage.warning("请填写地址联系人");
+      return null;
+    }
+    if (!customerForm.contactPhone.trim()) {
+      ElMessage.warning("请填写地址联系电话");
+      return null;
+    }
+    if (!customerForm.detailAddress.trim()) {
+      ElMessage.warning("请填写详细地址");
+      return null;
+    }
+  }
+
+  const payload: Record<string, unknown> = {
+    nickname: customerForm.nickname.trim() || undefined,
+    phone: customerForm.phone.trim(),
+    source: customerForm.source,
+    cityCode: customerForm.cityCode.trim() || undefined,
+    adminRemark: customerForm.adminRemark.trim() || undefined,
+    status: "active",
+  };
+
+  if (customerForm.createAddress) {
+    payload.address = {
+      addressType: "service",
+      contactName: customerForm.contactName.trim(),
+      contactPhone: customerForm.contactPhone.trim(),
+      provinceName: customerForm.provinceName.trim() || undefined,
+      cityName: customerForm.cityName.trim() || undefined,
+      districtName: customerForm.districtName.trim() || undefined,
+      streetName: customerForm.streetName.trim() || undefined,
+      addressTitle: customerForm.addressTitle.trim() || undefined,
+      detailAddress: customerForm.detailAddress.trim(),
+      houseNumber: customerForm.houseNumber.trim() || undefined,
+      isDefault: true,
+    };
+  }
+
+  return payload;
+}
+
 function stringFormValue(prop: string) {
   const value = formModel[prop];
   return value === undefined || value === null ? "" : String(value);
+}
+
+function arrayFormValue(prop: string) {
+  return stringArrayValue(formModel[prop]);
 }
 
 function numberFormValue(prop: string) {
@@ -807,7 +1137,7 @@ function dateFormValue(prop: string) {
   return typeof value === "string" || typeof value === "number" || value instanceof Date ? value : "";
 }
 
-function setFormValue(prop: string, value: string | number | boolean | Date | null | undefined) {
+function setFormValue(prop: string, value: string | string[] | number | boolean | Date | null | undefined) {
   formModel[prop] = value ?? "";
   if (moduleKey.value === "promotionLinks" && prop === "targetType") {
     formModel.targetId = "";
@@ -857,6 +1187,7 @@ function setPromotionTargetValue(value: string) {
 
 function imageBizType(prop: string) {
   if (prop === "coverImage") return "service_cover";
+  if (prop === "images") return "service_image";
   if (prop === "imageUrl") return "home_banner";
   if (prop === "avatarUrl") return "staff_avatar";
   return "admin_image";
@@ -876,6 +1207,14 @@ function imageDisplayUrl(prop: string) {
   return "";
 }
 
+function imageDisplayUrls(prop: string) {
+  if (!editingRow.value) return [];
+  if (prop === "images") {
+    return stringArrayValue(editingRow.value.imageDisplayUrls || editingRow.value.images);
+  }
+  return [];
+}
+
 function tableImageUrl(row: LifeResourceRecord, prop: string) {
   if (prop === "imageUrl") {
     return String(row.imageDisplayUrl || row.imageUrl || "");
@@ -889,6 +1228,10 @@ function tableImageUrl(row: LifeResourceRecord, prop: string) {
   return String(row[`${prop}DisplayUrl`] || row[prop] || "");
 }
 
+function stringArrayValue(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && Boolean(item)) : [];
+}
+
 function resolveTagType(value: unknown) {
   const matched = statusOptions.value.find((item) => item.value === value);
   if (matched?.tagType) return matched.tagType;
@@ -896,8 +1239,9 @@ function resolveTagType(value: unknown) {
   if (value === false) return "info";
   if (value === "active" || value === "published" || value === "online" || value === "staff") return "success";
   if (value === "service" || value === "member_card" || value === "category" || value === "home" || value === "channels") return "primary";
-  if (value === "pending" || value === "busy") return "warning";
-  if (value === "rejected") return "danger";
+  if (value === "processing") return "primary";
+  if (value === "pending" || value === "busy" || value === "open") return "warning";
+  if (value === "rejected" || value === "bug") return "danger";
   return "info";
 }
 
@@ -938,6 +1282,15 @@ function formatValue(value: unknown, type?: string) {
       completed: "已完成",
       cancelled: "已取消",
       refunded: "已退款",
+      open: "待处理",
+      processing: "处理中",
+      closed: "已关闭",
+      bug: "功能异常",
+      order: "订单问题",
+      payment_refund: "支付退款",
+      service_experience: "服务体验",
+      suggestion: "产品建议",
+      other: "其他",
     };
     return fallback[String(value)] || String(value);
   }
@@ -1047,5 +1400,29 @@ function buildDeleteConfirmText(name: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.feedback-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.feedback-image {
+  width: 104px;
+  height: 104px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+}
+
+.feedback-detail-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+.feedback-reply-form {
+  margin-top: 14px;
 }
 </style>

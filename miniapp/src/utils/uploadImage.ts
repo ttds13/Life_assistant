@@ -2,12 +2,17 @@ import { getEnvBaseUrl } from '@/utils'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
 import { refreshLogin } from '@/api/auth'
+import { avatarDebugLog } from './avatarDebugLog'
 
 export interface UploadedImage {
+  id?: number | string
+  uuid?: string
   url: string
   signedUrl?: string
   displayUrl?: string
   storageKey?: string
+  bizType?: string
+  bizId?: number | string | null
   mimeType?: string
   size?: number
   expiresIn?: number
@@ -55,11 +60,12 @@ async function resolveUploadToken() {
 
 export async function uploadImage(options: UploadImageOptions): Promise<UploadedImage> {
   const token = await resolveUploadToken()
+  avatarDebugLog('upload token resolved', { hasToken: !!token, tokenLength: token.length })
   try {
     return await uploadImageByFile(options, token)
   }
   catch (error) {
-    console.warn('upload_image_file_failed_try_base64', error)
+    avatarDebugLog('upload_image_file_failed_try_base64', error, 'error')
     return uploadImageByBase64(options, token, error)
   }
 }
@@ -76,6 +82,10 @@ async function uploadImageByFile(options: UploadImageOptions, token: string): Pr
         ...(options.bizId !== undefined ? { bizId: String(options.bizId) } : {}),
       },
       success: (uploadRes) => {
+        avatarDebugLog('upload image file response', {
+          statusCode: uploadRes.statusCode,
+          data: uploadRes.data,
+        })
         try {
           const rawData = typeof uploadRes.data === 'string' ? uploadRes.data : String(uploadRes.data)
           const parsed = rawData ? JSON.parse(rawData) : {}
@@ -101,7 +111,10 @@ async function uploadImageByFile(options: UploadImageOptions, token: string): Pr
           reject(error)
         }
       },
-      fail: reject,
+      fail: (error) => {
+        avatarDebugLog('upload image file failed', error, 'error')
+        reject(error)
+      },
     })
   })
 }
@@ -137,6 +150,10 @@ async function uploadImageByBase64(options: UploadImageOptions, token: string, c
         ...(options.bizId !== undefined ? { bizId: String(options.bizId) } : {}),
       },
       success: (res) => {
+        avatarDebugLog('upload image base64 response', {
+          statusCode: res.statusCode,
+          data: res.data,
+        })
         try {
           const parsed: any = res.data || {}
           if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -162,6 +179,7 @@ async function uploadImageByBase64(options: UploadImageOptions, token: string, c
         }
       },
       fail: (error) => {
+        avatarDebugLog('upload image base64 failed', error, 'error')
         const original = parseUploadError(cause)
         const fallback = parseUploadError(error)
         reject(new Error(`${fallback}; original: ${original}`))
@@ -179,4 +197,14 @@ export function assertImageSize(size?: number, maxSize = 5 * 1024 * 1024) {
     return false
   }
   return true
+}
+
+export function getChooseImageErrorMessage(error: any, fallback = '选择图片失败') {
+  const errMsg = String(error?.errMsg || '')
+  if (error?.errno === 112 || errMsg.includes('privacy agreement')) {
+    return '需在小程序后台声明照片隐私权限'
+  }
+  if (errMsg.includes('cancel'))
+    return ''
+  return fallback
 }

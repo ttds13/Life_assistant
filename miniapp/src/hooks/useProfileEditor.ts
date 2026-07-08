@@ -2,7 +2,8 @@ import { refreshLogin, updateProfile } from '@/api/auth'
 import type { UserProfile } from '@/api/types/auth'
 import { useTokenStore } from '@/store/token'
 import type { UserInfo } from '@/store/user'
-import { useUserStore } from '@/store/user'
+import { DEFAULT_AVATAR_URL, useUserStore } from '@/store/user'
+import { avatarDebugLog } from '@/utils/avatarDebugLog'
 import { uploadImage } from '@/utils/uploadImage'
 
 export interface SaveUserProfileInput {
@@ -11,7 +12,7 @@ export interface SaveUserProfileInput {
   avatarUrl?: string
 }
 
-const DEFAULT_AVATAR = '/static/images/default-avatar.png'
+const LEGACY_DEFAULT_AVATAR = '/static/images/default-avatar.png'
 const SKIP_KEY_PREFIX = 'life-assistant:profile-complete-skip'
 const MAX_NICKNAME_LENGTH = 20
 
@@ -26,7 +27,7 @@ export function isDefaultNickname(nickname?: string) {
 
 export function isDefaultAvatar(avatar?: string) {
   const value = (avatar || '').trim()
-  return !value || value === DEFAULT_AVATAR || value.endsWith(DEFAULT_AVATAR)
+  return !value || value === DEFAULT_AVATAR_URL || value === LEGACY_DEFAULT_AVATAR || value.endsWith(LEGACY_DEFAULT_AVATAR)
 }
 
 export function shouldCompleteProfile(user: UserInfo) {
@@ -60,33 +61,6 @@ export function validateNickname(nickname: string) {
   return value
 }
 
-function isLocalHttpUrl(url?: string) {
-  return /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(url || '')
-}
-
-async function persistLocalAvatar(filePath: string, userId: number) {
-  if (!filePath || userId <= 0)
-    return ''
-  if (!isLocalHttpUrl(import.meta.env.VITE_SERVER_BASEURL))
-    return filePath
-
-  // #ifdef MP-WEIXIN
-  return new Promise<string>((resolve) => {
-    const fs = uni.getFileSystemManager()
-    const extension = filePath.split('?')[0].split('.').pop() || 'jpg'
-    const targetPath = `${wx.env.USER_DATA_PATH}/life-assistant-avatar-${userId}.${extension}`
-    fs.copyFile({
-      srcPath: filePath,
-      destPath: targetPath,
-      success: () => resolve(targetPath),
-      fail: () => resolve(filePath),
-    })
-  })
-  // #endif
-
-  return filePath
-}
-
 export function useProfileEditor() {
   const tokenStore = useTokenStore()
   const userStore = useUserStore()
@@ -115,13 +89,14 @@ export function useProfileEditor() {
     }
 
     if (input.avatarFilePath) {
-      const localAvatarPath = await persistLocalAvatar(input.avatarFilePath, userStore.userInfo.userId)
+      avatarDebugLog('before upload avatarFilePath', input.avatarFilePath)
       const uploaded = await uploadImage({
         filePath: input.avatarFilePath,
         bizType: 'user_avatar',
       })
+      avatarDebugLog('upload result', uploaded)
       payload.avatar = uploaded.url
-      avatarDisplayUrl = localAvatarPath || uploaded.displayUrl || uploaded.signedUrl || uploaded.url
+      avatarDisplayUrl = uploaded.displayUrl || uploaded.signedUrl || uploaded.url
     }
     else if (input.avatarUrl !== undefined) {
       payload.avatar = input.avatarUrl.trim()
@@ -133,6 +108,7 @@ export function useProfileEditor() {
 
     const token = await resolveAccessToken()
     const profile = await updateProfile(payload, token ? { Authorization: `Bearer ${token}` } : undefined)
+    avatarDebugLog('profile update result', profile)
     userStore.setFromProfile(profile)
 
     if (avatarDisplayUrl) {

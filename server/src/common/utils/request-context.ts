@@ -11,6 +11,8 @@ export interface RequestContext {
     phone?: string
     username?: string
     role?: string
+    roles?: string[]
+    perms?: string[]
     userType?: 'user' | 'staff' | 'admin'
   }
 }

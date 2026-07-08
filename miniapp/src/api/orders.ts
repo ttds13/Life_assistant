@@ -2,6 +2,7 @@ import type { PageData } from './types/common'
 import type {
   CreateOrderPayload,
   OrderDetail,
+  OrderRefund,
   PayOrderResult,
   PricePreview,
   QueryOrdersParams,
@@ -24,6 +25,14 @@ export function createOrder(data: CreateOrderPayload) {
 
 export function cancelOrder(id: number, data?: { version?: number, reason?: string }) {
   return http.post<OrderDetail>(`/orders/${id}/cancel`, data)
+}
+
+export function createRefundRequest(id: number, data?: { reason?: string, source?: string }) {
+  return http.post<OrderRefund>(`/orders/${id}/refund-requests`, data)
+}
+
+export function getOrderRefunds(id: number) {
+  return http.get<OrderRefund[]>(`/orders/${id}/refunds`)
 }
 
 export function rescheduleOrder(id: number, data: RescheduleOrderPayload) {

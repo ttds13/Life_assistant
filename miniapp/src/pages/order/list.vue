@@ -1,8 +1,10 @@
 <script lang="ts" setup>
 import { cancelOrder, getOrders } from '@/api/orders'
 import type { UserOrder } from '@/api/types/orders'
+import { useTokenStore } from '@/store/token'
 import { consumeOrderListFilter } from '@/utils/orderListFilter'
 import type { OrderListFilter } from '@/utils/orderListFilter'
+import { toLoginPage } from '@/utils/toLoginPage'
 
 definePage({
   style: {
@@ -15,6 +17,7 @@ type StatusFilter = 'all' | 'pending_payment' | 'pending_dispatch' | 'in_service
 const currentStatus = ref<StatusFilter>('all')
 const loading = ref(false)
 const orders = ref<UserOrder[]>([])
+const tokenStore = useTokenStore()
 
 const tabs: { label: string, value: StatusFilter }[] = [
   { label: '全部', value: 'all' },
@@ -60,6 +63,13 @@ const filteredOrders = computed(() => {
 })
 
 async function loadOrders() {
+  if (!tokenStore.hasLogin) {
+    orders.value = []
+    loading.value = false
+    toLoginPage()
+    return
+  }
+
   loading.value = true
   try {
     const result = await getOrders({ page: 1, pageSize: 100 })
@@ -87,6 +97,14 @@ function onPrimary(order: UserOrder) {
 }
 
 function onSecondary(order: UserOrder) {
+  if (order.status === 'completed') {
+    uni.navigateTo({ url: `/pages/order/after-sales-create?orderId=${order.id}` })
+    return
+  }
+  if (['after_sales', 'refund_pending', 'refunded'].includes(order.status)) {
+    uni.navigateTo({ url: `/pages/order/detail?id=${order.id}` })
+    return
+  }
   if (order.status === 'pending_payment') {
     uni.showModal({
       title: '取消订单',

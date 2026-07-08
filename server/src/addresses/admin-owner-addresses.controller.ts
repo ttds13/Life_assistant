@@ -1,5 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Post, Put, Req, UseGuards } from '@nestjs/common'
 import { AdminAuthGuard } from '../admin-auth/admin-auth.guard'
+import { RequireAdminPermissions } from '../admin-auth/admin-permission.decorator'
+import { ADMIN_PERMISSION } from '../admin-auth/admin-permissions'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { getRequestId, RequestWithContext } from '../common/utils/request-context'
@@ -12,6 +14,7 @@ export class AdminOwnerAddressesController {
   constructor(@Inject(AddressesService) private readonly addressesService: AddressesService) {}
 
   @Get('users/:ownerId/addresses')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_LIST)
   listUserAddresses(@Param('ownerId') ownerIdText: string) {
     return this.addressesService.listAdminAddresses({
       ownerType: 'user',
@@ -22,11 +25,13 @@ export class AdminOwnerAddressesController {
   }
 
   @Get('users/:ownerId/addresses/:addressId')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_LIST)
   getUserAddress(@Param('ownerId') ownerIdText: string, @Param('addressId') addressIdText: string) {
     return this.addressesService.getAdminOwnerAddress('user', this.parseId(ownerIdText), this.parseId(addressIdText))
   }
 
   @Post('users/:ownerId/addresses')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_CREATE)
   @HttpCode(200)
   createUserAddress(@Req() request: RequestWithContext, @Param('ownerId') ownerIdText: string, @Body() dto: SaveAddressDto) {
     return this.addressesService.createAdminAddress({
@@ -38,6 +43,7 @@ export class AdminOwnerAddressesController {
   }
 
   @Put('users/:ownerId/addresses/:addressId')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_UPDATE)
   updateUserAddress(
     @Req() request: RequestWithContext,
     @Param('ownerId') ownerIdText: string,
@@ -51,12 +57,14 @@ export class AdminOwnerAddressesController {
   }
 
   @Delete('users/:ownerId/addresses/:addressId')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_DELETE)
   @HttpCode(200)
   deleteUserAddress(@Req() request: RequestWithContext, @Param('ownerId') ownerIdText: string, @Param('addressId') addressIdText: string) {
     return this.addressesService.deleteAdminOwnerAddress('user', this.parseId(ownerIdText), this.parseId(addressIdText), this.context(request))
   }
 
   @Get('staff/:ownerId/addresses')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_LIST)
   listStaffAddresses(@Param('ownerId') ownerIdText: string) {
     return this.addressesService.listAdminAddresses({
       ownerType: 'staff',
@@ -67,11 +75,13 @@ export class AdminOwnerAddressesController {
   }
 
   @Get('staff/:ownerId/addresses/:addressId')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_LIST)
   getStaffAddress(@Param('ownerId') ownerIdText: string, @Param('addressId') addressIdText: string) {
     return this.addressesService.getAdminOwnerAddress('staff', this.parseId(ownerIdText), this.parseId(addressIdText))
   }
 
   @Post('staff/:ownerId/addresses')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_CREATE)
   @HttpCode(200)
   createStaffAddress(@Req() request: RequestWithContext, @Param('ownerId') ownerIdText: string, @Body() dto: SaveAddressDto) {
     return this.addressesService.createAdminAddress({
@@ -83,6 +93,7 @@ export class AdminOwnerAddressesController {
   }
 
   @Put('staff/:ownerId/addresses/:addressId')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_UPDATE)
   updateStaffAddress(
     @Req() request: RequestWithContext,
     @Param('ownerId') ownerIdText: string,
@@ -96,6 +107,7 @@ export class AdminOwnerAddressesController {
   }
 
   @Delete('staff/:ownerId/addresses/:addressId')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADDRESS_DELETE)
   @HttpCode(200)
   deleteStaffAddress(@Req() request: RequestWithContext, @Param('ownerId') ownerIdText: string, @Param('addressId') addressIdText: string) {
     return this.addressesService.deleteAdminOwnerAddress('staff', this.parseId(ownerIdText), this.parseId(addressIdText), this.context(request))

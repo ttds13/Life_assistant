@@ -3,7 +3,12 @@ import type {
   AuditItem,
   AuditType,
   AddressRecord,
+  AfterSalesTicket,
+  AdminCreateOrderPayload,
+  AdminWithdrawDetail,
+  AdminWithdrawRequest,
   DashboardData,
+  DispatchCheckResult,
   LifeFormItem,
   LifeModuleKey,
   LifeQueryParams,
@@ -69,6 +74,12 @@ const statusOptions = {
     { label: "已发布", value: "published", tagType: "success" },
     { label: "待审核", value: "pending", tagType: "warning" },
     { label: "已驳回", value: "rejected", tagType: "danger" },
+  ],
+  feedbacks: [
+    { label: "全部", value: "" },
+    { label: "待处理", value: "open", tagType: "warning" },
+    { label: "处理中", value: "processing", tagType: "primary" },
+    { label: "已关闭", value: "closed", tagType: "info" },
   ],
 } satisfies Record<string, LifeStatusOption[]>;
 
@@ -148,12 +159,20 @@ const promotionTargetTypeOptions = [
   { label: "首页", value: "home" },
 ];
 
+const userSourceOptions = [
+  { label: "小程序", value: "miniapp" },
+  { label: "后台录入", value: "admin" },
+  { label: "电话客户", value: "phone" },
+  { label: "线下客户", value: "offline" },
+];
+
 const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
   users: {
     module: "users",
     title: "用户列表",
     description: "管理小程序注册用户、账号状态和订单入口。",
     searchPlaceholder: "昵称 / 手机号 / openid",
+    primaryAction: "新增客户",
     editable: true,
     deletable: true,
     rowActions: [{ key: "addresses", label: "地址", type: "success" }],
@@ -166,8 +185,10 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "staffStatus", label: "师傅状态", width: 100, type: "tag" },
       { prop: "staffWorkStatus", label: "工作状态", width: 100, type: "tag" },
       { prop: "city", label: "城市", width: 110 },
+      { prop: "source", label: "来源", width: 100, type: "tag" },
       { prop: "orderCount", label: "订单数", width: 90 },
       { prop: "totalPaid", label: "累计消费", width: 120, type: "money" },
+      { prop: "adminRemark", label: "客户备注", minWidth: 160 },
       { prop: "status", label: "状态", width: 90, type: "tag" },
       { prop: "createdAt", label: "注册时间", width: 170, type: "datetime" },
     ],
@@ -176,6 +197,8 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "phone", label: "手机号", type: "text" },
       { prop: "gender", label: "性别", type: "number" },
       { prop: "cityCode", label: "城市编码", type: "text" },
+      { prop: "source", label: "来源", type: "select", options: userSourceOptions },
+      { prop: "adminRemark", label: "客户备注", type: "textarea" },
       { prop: "status", label: "状态", type: "select", options: categoryStatusOptions },
     ],
   },
@@ -250,6 +273,7 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
     deletable: true,
     statusOptions: statusOptions.active,
     columns: [
+      { prop: "coverImage", label: "封面", width: 110, type: "image" },
       { prop: "code", label: "服务编码", minWidth: 150 },
       { prop: "name", label: "服务名称", minWidth: 180 },
       { prop: "category", label: "分类", width: 120 },
@@ -268,6 +292,7 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "name", label: "服务名称", type: "text", required: true },
       { prop: "description", label: "描述", type: "textarea" },
       { prop: "coverImage", label: "服务封面", type: "image" },
+      { prop: "images", label: "服务附图", type: "images" },
       { prop: "basePrice", label: "基础价格", type: "number", required: true },
       { prop: "priceUnit", label: "单位", type: "text" },
       { prop: "durationMinutes", label: "时长分钟", type: "number" },
@@ -310,6 +335,8 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "phone", label: "手机号", width: 130 },
       { prop: "skills", label: "技能", minWidth: 180 },
       { prop: "city", label: "城市", width: 100 },
+      { prop: "applicationNote", label: "申请说明", minWidth: 220 },
+      { prop: "applicationImageCount", label: "材料数", width: 80 },
       { prop: "rating", label: "评分", width: 90, type: "rate" },
       { prop: "totalOrders", label: "完成单量", width: 100 },
       { prop: "status", label: "状态", width: 90, type: "tag" },
@@ -370,6 +397,81 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "rating", label: "评分", width: 90, type: "rate" },
       { prop: "content", label: "评价内容", minWidth: 240 },
       { prop: "status", label: "状态", width: 100, type: "tag" },
+    ],
+  },
+  feedbacks: {
+    module: "feedbacks",
+    title: "问题反馈",
+    description: "处理小程序我的页面提交的问题反馈、联系方式和处理回复。",
+    searchPlaceholder: "反馈编号 / 用户 / 手机号 / 内容",
+    editable: false,
+    deletable: false,
+    rowActions: [
+      { key: "feedback_reply", label: "回复", type: "primary" },
+      { key: "feedback_processing", label: "处理中", type: "warning" },
+      { key: "feedback_close", label: "关闭", type: "info" },
+    ],
+    statusOptions: statusOptions.feedbacks,
+    columns: [
+      { prop: "feedbackNo", label: "反馈编号", minWidth: 150 },
+      { prop: "type", label: "类型", width: 110, type: "tag" },
+      { prop: "userName", label: "用户", width: 120 },
+      { prop: "userPhone", label: "用户手机", width: 130 },
+      { prop: "contactPhone", label: "联系电话", width: 130 },
+      { prop: "content", label: "反馈内容", minWidth: 260 },
+      { prop: "imageCount", label: "图片数", width: 80 },
+      { prop: "status", label: "状态", width: 100, type: "tag" },
+      { prop: "reply", label: "处理回复", minWidth: 220 },
+      { prop: "createdAt", label: "提交时间", width: 170, type: "datetime" },
+    ],
+  },
+  faqs: {
+    module: "faqs",
+    title: "常见问题",
+    description: "维护小程序常见问题分类、问答内容和展示顺序。",
+    searchPlaceholder: "分类 / 问题 / 答案",
+    primaryAction: "新增问题",
+    editable: true,
+    deletable: true,
+    statusOptions: statusOptions.active,
+    columns: [
+      { prop: "category", label: "分类", width: 130 },
+      { prop: "question", label: "问题", minWidth: 220 },
+      { prop: "answer", label: "答案", minWidth: 320 },
+      { prop: "sortOrder", label: "排序", width: 80 },
+      { prop: "status", label: "状态", width: 90, type: "tag" },
+      { prop: "updatedAt", label: "更新时间", width: 170, type: "datetime" },
+    ],
+    formItems: [
+      { prop: "category", label: "分类", type: "text", required: true },
+      { prop: "question", label: "问题", type: "text", required: true },
+      { prop: "answer", label: "答案", type: "textarea", required: true },
+      { prop: "sortOrder", label: "排序", type: "number" },
+      { prop: "status", label: "状态", type: "select", options: categoryStatusOptions },
+    ],
+  },
+  supportConfig: {
+    module: "supportConfig",
+    title: "客服配置",
+    description: "维护小程序联系客服页面展示的热线、服务咨询、服务时间和响应说明。",
+    searchPlaceholder: "客服电话 / 服务咨询",
+    editable: true,
+    deletable: false,
+    statusOptions: [{ label: "全部", value: "" }],
+    columns: [
+      { prop: "phone", label: "客服电话", width: 140 },
+      { prop: "wechatId", label: "服务咨询", width: 180 },
+      { prop: "serviceHours", label: "服务时间", width: 140 },
+      { prop: "responseTime", label: "响应说明", minWidth: 260 },
+      { prop: "onlineEnabled", label: "在线客服", width: 100, type: "tag" },
+      { prop: "updatedAt", label: "更新时间", width: 170, type: "datetime" },
+    ],
+    formItems: [
+      { prop: "phone", label: "客服电话", type: "text", required: true },
+      { prop: "wechatId", label: "服务咨询", type: "text", required: true },
+      { prop: "serviceHours", label: "服务时间", type: "text", required: true },
+      { prop: "responseTime", label: "响应说明", type: "text", required: true },
+      { prop: "onlineEnabled", label: "在线客服", type: "switch" },
     ],
   },
   homeBanners: {
@@ -564,6 +666,9 @@ const moduleEndpointMap: Record<LifeModuleKey, string> = {
   staffStatus: "staff/status",
   payments: "payments",
   reviews: "reviews",
+  feedbacks: "feedbacks",
+  faqs: "faqs",
+  supportConfig: "support-config",
   homeBanners: "home-banners",
   promotionLinks: "promotion-links",
   coupons: "coupons",
@@ -639,6 +744,21 @@ const LifeAPI = {
     });
   },
 
+  getFeedback(id: string) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/feedbacks/${id}`,
+      method: "get",
+    });
+  },
+
+  replyFeedback(id: string, data: { reply: string; status?: string }) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/feedbacks/${id}/reply`,
+      method: "post",
+      data,
+    });
+  },
+
   updateUserRole(id: string, roleType: "user" | "staff") {
     return request({
       url: `${ADMIN_BASE_URL}/users/${id}/role`,
@@ -711,6 +831,22 @@ const LifeAPI = {
     });
   },
 
+  createAdminOrder(data: AdminCreateOrderPayload) {
+    return request<unknown, OrderDetail>({
+      url: `${ADMIN_BASE_URL}/orders`,
+      method: "post",
+      data,
+    });
+  },
+
+  getOrderDispatchCheck(id: string, staffId?: string | number) {
+    return request<unknown, DispatchCheckResult>({
+      url: `${ADMIN_BASE_URL}/orders/${id}/dispatch-check`,
+      method: "get",
+      params: staffId ? { staffId } : undefined,
+    });
+  },
+
   updateOrder(id: string, data: UpdateOrderPayload) {
     return request<unknown, OrderDetail>({
       url: `${ADMIN_BASE_URL}/orders/${id}`,
@@ -769,6 +905,116 @@ const LifeAPI = {
   reviewAuditItem(id: string, data: { action: "approve" | "reject"; remark: string }) {
     return request({
       url: `${ADMIN_BASE_URL}/audits/${encodeURIComponent(id)}/review`,
+      method: "post",
+      data,
+    });
+  },
+
+  async getWithdrawRequests(queryParams: LifeQueryParams) {
+    const data = await request<unknown, ServerPageResult<AdminWithdrawRequest>>({
+      url: `${ADMIN_BASE_URL}/withdraw-requests`,
+      method: "get",
+      params: toAdminQuery(queryParams),
+    });
+    return toPageResult(data);
+  },
+
+  getWithdrawDetail(id: string | number) {
+    return request<unknown, AdminWithdrawDetail>({
+      url: `${ADMIN_BASE_URL}/withdraw-requests/${id}`,
+      method: "get",
+    });
+  },
+
+  reviewWithdrawRequest(id: string | number, data: { action: "approve" | "reject"; remark?: string; executeNow?: boolean }) {
+    return request<unknown, AdminWithdrawDetail>({
+      url: `${ADMIN_BASE_URL}/withdraw-requests/${id}/review`,
+      method: "post",
+      data,
+    });
+  },
+
+  executeWithdrawRequest(id: string | number, data?: { remark?: string; mockResult?: "success" | "failed" }) {
+    return request<unknown, AdminWithdrawDetail>({
+      url: `${ADMIN_BASE_URL}/withdraw-requests/${id}/execute`,
+      method: "post",
+      data: data || {},
+    });
+  },
+
+  retryWithdrawRequest(id: string | number, data?: { remark?: string; mockResult?: "success" | "failed" }) {
+    return request<unknown, AdminWithdrawDetail>({
+      url: `${ADMIN_BASE_URL}/withdraw-requests/${id}/retry`,
+      method: "post",
+      data: data || {},
+    });
+  },
+
+  cancelWithdrawTransfer(id: string | number) {
+    return request<unknown, AdminWithdrawDetail>({
+      url: `${ADMIN_BASE_URL}/withdraw-requests/${id}/cancel-transfer`,
+      method: "post",
+    });
+  },
+
+  queryWithdrawTransfer(id: string | number) {
+    return request<unknown, AdminWithdrawDetail>({
+      url: `${ADMIN_BASE_URL}/withdraw-requests/${id}/query-transfer`,
+      method: "post",
+    });
+  },
+
+  manualHandleWithdraw(id: string | number, data: { status: "paid" | "failed" | "cancelled" | "expired" | "manual_handling"; remark?: string; transferBillNo?: string }) {
+    return request<unknown, AdminWithdrawDetail>({
+      url: `${ADMIN_BASE_URL}/withdraw-requests/${id}/manual-handle`,
+      method: "post",
+      data,
+    });
+  },
+
+  retryRefund(id: string, data: { remark: string }) {
+    const refundId = id.includes(":") ? id.split(":").pop() : id;
+    return request({
+      url: `${ADMIN_BASE_URL}/refunds/${refundId}/retry`,
+      method: "post",
+      data,
+    });
+  },
+
+  getAfterSalesTicket(id: string) {
+    return request<unknown, AfterSalesTicket>({
+      url: `${ADMIN_BASE_URL}/after-sales/tickets/${id}`,
+      method: "get",
+    });
+  },
+
+  replyAfterSalesTicket(id: string, data: { content: string; images?: string[] }) {
+    return request<unknown, AfterSalesTicket>({
+      url: `${ADMIN_BASE_URL}/after-sales/tickets/${id}/messages`,
+      method: "post",
+      data,
+    });
+  },
+
+  resolveAfterSalesTicket(id: string, data: { remark?: string }) {
+    return request<unknown, AfterSalesTicket>({
+      url: `${ADMIN_BASE_URL}/after-sales/tickets/${id}/resolve`,
+      method: "post",
+      data,
+    });
+  },
+
+  rejectAfterSalesTicket(id: string, data: { remark?: string }) {
+    return request<unknown, AfterSalesTicket>({
+      url: `${ADMIN_BASE_URL}/after-sales/tickets/${id}/reject`,
+      method: "post",
+      data,
+    });
+  },
+
+  closeAfterSalesTicket(id: string, data: { remark?: string }) {
+    return request<unknown, AfterSalesTicket>({
+      url: `${ADMIN_BASE_URL}/after-sales/tickets/${id}/close`,
       method: "post",
       data,
     });

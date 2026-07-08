@@ -71,7 +71,7 @@ const editorConfig: Partial<IEditorConfig> = {
   MENU_CONF: {
     uploadImage: {
       async customUpload(file: File, insertFn: InsertFnType) {
-        const data = await FileAPI.uploadFile(file);
+        const data = await FileAPI.uploadFile(file, { bizType: "rich_text_image" });
         insertFn(data.displayUrl || data.signedUrl || data.url, data.name, data.url);
       },
     } as any,

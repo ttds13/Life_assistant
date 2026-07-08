@@ -1,7 +1,8 @@
 <script lang="ts" setup>
 import { getStaffProfile, updateStaffProfile } from '@/api/staff'
-import { assertImageSize, uploadImage } from '@/utils/uploadImage'
 import { useTokenStore } from '@/store/token'
+import { DEFAULT_AVATAR_URL } from '@/store/user'
+import { assertImageSize, getChooseImageErrorMessage, uploadImage } from '@/utils/uploadImage'
 
 definePage({
   style: {
@@ -15,22 +16,32 @@ const tokenStore = useTokenStore()
 
 const staffName = ref('')
 const staffPhone = ref('')
-const avatar = ref('/static/images/default-avatar.png')
+const avatar = ref(DEFAULT_AVATAR_URL)
 const verified = ref(false)
-const loading = ref(false)
 const editingName = ref(false)
 const nameInput = ref('')
 const saving = ref(false)
 
+const serviceEntries = [
+  { label: '服务区域', url: '/pages/staff/service-area' },
+  { label: '接单设置', url: '/pages/staff/work-settings' },
+  { label: '服务规则', url: '/pages/staff/service-rules' },
+]
+
+const otherEntries = [
+  { label: '通知设置', url: '/pages/staff/notifications' },
+  { label: '联系客服', url: '/pages/staff/contact-service' },
+  { label: '关于我们', url: '/pages/staff/about' },
+]
+
 function applyProfile(profile: Awaited<ReturnType<typeof getStaffProfile>>) {
   staffName.value = profile.staffName
   staffPhone.value = profile.staffPhone || profile.regionText || ''
-  avatar.value = profile.avatar || '/static/images/default-avatar.png'
+  avatar.value = profile.avatarDisplayUrl || profile.avatar || DEFAULT_AVATAR_URL
   verified.value = profile.verified
 }
 
 async function loadProfile() {
-  loading.value = true
   try {
     const profile = await getStaffProfile()
     applyProfile(profile)
@@ -38,9 +49,10 @@ async function loadProfile() {
   catch {
     uni.showToast({ icon: 'none', title: '加载失败' })
   }
-  finally {
-    loading.value = false
-  }
+}
+
+function navigate(url: string) {
+  uni.navigateTo({ url })
 }
 
 function onEditName() {
@@ -77,7 +89,7 @@ function onCancelName() {
   editingName.value = false
 }
 
-async function onChooseAvatar() {
+function onChooseAvatar() {
   uni.chooseImage({
     count: 1,
     sizeType: ['compressed'],
@@ -103,10 +115,12 @@ async function onChooseAvatar() {
         saving.value = false
       }
     },
+    fail: (err) => {
+      const message = getChooseImageErrorMessage(err, '选择头像失败')
+      if (message)
+        uni.showToast({ icon: 'none', title: message })
+    },
   })
-}
-function onTodo(title: string) {
-  uni.showToast({ icon: 'none', title: `${title}当前不可用` })
 }
 
 function onLogout() {
@@ -127,19 +141,17 @@ function onLogout() {
 }
 
 onShow(() => {
-  loadProfile()
+  void loadProfile()
 })
 </script>
 
 <template>
   <view class="min-h-screen bg-[#F5F7FA] pb-[60rpx]">
-    <!-- 个人信息卡片 -->
     <view class="mx-4 mt-4 bg-white rounded-[24rpx] shadow-sm overflow-hidden">
       <view class="px-4 py-3">
         <text class="text-[28rpx] text-[#9CA3AF] font-500">个人信息</text>
       </view>
 
-      <!-- 头像 -->
       <view class="flex items-center justify-between px-4 py-4 border-t border-[#F3F4F6]" @tap="onChooseAvatar">
         <text class="text-[30rpx] text-[#1F2937]">头像</text>
         <view class="flex items-center gap-3">
@@ -150,7 +162,6 @@ onShow(() => {
         </view>
       </view>
 
-      <!-- 姓名 -->
       <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="onEditName">
         <text class="text-[30rpx] text-[#1F2937]">姓名</text>
         <view class="flex items-center gap-2">
@@ -159,16 +170,12 @@ onShow(() => {
         </view>
       </view>
 
-      <!-- 手机号 -->
       <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]">
         <text class="text-[30rpx] text-[#1F2937]">手机号</text>
-        <view class="flex items-center gap-2">
-          <text class="text-[28rpx] text-[#6B7280]">{{ staffPhone || '未设置' }}</text>
-        </view>
+        <text class="text-[28rpx] text-[#6B7280]">{{ staffPhone || '未设置' }}</text>
       </view>
 
-      <!-- 认证状态 -->
-      <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="onTodo('资料认证')">
+      <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="navigate('/pages/staff/verification')">
         <text class="text-[30rpx] text-[#1F2937]">认证状态</text>
         <view class="flex items-center gap-2">
           <view
@@ -182,45 +189,36 @@ onShow(() => {
       </view>
     </view>
 
-    <!-- 服务设置 -->
     <view class="mx-4 mt-3 bg-white rounded-[24rpx] shadow-sm overflow-hidden">
       <view class="px-4 py-3">
         <text class="text-[28rpx] text-[#9CA3AF] font-500">服务设置</text>
       </view>
-      <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="onTodo('服务区域')">
-        <text class="text-[30rpx] text-[#1F2937]">服务区域</text>
-        <text class="i-carbon-chevron-right text-[32rpx] text-[#C4C8D0]" />
-      </view>
-      <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="onTodo('接单设置')">
-        <text class="text-[30rpx] text-[#1F2937]">接单设置</text>
-        <text class="i-carbon-chevron-right text-[32rpx] text-[#C4C8D0]" />
-      </view>
-      <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="onTodo('服务规则')">
-        <text class="text-[30rpx] text-[#1F2937]">服务规则</text>
+      <view
+        v-for="item in serviceEntries"
+        :key="item.label"
+        class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]"
+        @tap="navigate(item.url)"
+      >
+        <text class="text-[30rpx] text-[#1F2937]">{{ item.label }}</text>
         <text class="i-carbon-chevron-right text-[32rpx] text-[#C4C8D0]" />
       </view>
     </view>
 
-    <!-- 其他 -->
     <view class="mx-4 mt-3 bg-white rounded-[24rpx] shadow-sm overflow-hidden">
       <view class="px-4 py-3">
         <text class="text-[28rpx] text-[#9CA3AF] font-500">其他</text>
       </view>
-      <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="onTodo('通知设置')">
-        <text class="text-[30rpx] text-[#1F2937]">通知设置</text>
-        <text class="i-carbon-chevron-right text-[32rpx] text-[#C4C8D0]" />
-      </view>
-      <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="onTodo('联系客服')">
-        <text class="text-[30rpx] text-[#1F2937]">联系客服</text>
-        <text class="i-carbon-chevron-right text-[32rpx] text-[#C4C8D0]" />
-      </view>
-      <view class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]" @tap="onTodo('关于我们')">
-        <text class="text-[30rpx] text-[#1F2937]">关于我们</text>
+      <view
+        v-for="item in otherEntries"
+        :key="item.label"
+        class="flex items-center justify-between px-4 py-[28rpx] border-t border-[#F3F4F6]"
+        @tap="navigate(item.url)"
+      >
+        <text class="text-[30rpx] text-[#1F2937]">{{ item.label }}</text>
         <text class="i-carbon-chevron-right text-[32rpx] text-[#C4C8D0]" />
       </view>
     </view>
 
-    <!-- 退出登录 -->
     <view class="mx-4 mt-6">
       <button
         class="w-full h-[88rpx] bg-white text-[30rpx] text-[#EF4444] rounded-[24rpx] center shadow-sm font-500"
@@ -230,7 +228,6 @@ onShow(() => {
       </button>
     </view>
 
-    <!-- 编辑姓名弹窗 -->
     <view
       v-if="editingName"
       class="fixed inset-0 z-50 flex items-end"

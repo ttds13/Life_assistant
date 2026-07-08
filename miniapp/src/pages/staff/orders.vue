@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import type { StaffOrderFilter, StaffTask } from '@/api/types/staff'
-import { acceptStaffTask, checkinStaffTask, claimStaffTask, completeStaffTask, getStaffTasks, rejectStaffTask, startStaffTask } from '@/api/staff'
+import { acceptStaffTask, checkinStaffTask, completeStaffTask, getStaffTasks, rejectStaffTask, startStaffTask } from '@/api/staff'
 
 definePage({
   style: {
@@ -34,40 +34,59 @@ function onTabTap(value: StaffOrderFilter) {
 }
 
 function onTaskTap(task: StaffTask) {
-  uni.navigateTo({ url: `/pages/staff/order-detail?id=${task.id}&group=${task.group}` })
+  uni.navigateTo({ url: `/pages/staff/order-detail?id=${task.id}` })
+}
+
+function chooseActualMinutes(task: StaffTask) {
+  return new Promise<number | undefined>((resolve) => {
+    if (!(task.memberCardName && task.serviceCardType === 'time')) {
+      resolve(undefined)
+      return
+    }
+    const planned = task.plannedConsumeUnits || task.memberCardConsumeUnits || 120
+    const half = Math.max(60, Math.ceil(planned / 2))
+    uni.showActionSheet({
+      itemList: [`${half} 分钟`, `${planned} 分钟`],
+      success: res => resolve(res.tapIndex === 0 ? half : planned),
+      fail: () => resolve(undefined),
+    })
+  })
+}
+
+async function completeTask(task: StaffTask) {
+  if (!task.photos?.length) {
+    uni.showToast({ icon: 'none', title: '请先上传服务照片' })
+    uni.navigateTo({ url: `/pages/staff/upload-photos?id=${task.id}` })
+    return
+  }
+  const actualMinutes = await chooseActualMinutes(task)
+  if (task.memberCardName && task.serviceCardType === 'time' && !actualMinutes)
+    return
+
+  await completeStaffTask(task.id, {
+    version: task.version,
+    actualMinutes,
+    photoUrls: task.photos.map(photo => photo.ossUrl || photo.url),
+  })
+  uni.showToast({ icon: 'success', title: '已提交' })
+  loadTasks()
 }
 
 async function runPrimary(task: StaffTask) {
   if (task.status === 'pending_accept') {
-    if (task.group === 'grab') {
-      await claimStaffTask(task.id, task.version)
-      uni.showToast({ icon: 'success', title: '领取成功' })
-    }
-    else {
-      await acceptStaffTask(task.id)
-      uni.showToast({ icon: 'success', title: '已接单' })
-    }
+    await acceptStaffTask(task.id)
+    uni.showToast({ icon: 'success', title: '已接单' })
   }
   else if (task.status === 'accepted') {
     await checkinStaffTask(task.id, task.version)
-    uni.showToast({ icon: 'success', title: '已打卡' })
+    uni.showToast({ icon: 'success', title: '已出发' })
   }
   else if (task.status === 'on_the_way') {
     await startStaffTask(task.id, task.version)
     uni.showToast({ icon: 'success', title: '已开始' })
   }
   else if (task.status === 'in_service') {
-    uni.showModal({
-      title: '完成服务',
-      content: '确认已完成现场服务吗？',
-      success: async (res) => {
-        if (!res.confirm)
-          return
-        await completeStaffTask(task.id, { version: task.version, photoUrls: task.photos?.map(photo => photo.ossUrl || photo.url) || [] })
-        uni.showToast({ icon: 'success', title: '已提交' })
-        loadTasks()
-      },
-    })
+    await completeTask(task)
     return
   }
   else {
@@ -82,10 +101,10 @@ function onPrimary(task: StaffTask) {
 }
 
 function onSecondary(task: StaffTask) {
-  if (task.status === 'pending_accept' && task.group === 'dispatch') {
+  if (task.status === 'pending_accept') {
     uni.showModal({
       title: '拒单确认',
-      content: '确定拒绝该订单吗？',
+      content: '确定拒绝这笔订单吗？',
       success: async (res) => {
         if (!res.confirm)
           return

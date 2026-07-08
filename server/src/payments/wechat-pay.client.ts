@@ -10,6 +10,16 @@ import type {
   WechatNotifyHeaders,
   WechatNotifyResult,
   WechatPaymentParams,
+  WechatRefundNotify,
+  WechatRefundNotifyResult,
+  WechatRefundRequest,
+  WechatRefundResponse,
+  WechatTransferCancelResponse,
+  WechatTransferNotify,
+  WechatTransferNotifyResult,
+  WechatTransferQueryResponse,
+  WechatTransferRequest,
+  WechatTransferResponse,
   WechatTransactionNotify,
 } from './wechat-pay.types'
 
@@ -37,6 +47,65 @@ export class WechatPayClient {
     }
 
     return this.requestWechat<WechatJsapiOrderResponse>('POST', '/v3/pay/transactions/jsapi', body)
+  }
+
+  async createRefund(input: WechatRefundRequest): Promise<WechatRefundResponse> {
+    const config = this.payConfig.getWechatConfig()
+    const notifyUrl = input.notifyUrl || config.refundNotifyUrl
+    const body = {
+      out_trade_no: input.paymentNo,
+      out_refund_no: input.refundNo,
+      reason: input.reason?.slice(0, 80),
+      notify_url: notifyUrl,
+      amount: {
+        refund: input.amountFen,
+        total: input.totalFen,
+        currency: 'CNY',
+      },
+    }
+
+    return this.requestWechat<WechatRefundResponse>('POST', '/v3/refund/domestic/refunds', body)
+  }
+
+  async createMerchantTransfer(input: WechatTransferRequest): Promise<WechatTransferResponse> {
+    const config = this.payConfig.getWechatConfig()
+    const transferSceneId = input.transferSceneId || config.transferSceneId
+    if (!transferSceneId) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'WECHAT_TRANSFER_SCENE_ID is required', 500)
+    }
+
+    const body: Record<string, unknown> = {
+      appid: config.appid,
+      out_bill_no: input.outBillNo,
+      transfer_scene_id: transferSceneId,
+      openid: input.openid,
+      transfer_amount: input.amountFen,
+      transfer_remark: input.remark.slice(0, 32),
+      notify_url: input.notifyUrl || config.transferNotifyUrl,
+      transfer_scene_report_infos: input.sceneReportInfos?.length
+        ? input.sceneReportInfos
+        : [
+            { info_type: '岗位类型', info_content: '服务师傅' },
+            { info_type: '报酬说明', info_content: '服务订单结算提现' },
+          ],
+    }
+    if (input.userNameEncrypted) {
+      body.user_name = input.userNameEncrypted
+    }
+
+    return this.requestWechat<WechatTransferResponse>('POST', '/v3/fund-app/mch-transfer/transfer-bills', body)
+  }
+
+  async queryMerchantTransferByOutBillNo(outBillNo: string): Promise<WechatTransferQueryResponse> {
+    const config = this.payConfig.getWechatConfig()
+    const path = `/v3/fund-app/mch-transfer/transfer-bills/out-bill-no/${encodeURIComponent(outBillNo)}?appid=${encodeURIComponent(config.appid)}`
+    return this.requestWechat<WechatTransferQueryResponse>('GET', path)
+  }
+
+  async cancelMerchantTransfer(outBillNo: string): Promise<WechatTransferCancelResponse> {
+    const config = this.payConfig.getWechatConfig()
+    const path = `/v3/fund-app/mch-transfer/transfer-bills/out-bill-no/${encodeURIComponent(outBillNo)}/cancel`
+    return this.requestWechat<WechatTransferCancelResponse>('POST', path, { appid: config.appid })
   }
 
   buildMiniProgramPaymentParams(prepayId: string): WechatPaymentParams {
@@ -72,6 +141,44 @@ export class WechatPayClient {
 
     const transaction = this.decryptResource(body.resource) as WechatTransactionNotify
     return { body, transaction }
+  }
+
+  parseRefundNotify(rawBody: string, headers: WechatNotifyHeaders): WechatRefundNotifyResult {
+    this.verifyNotifySignature(rawBody, headers)
+
+    let body: WechatNotifyBody
+    try {
+      body = JSON.parse(rawBody) as WechatNotifyBody
+    }
+    catch {
+      throw new BusinessException(ErrorCode.PAYMENT_STATUS_INVALID, 'invalid wechat refund notify json', 400)
+    }
+
+    if (!body.resource) {
+      throw new BusinessException(ErrorCode.PAYMENT_STATUS_INVALID, 'wechat refund notify resource missing', 400)
+    }
+
+    const refund = this.decryptResource(body.resource) as WechatRefundNotify
+    return { body, refund }
+  }
+
+  parseTransferNotify(rawBody: string, headers: WechatNotifyHeaders): WechatTransferNotifyResult {
+    this.verifyNotifySignature(rawBody, headers)
+
+    let body: WechatNotifyBody
+    try {
+      body = JSON.parse(rawBody) as WechatNotifyBody
+    }
+    catch {
+      throw new BusinessException(ErrorCode.PAYMENT_STATUS_INVALID, 'invalid wechat transfer notify json', 400)
+    }
+
+    if (!body.resource) {
+      throw new BusinessException(ErrorCode.PAYMENT_STATUS_INVALID, 'wechat transfer notify resource missing', 400)
+    }
+
+    const transfer = this.decryptResource(body.resource) as WechatTransferNotify
+    return { body, transfer }
   }
 
   private async requestWechat<T>(method: 'POST' | 'GET', apiPath: string, body?: unknown): Promise<T> {

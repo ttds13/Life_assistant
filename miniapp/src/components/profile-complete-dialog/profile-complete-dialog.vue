@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { assertImageSize } from '@/utils/uploadImage'
+import { assertImageSize, getChooseImageErrorMessage } from '@/utils/uploadImage'
 
 const props = defineProps<{
   visible: boolean
@@ -60,8 +60,10 @@ function onChooseLocalAvatar() {
       uni.showToast({ icon: 'none', title: '头像已选择' })
     },
     fail: (err) => {
-      if (!String(err?.errMsg || '').includes('cancel'))
-        uni.showToast({ icon: 'none', title: '选择头像失败' })
+      const message = getChooseImageErrorMessage(err, '选择头像失败')
+      if (message) {
+        uni.showToast({ icon: 'none', title: message })
+      }
     },
   })
 }

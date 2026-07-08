@@ -14,7 +14,7 @@
  * 注意事项:
  *   1. 确保已在微信公众平台开通 "小程序代码上传" 权限
  *   2. 确保私钥文件存在（private.${appid}.key），并且配置了上传IP白名单
- *   3. 上传前会自动执行 build:mp:prod 构建 并跳过打开开发者工具
+ *   3. 上传前会自动执行 build:mp:online 构建 并跳过打开开发者工具
  *   4. 秘钥文件的appid(VITE_WX_APPID)需要与微信公众平台的小程序appid一致
  */
 
@@ -162,7 +162,7 @@ async function main() {
   console.log('\n🚀 开始微信小程序上传流程...\n')
 
   const params = parseArgs()
-  const env = loadEnvFile('production')
+  const env = loadEnvFile('online')
   const appid = env.VITE_WX_APPID
 
   if (!appid) {
@@ -181,7 +181,7 @@ async function main() {
   // 构建小程序（跳过自动打开开发者工具）
   console.log('\n📦 正在构建小程序...（跳过自动打开开发者工具）\n')
   try {
-    execSync('pnpm build:mp:prod', {
+    execSync('pnpm build:mp:online', {
       cwd: ROOT_DIR,
       stdio: 'inherit',
       env: {

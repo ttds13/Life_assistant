@@ -1,5 +1,6 @@
 import type { Service } from './services'
 import type { UserAddress } from './address'
+import type { AfterSalesTicket } from './afterSales'
 
 export type OrderStatus =
   | 'pending_payment'
@@ -59,6 +60,8 @@ export interface UserOrder {
   staffId?: number | null
   serviceCode?: string
   serviceName: string
+  serviceCardType?: 'none' | 'time' | 'times' | 'consultation' | string
+  serviceConsumeUnit?: number
   serviceImage?: string
   serviceImageOssUrl?: string
   appointmentStartTime?: string
@@ -74,9 +77,19 @@ export interface UserOrder {
   staffRating?: number
   memberCardId?: number | null
   memberCardConsumeUnits?: number
+  memberCardName?: string
+  memberCardUnitName?: string
+  plannedConsumeUnits?: number
+  actualConsumeUnits?: number
+  releasedUnits?: number
+  frozenUnits?: number
   orderType?: string
   paidAt?: string | null
   completedAt?: string | null
+  acceptedAt?: string | null
+  onTheWayAt?: string | null
+  checkinAt?: string | null
+  startedAt?: string | null
   cancelledAt?: string | null
   cancelReason?: string
   createdAt: string
@@ -89,6 +102,21 @@ export interface OrderStatusLog {
   active: boolean
 }
 
+export interface OrderRefund {
+  id: number
+  refundNo: string
+  amount: number
+  reason: string
+  status: 'pending' | 'approved' | 'processing' | 'refunded' | 'failed' | 'rejected' | 'cancelled' | string
+  channel?: string
+  channelRefundNo?: string
+  failureReason?: string
+  reviewedAt?: string | null
+  processedAt?: string | null
+  refundedAt?: string | null
+  createdAt: string
+}
+
 export interface OrderDetail extends UserOrder {
   version: number
   service?: Service
@@ -96,9 +124,45 @@ export interface OrderDetail extends UserOrder {
   paymentMethod?: string
   statusLogs: OrderStatusLog[]
   amountItems: AmountDetailItem[]
+  refunds?: OrderRefund[]
+  latestRefund?: OrderRefund | null
+  tickets?: AfterSalesTicket[]
+  latestTicket?: AfterSalesTicket | null
   servicePhotos?: string[]
   servicePhotoUrls?: string[]
   servicePhotoOssUrls?: string[]
+  memberCard?: {
+    id: number
+    cardId: number
+    name: string
+    cardType: string
+    unitName: string
+    unitMinutes: number
+    remainingUnits: number
+    frozenUnits: number
+    status: string
+  } | null
+  memberCardRecords?: Array<{
+    id: number
+    userMemberCardId: number
+    orderId: number | null
+    recordType: string
+    timesUsed: number
+    units: number
+    beforeUnits?: number | null
+    afterUnits?: number | null
+    operatorType?: string
+    operatorId?: number | null
+    remark?: string
+    createdAt: string
+    card?: {
+      id: number
+      name: string
+      cardType: string
+      unitName: string
+      unitMinutes: number
+    }
+  }>
 }
 
 export interface QueryOrdersParams {

@@ -81,7 +81,7 @@ export class OrderTransitionService {
         const result = await tx.order.updateMany({
           where: {
             id: order.id,
-            status: expectedStatus,
+            status: Array.isArray(expectedStatus) ? { in: expectedStatus } : expectedStatus,
             version: order.version,
           },
           data,
@@ -101,7 +101,7 @@ export class OrderTransitionService {
       await tx.orderStatusLog.create({
         data: {
           orderId: order.id,
-          fromStatus: expectedStatus,
+          fromStatus: order.status,
           toStatus: rule.to,
           operatorType: params.operatorType,
           operatorId: params.operatorId,
@@ -142,8 +142,9 @@ export class OrderTransitionService {
     return tx.order.findUnique({ where: { id: orderId } })
   }
 
-  private assertExpectedStatus(actual: string, expected: OrderStatus) {
-    if (actual !== expected) {
+  private assertExpectedStatus(actual: string, expected: OrderStatus | OrderStatus[]) {
+    const matched = Array.isArray(expected) ? expected.includes(actual as OrderStatus) : actual === expected
+    if (!matched) {
       throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order status changed, refresh and retry', 409)
     }
   }

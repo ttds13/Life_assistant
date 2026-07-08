@@ -1,13 +1,19 @@
 <script lang="ts" setup>
 import type { UploadImageItem } from '@/api/types/staff'
-import { assertImageSize, uploadImage } from '@/utils/uploadImage'
+import { assertImageSize, getChooseImageErrorMessage, uploadImage } from '@/utils/uploadImage'
 
 const props = withDefaults(defineProps<{
   modelValue: UploadImageItem[]
   maxCount?: number
+  bizType?: string
+  bizId?: number | string
+  maxSizeMb?: number
   readonly?: boolean
 }>(), {
   maxCount: 9,
+  bizType: '',
+  bizId: undefined,
+  maxSizeMb: 5,
   readonly: false,
 })
 
@@ -33,6 +39,10 @@ function updateItem(id: number | string | undefined, patch: Partial<UploadImageI
 function onAdd() {
   if (!canAdd.value)
     return
+  if (!props.bizType) {
+    uni.showToast({ icon: 'none', title: '鍥剧墖绫诲瀷缂哄け' })
+    return
+  }
 
   uni.chooseImage({
     count: props.maxCount - props.modelValue.length,
@@ -41,7 +51,7 @@ function onAdd() {
     success: async (res) => {
       const paths = Array.isArray(res.tempFilePaths) ? res.tempFilePaths : [res.tempFilePaths]
       const tempFiles = Array.isArray(res.tempFiles) ? res.tempFiles : []
-      if (tempFiles.some(file => !assertImageSize(file.size)))
+      if (tempFiles.some(file => !assertImageSize(file.size, props.maxSizeMb * 1024 * 1024)))
         return
 
       const files: UploadImageItem[] = paths.map((url, index) => ({
@@ -57,8 +67,14 @@ function onAdd() {
 
       await Promise.all(files.map(async (item) => {
         try {
-          const uploaded = await uploadImage({ filePath: item.url, bizType: 'order_photo' })
+          const uploaded = await uploadImage({
+            filePath: item.url,
+            bizType: props.bizType,
+            bizId: props.bizId,
+          })
           updateItem(item.id, {
+            fileId: uploaded.id,
+            uuid: uploaded.uuid,
             url: uploaded.url,
             ossUrl: uploaded.url,
             displayUrl: uploaded.displayUrl || uploaded.url,
@@ -69,6 +85,11 @@ function onAdd() {
           updateItem(item.id, { status: 'error' })
         }
       }))
+    },
+    fail: (err) => {
+      const message = getChooseImageErrorMessage(err, '选择图片失败')
+      if (message)
+        uni.showToast({ icon: 'none', title: message })
     },
   })
 }

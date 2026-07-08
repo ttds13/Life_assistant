@@ -5,11 +5,16 @@ export interface PointRule {
 }
 
 export interface PointEarnRecord {
+  id?: number
   orderId: number
   orderNo: string
+  type?: string
   amount: number
   points: number
+  balanceAfter?: number
+  remark?: string
   earnedAt: string
+  createdAt?: string
 }
 
 export interface UserPointsSummary {
@@ -20,4 +25,17 @@ export interface UserPointsSummary {
   recentEarned: PointEarnRecord[]
   recentTotalAmount: number
   recentTotalPoints: number
+}
+
+export interface PointLedgerRecord {
+  id: number
+  orderId: number | null
+  orderNo: string
+  type: string
+  points: number
+  amount: number
+  balanceAfter: number
+  remark: string
+  earnedAt: string
+  createdAt: string
 }

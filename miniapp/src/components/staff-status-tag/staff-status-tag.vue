@@ -11,7 +11,7 @@ const props = withDefaults(defineProps<{
 const statusMap: Record<StaffTaskStatus, { text: string, className: string }> = {
   pending_accept: { text: '待接单', className: 'bg-[#FFF7ED] text-[#F59E0B]' },
   accepted: { text: '已接单', className: 'bg-[#EAF3FF] text-[#1677FF]' },
-  on_the_way: { text: '上门中', className: 'bg-[#EAF3FF] text-[#1677FF]' },
+  on_the_way: { text: '已出发', className: 'bg-[#EAF3FF] text-[#1677FF]' },
   in_service: { text: '服务中', className: 'bg-[#EAF3FF] text-[#1677FF]' },
   pending_confirm: { text: '待确认', className: 'bg-[#FFF7ED] text-[#F59E0B]' },
   completed: { text: '已完成', className: 'bg-[#ECFDF5] text-[#16A34A]' },

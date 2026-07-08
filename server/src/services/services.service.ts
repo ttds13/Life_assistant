@@ -90,7 +90,8 @@ export class ServicesService {
     const imageUrl = this.storage.signNullableUrl(imageOssUrl) || imageOssUrl
     return {
       ...serialized,
-      subtitle: typeof serialized.subtitle === 'string' ? serialized.subtitle : '',
+      title: '',
+      subtitle: '',
       linkType: typeof serialized.linkType === 'string' ? serialized.linkType : 'none',
       linkValue: typeof serialized.linkValue === 'string' ? serialized.linkValue : '',
       imageUrl,

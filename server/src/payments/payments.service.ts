@@ -10,6 +10,7 @@ import { ORDER_TYPE } from '../orders/constants/order-type'
 import { OrderTransitionService } from '../orders/order-transition.service'
 import { OrdersRepository } from '../orders/orders.repository'
 import { presentOrderDetail } from '../orders/order-presenter'
+import { UsersService } from '../users/users.service'
 import { PAYMENT_CHANNEL, PaymentChannel } from './constants/payment-channel'
 import { PAYMENT_STATUS } from './constants/payment-status'
 import { PaymentsRepository } from './payments.repository'
@@ -27,6 +28,7 @@ export class PaymentsService {
     @Inject(WechatPayConfig) private readonly payConfig: WechatPayConfig,
     @Inject(WechatPayClient) private readonly wechatPay: WechatPayClient,
     @Inject(MemberCardsService) private readonly memberCards: MemberCardsService,
+    @Inject(UsersService) private readonly users: UsersService,
   ) {}
 
   async createPayment(userId: number, orderId: number, requestId?: string) {
@@ -336,6 +338,8 @@ export class PaymentsService {
         })
       },
     })
+
+    await this.users.ensureEarnedPointsForOrder(payment.orderId)
   }
 
   private async markMemberCardPurchasePaymentSuccess(

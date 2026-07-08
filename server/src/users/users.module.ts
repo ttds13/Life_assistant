@@ -18,6 +18,6 @@ import { UsersService } from './users.service'
   ],
   controllers: [UsersController],
   providers: [UsersRepository, UsersService, JwtAuthGuard],
-  exports: [UsersRepository],
+  exports: [UsersRepository, UsersService],
 })
 export class UsersModule {}

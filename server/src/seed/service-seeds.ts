@@ -11,6 +11,7 @@ export interface ServiceSeed {
   cardType?: ServiceCardType
   consumeUnit?: number | null
   consultationRequired?: boolean
+  coverImage?: string
 }
 
 export const categorySeeds = [
@@ -24,6 +25,8 @@ export const categorySeeds = [
   { key: 'home_repair', name: '水电维修', icon: 'i-carbon-tool-box', sortOrder: 8 },
 ]
 
+const serviceCoverBaseUrl = 'https://gym-face-bucket.oss-cn-shenzhen.aliyuncs.com/life-assitant/dev/service_cover/admin/generated/2026/07'
+
 export const serviceSeeds: ServiceSeed[] = [
   {
     categoryKey: 'campaign',
@@ -35,6 +38,7 @@ export const serviceSeeds: ServiceSeed[] = [
     durationMinutes: 120,
     cardType: 'time',
     consumeUnit: 120,
+    coverImage: `${serviceCoverBaseUrl}/daily-cleaning-trial.png`,
   },
   {
     categoryKey: 'campaign',
@@ -45,6 +49,7 @@ export const serviceSeeds: ServiceSeed[] = [
     sortOrder: 2,
     cardType: 'times',
     consumeUnit: 1,
+    coverImage: `${serviceCoverBaseUrl}/water-heater-cleaning-trial.png`,
   },
   {
     categoryKey: 'daily_cleaning',
@@ -56,6 +61,7 @@ export const serviceSeeds: ServiceSeed[] = [
     durationMinutes: 120,
     cardType: 'time',
     consumeUnit: 120,
+    coverImage: `${serviceCoverBaseUrl}/daily-cleaning-2h.png`,
   },
   {
     categoryKey: 'daily_cleaning',
@@ -67,6 +73,7 @@ export const serviceSeeds: ServiceSeed[] = [
     durationMinutes: 180,
     cardType: 'time',
     consumeUnit: 180,
+    coverImage: `${serviceCoverBaseUrl}/daily-cleaning-3h.png`,
   },
   {
     categoryKey: 'daily_cleaning',
@@ -78,6 +85,7 @@ export const serviceSeeds: ServiceSeed[] = [
     durationMinutes: 240,
     cardType: 'time',
     consumeUnit: 240,
+    coverImage: `${serviceCoverBaseUrl}/daily-cleaning-4h.png`,
   },
   {
     categoryKey: 'daily_cleaning',
@@ -88,6 +96,7 @@ export const serviceSeeds: ServiceSeed[] = [
     sortOrder: 6,
     cardType: 'times',
     consumeUnit: 1,
+    coverImage: `${serviceCoverBaseUrl}/kitchen-bathroom-cleaning.png`,
   },
   {
     categoryKey: 'appliance_cleaning',

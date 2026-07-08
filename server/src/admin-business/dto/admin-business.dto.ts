@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer'
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator'
+import { ArrayMaxSize, IsArray, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator'
 
 function toOptionalNumber(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined
@@ -113,4 +113,10 @@ export class AdminTicketMessageDto {
   @IsString()
   @Transform(({ value }) => String(value || '').trim())
   content: string
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @IsString({ each: true })
+  images?: string[]
 }

@@ -11,6 +11,7 @@ export const USER_MEMBER_CARD_STATUS = {
   EXPIRED: 'expired',
   USED_UP: 'used_up',
   DISABLED: 'disabled',
+  REFUNDED: 'refunded',
 } as const
 
 export const MEMBER_CARD_RECORD_TYPE = {
@@ -18,4 +19,5 @@ export const MEMBER_CARD_RECORD_TYPE = {
   FREEZE: 'freeze',
   CONSUME: 'consume',
   RELEASE: 'release',
+  REFUND_REVOKE: 'refund_revoke',
 } as const

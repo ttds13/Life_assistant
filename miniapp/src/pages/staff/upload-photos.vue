@@ -14,7 +14,7 @@ const remark = ref('')
 const submitting = ref(false)
 
 async function loadPhotos() {
-  const task = await getStaffTaskDetail(taskId.value || 901)
+  const task = await getStaffTaskDetail(taskId.value)
   photos.value = (task.photos || []).map(item => ({
     id: item.id,
     url: item.ossUrl || item.url,
@@ -30,9 +30,18 @@ async function onSubmit() {
     uni.showToast({ icon: 'none', title: '请先添加服务照片' })
     return
   }
+  if (photos.value.some(item => item.status === 'uploading')) {
+    uni.showToast({ icon: 'none', title: '图片上传中' })
+    return
+  }
+  if (photos.value.some(item => item.status === 'error' || !(item.ossUrl || item.url))) {
+    uni.showToast({ icon: 'none', title: '请删除上传失败图片' })
+    return
+  }
+
   submitting.value = true
   try {
-    await uploadStaffOrderPhotos(taskId.value, photos.value.map((item, index) => ({
+    await uploadStaffOrderPhotos(taskId.value, photos.value.slice(0, 6).map((item, index) => ({
       id: item.id || index,
       url: item.ossUrl || item.url,
       ossUrl: item.ossUrl || item.url,
@@ -41,7 +50,7 @@ async function onSubmit() {
       remark: remark.value,
       createdAt: '刚刚',
     })))
-    uni.showToast({ icon: 'success', title: '已提交' })
+    uni.showToast({ icon: 'success', title: '已保存' })
     setTimeout(() => uni.navigateBack(), 400)
   }
   finally {
@@ -50,8 +59,9 @@ async function onSubmit() {
 }
 
 onLoad((query) => {
-  taskId.value = Number(query?.id || 901)
-  loadPhotos()
+  taskId.value = Number(query?.id || 0)
+  if (taskId.value)
+    loadPhotos()
 })
 </script>
 
@@ -60,17 +70,17 @@ onLoad((query) => {
     <view class="mx-[24rpx] rounded-[28rpx] bg-white p-[32rpx]">
       <text class="block text-[34rpx] text-[#1F2937] font-700">上传说明</text>
       <text class="block mt-[14rpx] text-[26rpx] leading-[38rpx] text-[#6B7280]">
-        请上传服务前、服务中或服务后的现场照片，照片用于服务凭证和后续验收。
+        请上传服务现场照片，完成服务前至少需要 1 张，最多 6 张。照片会先上传到服务器，完成服务时随订单一起提交。
       </text>
     </view>
 
     <view class="mx-[24rpx] mt-[24rpx] rounded-[28rpx] bg-white p-[32rpx]">
       <view class="flex items-baseline justify-between">
         <text class="text-[34rpx] text-[#1F2937] font-700">服务照片</text>
-        <text class="text-[24rpx] text-[#9CA3AF]">{{ photos.length }}/9</text>
+        <text class="text-[24rpx] text-[#9CA3AF]">{{ photos.length }}/6</text>
       </view>
       <view class="mt-[26rpx]">
-        <upload-image-grid v-model="photos" :max-count="9" />
+        <upload-image-grid v-model="photos" :max-count="6" biz-type="service_finish_photo" :biz-id="taskId" />
       </view>
     </view>
 
@@ -86,10 +96,9 @@ onLoad((query) => {
 
     <bottom-action-bar
       primary-color="red"
-      primary-text="提交照片"
+      primary-text="保存照片"
       :loading="submitting"
       @primary="onSubmit"
     />
   </view>
 </template>
-

@@ -14,7 +14,7 @@ export class CompleteServiceDto {
 
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(12)
+  @ArrayMaxSize(6)
   @IsString({ each: true })
   photoUrls?: string[]
 

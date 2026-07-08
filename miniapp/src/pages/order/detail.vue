@@ -43,6 +43,10 @@ const statusInfo = computed(() => {
       return { title: '已取消', desc: '该订单已取消', next: '可再次预约服务' }
     case 'refund_pending':
       return { title: '退款审核中', desc: '已提交退款审核，请等待后台处理', next: '下一步：等待退款审核' }
+    case 'refunded':
+      return { title: '已退款', desc: '订单退款已完成', next: '退款到账时间以支付渠道为准' }
+    case 'after_sales':
+      return { title: '售后中', desc: '订单正在售后处理中', next: '请等待平台处理结果' }
     default:
       return { title: getOrderStatusText(status), desc: '订单状态待刷新', next: '请稍后查看' }
   }
@@ -56,9 +60,11 @@ const actionConfig = computed(() => {
     case 'pending_dispatch':
       return { primary: '查看进度', secondary: '取消预约' }
     case 'pending_confirm':
-      return { primary: '确认完成', secondary: '申请售后' }
+      return { primary: '确认完成', secondary: activeTicket.value ? '查看售后' : '申请售后' }
     case 'completed':
-      return { primary: '去评价', secondary: '申请售后' }
+      return { primary: '去评价', secondary: activeTicket.value ? '查看售后' : '申请售后' }
+    case 'after_sales':
+      return { primary: activeTicket.value || latestTicket.value ? '查看售后' : '申请售后', secondary: '' }
     case 'cancelled':
       return { primary: '再次预约', secondary: '' }
     default:
@@ -79,6 +85,44 @@ const isPaidCashBooking = computed(() =>
   && !order.value.memberCardId
   && (Boolean(order.value.paidAt) || order.value.paidAmount > 0 || order.value.payableAmount > 0),
 )
+const latestRefund = computed(() => order.value?.latestRefund || order.value?.refunds?.[0] || null)
+const latestTicket = computed(() => order.value?.latestTicket || order.value?.tickets?.[0] || null)
+const activeTicket = computed(() => {
+  const ticket = latestTicket.value
+  return ticket && ['open', 'pending'].includes(ticket.status) ? ticket : null
+})
+const canAfterSales = computed(() =>
+  !!order.value
+  && ['accepted', 'on_the_way', 'in_service', 'pending_confirm', 'completed', 'after_sales'].includes(order.value.status),
+)
+const refundStatusInfo = computed(() => {
+  const refund = latestRefund.value
+  if (!refund)
+    return null
+  const map: Record<string, { title: string, desc: string, className: string }> = {
+    pending: { title: '退款审核中', desc: '退款申请已提交，等待后台审核。', className: 'bg-[#FFF7ED] text-[#AD6800]' },
+    approved: { title: '退款已通过', desc: '后台已通过审核，正在准备退款。', className: 'bg-[#EAF3FF] text-[#1677FF]' },
+    processing: { title: '退款处理中', desc: '退款已提交至支付渠道，请等待到账。', className: 'bg-[#EAF3FF] text-[#1677FF]' },
+    refunded: { title: '退款成功', desc: '退款已完成，具体到账时间以支付渠道为准。', className: 'bg-[#F3F4F6] text-[#6B7280]' },
+    failed: { title: '退款失败', desc: refund.failureReason || '支付渠道退款失败，平台将继续处理。', className: 'bg-[#FEF2F2] text-[#EF4444]' },
+    rejected: { title: '退款已拒绝', desc: refund.failureReason || '退款申请未通过，请联系客服处理。', className: 'bg-[#FEF2F2] text-[#EF4444]' },
+  }
+  return map[refund.status] || { title: refund.status, desc: refund.reason || '退款状态已更新。', className: 'bg-[#F3F4F6] text-[#6B7280]' }
+})
+
+const ticketStatusInfo = computed(() => {
+  const ticket = latestTicket.value
+  if (!ticket)
+    return null
+  const map: Record<string, { title: string, desc: string, className: string }> = {
+    open: { title: '售后待处理', desc: ticket.latestMessage || '平台已收到售后申请。', className: 'bg-[#FFF7ED] text-[#AD6800]' },
+    pending: { title: '售后处理中', desc: ticket.latestMessage || '平台正在处理售后工单。', className: 'bg-[#EAF3FF] text-[#1677FF]' },
+    resolved: { title: '售后已解决', desc: ticket.latestMessage || '售后工单已处理完成。', className: 'bg-[#ECFDF3] text-[#16A34A]' },
+    rejected: { title: '售后已拒绝', desc: ticket.latestMessage || '售后申请未通过。', className: 'bg-[#FEF2F2] text-[#EF4444]' },
+    closed: { title: '售后已关闭', desc: ticket.latestMessage || '售后工单已关闭。', className: 'bg-[#F3F4F6] text-[#6B7280]' },
+  }
+  return map[ticket.status] || { title: ticket.status, desc: ticket.latestMessage || '售后状态已更新。', className: 'bg-[#F3F4F6] text-[#6B7280]' }
+})
 
 async function loadOrder() {
   loading.value = true
@@ -200,6 +244,10 @@ function onPrimary() {
     uni.showToast({ icon: 'none', title: '当前暂无评价入口' })
     return
   }
+  if (order.value.status === 'after_sales') {
+    openAfterSales()
+    return
+  }
   if (order.value.status === 'cancelled') {
     uni.switchTab({ url: '/pages/home/index' })
     return
@@ -207,9 +255,28 @@ function onPrimary() {
   uni.showToast({ icon: 'none', title: '请查看当前订单状态' })
 }
 
+function openAfterSales(mode: 'auto' | 'create' | 'detail' = 'auto') {
+  if (!order.value)
+    return
+  const ticket = latestTicket.value
+  if (mode === 'detail' && ticket?.id) {
+    uni.navigateTo({ url: `/pages/order/after-sales-detail?id=${ticket.id}` })
+    return
+  }
+  if (mode !== 'create' && activeTicket.value?.id) {
+    uni.navigateTo({ url: `/pages/order/after-sales-detail?id=${activeTicket.value.id}` })
+    return
+  }
+  uni.navigateTo({ url: `/pages/order/after-sales-create?orderId=${order.value.id}` })
+}
+
 function onSecondary() {
   if (!order.value)
     return
+  if (!['pending_payment', 'pending_dispatch'].includes(order.value.status) && canAfterSales.value) {
+    openAfterSales()
+    return
+  }
   if (['pending_payment', 'pending_dispatch'].includes(order.value.status)) {
     uni.showModal({
       title: '取消订单',
@@ -348,6 +415,54 @@ watch(timeSlots, (slots) => {
             <text class="flex-1 text-[26rpx] text-gray-700">{{ order.paymentMethod || '待支付' }}</text>
           </view>
           <amount-detail :items="order.amountItems" :total="order.payableAmount" />
+        </form-section>
+
+        <form-section v-if="latestRefund && refundStatusInfo" title="退款信息">
+          <view class="rounded-[12rpx] p-3" :class="refundStatusInfo.className">
+            <view class="flex items-center justify-between">
+              <text class="text-[28rpx] font-600">{{ refundStatusInfo.title }}</text>
+              <text class="text-[24rpx]">{{ latestRefund.refundNo }}</text>
+            </view>
+            <text class="block mt-2 text-[24rpx] leading-[36rpx]">{{ refundStatusInfo.desc }}</text>
+          </view>
+          <view class="flex py-2 mt-2">
+            <text class="w-[140rpx] text-[26rpx] text-gray-400">退款金额</text>
+            <text class="flex-1 text-[26rpx] text-gray-700">¥{{ latestRefund.amount }}</text>
+          </view>
+          <view class="flex py-2">
+            <text class="w-[140rpx] text-[26rpx] text-gray-400">退款原因</text>
+            <text class="flex-1 text-[26rpx] text-gray-700">{{ latestRefund.reason || '暂无' }}</text>
+          </view>
+          <view v-if="latestRefund.refundedAt" class="flex py-2">
+            <text class="w-[140rpx] text-[26rpx] text-gray-400">完成时间</text>
+            <text class="flex-1 text-[26rpx] text-gray-700">{{ latestRefund.refundedAt }}</text>
+          </view>
+        </form-section>
+
+        <form-section v-if="latestTicket && ticketStatusInfo" title="售后信息">
+          <view class="rounded-[12rpx] p-3" :class="ticketStatusInfo.className">
+            <view class="flex items-center justify-between">
+              <text class="text-[28rpx] font-600">{{ ticketStatusInfo.title }}</text>
+              <text class="text-[24rpx]">{{ latestTicket.ticketNo }}</text>
+            </view>
+            <text class="block mt-2 text-[24rpx] leading-[36rpx]">{{ ticketStatusInfo.desc }}</text>
+          </view>
+          <view class="flex py-2 mt-2">
+            <text class="w-[140rpx] text-[26rpx] text-gray-400">售后标题</text>
+            <text class="flex-1 text-[26rpx] text-gray-700">{{ latestTicket.title }}</text>
+          </view>
+          <view class="flex py-2">
+            <text class="w-[140rpx] text-[26rpx] text-gray-400">更新时间</text>
+            <text class="flex-1 text-[26rpx] text-gray-700">{{ latestTicket.updatedAt }}</text>
+          </view>
+          <view class="mt-2 flex justify-end">
+            <button
+              class="h-[64rpx] px-4 rounded-full bg-[#EAF3FF] text-[#1677FF] text-[26rpx] flex items-center justify-center"
+              @tap="openAfterSales('detail')"
+            >
+              查看售后
+            </button>
+          </view>
         </form-section>
 
         <form-section title="服务凭证">

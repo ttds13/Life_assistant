@@ -16,6 +16,7 @@
     "prisma:studio": "prisma studio",
     "seed:db": "tsx scripts/seed-db.ts",
     "seed:admin": "tsx scripts/seed-admin.ts",
+    "images:backfill": "tsx scripts/backfill-image-files.ts",
     "oss:smoke": "tsx scripts/oss-smoke-test.ts"
   },
   "dependencies": {

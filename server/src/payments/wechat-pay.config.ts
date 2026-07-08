@@ -13,7 +13,11 @@ export class WechatPayConfig implements OnModuleInit {
   constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
   onModuleInit() {
-    if (this.config.get<string>('PAYMENT_PROVIDER', 'wechat') !== 'wechat') {
+    if (
+      this.config.get<string>('PAYMENT_PROVIDER', 'wechat') !== 'wechat'
+      && this.config.get<string>('REFUND_PROVIDER', '') !== 'wechat'
+      && this.config.get<string>('WITHDRAW_PROVIDER', 'mock') !== 'wechat'
+    ) {
       return
     }
     this.getWechatConfig()
@@ -27,6 +31,9 @@ export class WechatPayConfig implements OnModuleInit {
     const serialNo = this.required('WECHAT_PAY_SERIAL_NO')
     const apiV3Key = this.required('WECHAT_PAY_API_V3_KEY')
     const notifyUrl = this.resolveNotifyUrl()
+    const refundNotifyUrl = this.resolveRefundNotifyUrl()
+    const transferNotifyUrl = this.resolveTransferNotifyUrl()
+    const transferSceneId = this.config.get<string>('WECHAT_TRANSFER_SCENE_ID', '').trim() || undefined
     const privateKey = this.resolvePrivateKey()
 
     if (!notifyUrl.startsWith('https://')) {
@@ -36,7 +43,17 @@ export class WechatPayConfig implements OnModuleInit {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'WECHAT_PAY_API_V3_KEY must be 32 characters', 500)
     }
 
-    this.cached = { appid, mchId, serialNo, apiV3Key, privateKey, notifyUrl }
+    this.cached = {
+      appid,
+      mchId,
+      serialNo,
+      apiV3Key,
+      privateKey,
+      notifyUrl,
+      refundNotifyUrl,
+      transferNotifyUrl,
+      transferSceneId,
+    }
     return this.cached
   }
 
@@ -64,6 +81,26 @@ export class WechatPayConfig implements OnModuleInit {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'PUBLIC_BASE_URL or WECHAT_PAY_NOTIFY_URL is required', 500)
     }
     return `${publicBaseUrl}${apiPrefix}/payments/wechat/notify`
+  }
+
+  private resolveRefundNotifyUrl() {
+    const explicit = this.config.get<string>('WECHAT_PAY_REFUND_NOTIFY_URL', '').trim()
+    if (explicit) return explicit
+
+    const publicBaseUrl = this.config.get<string>('PUBLIC_BASE_URL', '').trim().replace(/\/$/, '')
+    const apiPrefix = this.config.get<string>('API_PREFIX', '/api').trim().replace(/^\/?/, '/').replace(/\/$/, '')
+    if (!publicBaseUrl) return undefined
+    return `${publicBaseUrl}${apiPrefix}/payments/wechat/refund-notify`
+  }
+
+  private resolveTransferNotifyUrl() {
+    const explicit = this.config.get<string>('WECHAT_TRANSFER_NOTIFY_URL', '').trim()
+    if (explicit) return explicit
+
+    const publicBaseUrl = this.config.get<string>('PUBLIC_BASE_URL', '').trim().replace(/\/$/, '')
+    const apiPrefix = this.config.get<string>('API_PREFIX', '/api').trim().replace(/^\/?/, '/').replace(/\/$/, '')
+    if (!publicBaseUrl) return undefined
+    return `${publicBaseUrl}${apiPrefix}/payments/wechat/transfer-notify`
   }
 
   private resolvePrivateKey() {

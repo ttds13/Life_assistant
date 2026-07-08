@@ -1,14 +1,18 @@
 import { Inject, Injectable } from '@nestjs/common'
-import { Order, Prisma } from '@prisma/client'
+import { Address, Order, Prisma } from '@prisma/client'
 import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { MemberCardsService } from '../member-cards/member-cards.service'
 import { MEMBER_CARD_TYPE } from '../member-cards/constants/member-card'
+import { NotificationsService } from '../notifications/notifications.service'
 import { ORDER_ACTION } from './constants/order-action'
 import { ORDER_STATUS } from './constants/order-status'
 import { ORDER_TYPE, isStaffVisibleOrderType } from './constants/order-type'
+import { RefundsService } from '../refunds/refunds.service'
+import { WithdrawalsService } from '../withdrawals/withdrawals.service'
 import type { AutoAssignOrderDto } from './dto/auto-assign-order.dto'
+import type { AdminCreateOrderDto } from './dto/admin-create-order.dto'
 import type { AdminOrderRemarkDto } from './dto/admin-order-remark.dto'
 import type { AdminQueryOrdersDto } from './dto/admin-query-orders.dto'
 import type { AdminUpdateOrderDto } from './dto/admin-update-order.dto'
@@ -21,6 +25,7 @@ import type { RejectOrderDto } from './dto/reject-order.dto'
 import type { RescheduleOrderDto } from './dto/reschedule-order.dto'
 import type { TransitionVersionDto } from './dto/transition-version.dto'
 import type { UpdateStaffProfileDto } from './dto/update-staff-profile.dto'
+import type { UpdateStaffWorkStatusDto } from './dto/update-staff-work-status.dto'
 import { OrderTransitionService } from './order-transition.service'
 import {
   presentAdminOrderDetail,
@@ -31,6 +36,7 @@ import {
   presentUserOrder,
 } from './order-presenter'
 import { OrderDetailRecord, OrdersRepository } from './orders.repository'
+import { IMAGE_BIZ_TYPE } from '../storage/image-biz-types'
 import { ObjectStorageService } from '../storage/storage.service'
 
 type AutoAssignSource = 'admin_retry' | 'job_retry'
@@ -49,6 +55,13 @@ export interface AutoAssignSystemResult {
   orderStatus: string
 }
 
+export interface DispatchCheckResult {
+  canAssign: boolean
+  blockingReasons: string[]
+  warnings: string[]
+  requiredFields: string[]
+}
+
 @Injectable()
 export class OrdersService {
   constructor(
@@ -57,6 +70,9 @@ export class OrdersService {
     @Inject(AdminAuditService) private readonly adminAudit: AdminAuditService,
     @Inject(ObjectStorageService) private readonly storage: ObjectStorageService,
     @Inject(MemberCardsService) private readonly memberCards: MemberCardsService,
+    @Inject(NotificationsService) private readonly notifications: NotificationsService,
+    @Inject(RefundsService) private readonly refunds: RefundsService,
+    @Inject(WithdrawalsService) private readonly withdrawals: WithdrawalsService,
   ) {}
 
   async getPricePreview(query: PricePreviewDto) {
@@ -105,8 +121,12 @@ export class OrdersService {
     const serviceCardType = this.memberCards.calculateServiceCardType(service)
     const isConsultationOrder = serviceCardType === MEMBER_CARD_TYPE.CONSULTATION
     const isMemberCardOrder = Boolean(dto.memberCardId)
+    const supportsMemberCard = serviceCardType === MEMBER_CARD_TYPE.TIME || serviceCardType === MEMBER_CARD_TYPE.TIMES
     if (isConsultationOrder && isMemberCardOrder) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'consultation service cannot use member card', 400)
+    }
+    if (isMemberCardOrder && !supportsMemberCard) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'service does not support member card', 400)
     }
     const orderNo = this.createOrderNo()
     const serviceSnapshot = {
@@ -120,6 +140,7 @@ export class OrdersService {
       priceUnit: service.priceUnit,
       durationMinutes: service.durationMinutes || 0,
       cardType: serviceCardType,
+      consumeUnit: service.consumeUnit || 0,
       consultationRequired: isConsultationOrder,
       status: service.status,
       sortOrder: service.sortOrder,
@@ -257,7 +278,13 @@ export class OrdersService {
           }
         },
         sideEffect: async (tx, order) => {
-          await this.createPendingRefundForPaidOrder(tx, order, reason)
+          await this.refunds.createRefundRequestForOrder({
+            tx,
+            order,
+            reason,
+            source: 'user_cancel',
+            operatedBy: BigInt(userId),
+          })
         },
       })
 
@@ -366,6 +393,9 @@ export class OrdersService {
         version: dto.version,
         orderData: { completedAt: new Date() },
         check: order => this.assertOrderUserId(order, userId),
+        sideEffect: async (tx, order, now) => {
+          await this.withdrawals.createIncomeForCompletedOrder(tx, order, now)
+        },
       })
     }
     catch (error) {
@@ -406,6 +436,95 @@ export class OrdersService {
   async getAdminOrderDetail(orderId: number) {
     const order = await this.getOrderDetailOrThrow(orderId)
     return this.withSignedOrderImages(presentAdminOrderDetail(order))
+  }
+
+  async getAdminOrderDispatchCheck(orderId: number) {
+    const order = await this.getOrderDetailOrThrow(orderId)
+    return this.buildDispatchCheck(order)
+  }
+
+  async createAdminOrder(adminId: number, dto: AdminCreateOrderDto, requestId?: string, ip?: string) {
+    const service = await this.resolveActiveService({ serviceId: dto.serviceId })
+    const appointmentStart = this.parseAdminDate(dto.appointmentStartTime, 'appointmentStartTime')
+    const appointmentEnd = this.parseAdminDate(dto.appointmentEndTime, 'appointmentEndTime')
+    if (appointmentStart >= appointmentEnd) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'appointment start must be before end', 400)
+    }
+    this.assertAppointmentWithinBusinessHours(appointmentStart, appointmentEnd)
+
+    const source = this.normalizeOrderSource(dto.source || 'admin')
+    const orderNo = this.createOrderNo()
+    const serviceSnapshot = this.createServiceSnapshot(service)
+    const originalAmount = new Prisma.Decimal(dto.originalAmount ?? service.basePrice.toNumber())
+    const payableAmount = new Prisma.Decimal(dto.payableAmount ?? 0)
+    const discountAmount = new Prisma.Decimal(dto.discountAmount ?? Math.max(0, originalAmount.sub(payableAmount).toNumber()))
+
+    const created = await this.repository.client.$transaction(async (tx) => {
+      const user = await this.resolveAdminOrderUser(tx, dto, source)
+      const address = await this.resolveAdminOrderAddress(tx, Number(user.id), dto)
+      const addressSnapshot = this.createAddressSnapshot(address)
+
+      const order = await tx.order.create({
+        data: {
+          orderNo,
+          userId: user.id,
+          serviceId: service.id,
+          orderType: ORDER_TYPE.SERVICE_BOOKING,
+          status: ORDER_STATUS.PENDING_DISPATCH,
+          serviceSnapshot: serviceSnapshot as Prisma.InputJsonObject,
+          addressSnapshot: addressSnapshot as Prisma.InputJsonObject,
+          appointmentStartTime: appointmentStart,
+          appointmentEndTime: appointmentEnd,
+          originalAmount,
+          discountAmount,
+          payableAmount,
+          paidAmount: 0,
+          remark: dto.remark || null,
+          adminRemark: dto.adminRemark || null,
+          source,
+          cityCode: dto.customer?.cityCode || service.cityCode || address.city || null,
+        },
+      })
+
+      await tx.orderStatusLog.create({
+        data: {
+          orderId: order.id,
+          fromStatus: null,
+          toStatus: ORDER_STATUS.PENDING_DISPATCH,
+          operatorType: 'admin',
+          operatorId: BigInt(adminId),
+          action: ORDER_ACTION.ADMIN_CREATE_ORDER,
+          requestId,
+          remark: dto.adminRemark || 'admin created external order',
+          detail: {
+            userId: Number(user.id),
+            addressId: Number(address.id),
+            source,
+          } as Prisma.InputJsonObject,
+        },
+      })
+
+      await this.adminAudit.writeWithClient(tx, {
+        adminId,
+        action: 'order:create',
+        module: 'order',
+        targetType: 'order',
+        targetId: order.id,
+        requestId,
+        ip,
+        detail: {
+          orderNo,
+          userId: Number(user.id),
+          addressId: Number(address.id),
+          serviceId: Number(service.id),
+          source,
+        },
+      })
+
+      return order
+    })
+
+    return this.getAdminOrderDetail(Number(created.id))
   }
 
   async updateAdminOrder(adminId: number, orderId: number, dto: AdminUpdateOrderDto, requestId?: string, ip?: string) {
@@ -591,6 +710,7 @@ export class OrdersService {
     if (!staff) {
       throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
     }
+    await this.assertDispatchCheckPassed(orderId, dto.staffId)
 
     await this.transitions.transition({
       orderId: BigInt(orderId),
@@ -602,6 +722,14 @@ export class OrdersService {
       detail: { staffId: dto.staffId },
       orderData: { staffId: BigInt(dto.staffId) },
       sideEffect: async (tx, order, now) => {
+        const notification = await this.notifications.createOrderAssignedNotification({
+          tx,
+          staffId: dto.staffId,
+          orderId: order.id,
+          orderNo: order.orderNo,
+          serviceName: this.serviceNameFromSnapshot(order.serviceSnapshot),
+          appointmentStartTime: order.appointmentStartTime,
+        })
         await tx.orderAssignment.create({
           data: {
             orderId: order.id,
@@ -609,6 +737,8 @@ export class OrdersService {
             assignType: 'manual',
             assignStatus: 'pending',
             assignedBy: BigInt(adminId),
+            notificationId: notification.id,
+            notificationStatus: notification.sendStatus,
             assignedAt: now,
           },
         })
@@ -689,6 +819,14 @@ export class OrdersService {
           }
         },
         sideEffect: async (tx, order, now) => {
+          const notification = await this.notifications.createOrderAssignedNotification({
+            tx,
+            staffId: staff.id,
+            orderId: order.id,
+            orderNo: order.orderNo,
+            serviceName: this.serviceNameFromSnapshot(order.serviceSnapshot),
+            appointmentStartTime: order.appointmentStartTime,
+          })
           await tx.orderAssignment.create({
             data: {
               orderId: order.id,
@@ -696,6 +834,8 @@ export class OrdersService {
               assignType: 'auto',
               assignStatus: 'pending',
               assignedBy: BigInt(0),
+              notificationId: notification.id,
+              notificationStatus: notification.sendStatus,
               assignedAt: now,
             },
           })
@@ -816,46 +956,6 @@ export class OrdersService {
     }
   }
 
-  async listAvailableStaffOrders(staffId: number, query: QueryOrdersDto) {
-    await this.assertStaffAvailable(staffId)
-    const busyCount = await this.repository.countStaffBusyOrders(staffId)
-
-    const page = this.normalizePositiveInt(query.page, 1)
-    const pageSize = this.normalizePositiveInt(query.pageSize, 20, 100)
-    if (busyCount > 0) {
-      return {
-        items: [],
-        page,
-        pageSize,
-        total: 0,
-      }
-    }
-
-    const result = await this.repository.findAvailableStaffOrders({
-      page,
-      pageSize,
-    })
-    return {
-      items: result.items.map(order => this.withSignedOrderImages(presentUserOrder(order))),
-      page,
-      pageSize,
-      total: result.total,
-    }
-  }
-
-  async getAvailableStaffOrderDetail(staffId: number, orderId: number) {
-    await this.assertStaffCanTakeOrder(staffId)
-
-    const order = await this.getOrderDetailOrThrow(orderId)
-    if (order.status !== ORDER_STATUS.PENDING_DISPATCH
-      || order.staffId
-      || !isStaffVisibleOrderType(order.orderType)) {
-      throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'order is not available', 409)
-    }
-
-    return this.withSignedOrderImages(presentOrderDetail(order))
-  }
-
   async getStaffProfile(staffId: number, _period?: string) {
     const staff = await this.repository.client.staff.findFirst({
       where: { id: BigInt(staffId), status: 1, deletedAt: null },
@@ -865,6 +965,7 @@ export class OrdersService {
         phone: true,
         avatarUrl: true,
         cityCode: true,
+        workStatus: true,
         rating: true,
       },
     })
@@ -879,18 +980,19 @@ export class OrdersService {
       this.getStaffProfileStats(staffId, 'total'),
     ])
 
-    const avatarOssUrl = staff.avatarUrl || ''
-    const avatarDisplayUrl = this.storage.signNullableUrl(avatarOssUrl) || avatarOssUrl
+    const avatarUrls = this.storage.resolveAvatarUrls(staff.avatarUrl)
 
     return {
       staffId: Number(staff.id),
       staffName: staff.name,
       staffPhone: staff.phone,
-      avatar: avatarDisplayUrl,
-      avatarOssUrl,
-      avatarDisplayUrl,
+      avatar: avatarUrls.avatar,
+      avatarOssUrl: avatarUrls.avatarOssUrl,
+      avatarDisplayUrl: avatarUrls.avatarDisplayUrl,
       verified: true,
       regionText: staff.cityCode || staff.phone,
+      workStatus: staff.workStatus,
+      workStatusText: this.workStatusText(staff.workStatus),
       rating: staff.rating.toNumber(),
       stats: { today, week, month, total },
     }
@@ -921,9 +1023,34 @@ export class OrdersService {
       if (result.count !== 1) {
         throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
       }
+      if (typeof data.avatarUrl === 'string' && data.avatarUrl) {
+        await this.storage.bindFilesToBiz([data.avatarUrl], IMAGE_BIZ_TYPE.STAFF_AVATAR, staffId)
+      }
     }
 
     return this.getStaffProfile(staffId)
+  }
+
+  async getStaffWorkStatus(staffId: number) {
+    const staff = await this.repository.client.staff.findFirst({
+      where: { id: BigInt(staffId), status: 1, deletedAt: null },
+      select: { id: true, workStatus: true },
+    })
+    if (!staff) {
+      throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
+    }
+    return this.presentStaffWorkStatus(Number(staff.id), staff.workStatus)
+  }
+
+  async updateStaffWorkStatus(staffId: number, dto: UpdateStaffWorkStatusDto) {
+    const result = await this.repository.client.staff.updateMany({
+      where: { id: BigInt(staffId), status: 1, deletedAt: null },
+      data: { workStatus: dto.workStatus },
+    })
+    if (result.count !== 1) {
+      throw new BusinessException(ErrorCode.STAFF_NOT_FOUND, 'staff not found', 404)
+    }
+    return this.presentStaffWorkStatus(staffId, dto.workStatus)
   }
 
   async getStaffOrderDetail(staffId: number, orderId: number) {
@@ -955,42 +1082,6 @@ export class OrdersService {
         if (result.count !== 1) {
           throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'assignment is not pending', 409)
         }
-      },
-    })
-
-    return this.getStaffOrderDetail(staffId, orderId)
-  }
-
-  async staffClaim(staffId: number, orderId: number, dto: TransitionVersionDto, requestId?: string) {
-    await this.assertStaffCanTakeOrder(staffId)
-
-    await this.transitions.transition({
-      orderId: BigInt(orderId),
-      action: ORDER_ACTION.STAFF_CLAIM,
-      operatorType: 'staff',
-      operatorId: BigInt(staffId),
-      requestId,
-      version: dto.version,
-      remark: dto.reason || 'staff claimed order',
-      detail: { staffId },
-      orderData: { staffId: BigInt(staffId) },
-      check: (order) => {
-        if (order.staffId) {
-          throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'order already assigned', 409)
-        }
-      },
-      sideEffect: async (tx, order, now) => {
-        await tx.orderAssignment.create({
-          data: {
-            orderId: order.id,
-            staffId: BigInt(staffId),
-            assignType: 'claim',
-            assignStatus: 'accepted',
-            assignedBy: BigInt(staffId),
-            assignedAt: now,
-            acceptedAt: now,
-          },
-        })
       },
     })
 
@@ -1078,6 +1169,14 @@ export class OrdersService {
   }
 
   async staffComplete(staffId: number, orderId: number, dto: CompleteServiceDto, requestId?: string) {
+    const photoUrls = (dto.photoUrls || []).map(url => url.trim()).filter(Boolean)
+    if (!photoUrls.length) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'service photos are required', 400)
+    }
+    if (photoUrls.length > 6) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'service photos cannot exceed 6', 400)
+    }
+
     await this.transitions.transition({
       orderId: BigInt(orderId),
       action: ORDER_ACTION.STAFF_COMPLETE,
@@ -1086,7 +1185,7 @@ export class OrdersService {
       requestId,
       version: dto.version,
       remark: dto.remark,
-      detail: { photoCount: dto.photoUrls?.length || 0 },
+      detail: { photoCount: photoUrls.length, actualMinutes: dto.actualMinutes || null },
       check: order => this.assertOrderStaffId(order, staffId),
       sideEffect: async (tx, order) => {
         await this.memberCards.consumeForCompletedOrder({
@@ -1104,20 +1203,19 @@ export class OrdersService {
             checkinType: 'finish',
           },
         })
-        if (dto.photoUrls?.length) {
-          dto.photoUrls.forEach(url => this.storage.assertPermanentOssUrl(url))
-          await tx.servicePhoto.createMany({
-            data: dto.photoUrls.map((url, index) => ({
-              orderId: order.id,
-              staffId: BigInt(staffId),
-              photoType: index === 0 ? 'finish' : 'extra',
-              url,
-              remark: dto.remark || null,
-            })),
-          })
-        }
+        photoUrls.forEach(url => this.storage.assertPermanentOssUrl(url))
+        await tx.servicePhoto.createMany({
+          data: photoUrls.map((url, index) => ({
+            orderId: order.id,
+            staffId: BigInt(staffId),
+            photoType: index === 0 ? 'finish' : 'extra',
+            url,
+            remark: dto.remark || null,
+          })),
+        })
       },
     })
+    await this.storage.bindFilesToBiz(photoUrls, IMAGE_BIZ_TYPE.SERVICE_FINISH_PHOTO, orderId)
 
     return this.getStaffOrderDetail(staffId, orderId)
   }
@@ -1145,7 +1243,264 @@ export class OrdersService {
       operatorId: BigInt(0),
       requestId,
       orderData: { completedAt: new Date() },
+      sideEffect: async (tx, order, now) => {
+        await this.withdrawals.createIncomeForCompletedOrder(tx, order, now)
+      },
     })
+  }
+
+  private async assertDispatchCheckPassed(orderId: number, staffId?: number) {
+    const order = await this.getOrderDetailOrThrow(orderId)
+    const check = await this.buildDispatchCheck(order, staffId)
+    if (!check.canAssign) {
+      throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'order cannot be assigned', 409, check)
+    }
+  }
+
+  private async buildDispatchCheck(order: OrderDetailRecord, staffId?: number): Promise<DispatchCheckResult> {
+    const blockingReasons: string[] = []
+    const warnings: string[] = []
+    const requiredFields: string[] = []
+
+    if (!isStaffVisibleOrderType(order.orderType)) {
+      blockingReasons.push('订单类型不支持派单')
+    }
+    if (order.status !== ORDER_STATUS.PENDING_DISPATCH) {
+      blockingReasons.push('订单还未进入待派单状态')
+    }
+    if (!order.userId) {
+      blockingReasons.push('订单缺少客户信息')
+      requiredFields.push('userId')
+    }
+    if (!this.isJsonObject(order.serviceSnapshot)) {
+      blockingReasons.push('订单缺少服务快照')
+      requiredFields.push('serviceSnapshot')
+    }
+    if (!this.isJsonObject(order.addressSnapshot)) {
+      blockingReasons.push('订单缺少服务地址')
+      requiredFields.push('addressSnapshot')
+    }
+    if (!order.appointmentStartTime || !order.appointmentEndTime) {
+      blockingReasons.push('订单缺少预约时间')
+      requiredFields.push('appointmentStartTime', 'appointmentEndTime')
+    }
+    if (order.staffId) {
+      warnings.push('订单已有师傅，将被重新派单给新的师傅')
+    }
+
+    const staffOptions = await this.repository.findAssignableStaffOptions()
+    if (!staffOptions.length) {
+      blockingReasons.push('当前没有可选师傅')
+    }
+    if (staffId) {
+      const selected = staffOptions.find(staff => Number(staff.id) === staffId)
+      if (!selected) {
+        blockingReasons.push('选择的师傅不存在或已禁用')
+      }
+      else if (selected.workStatus !== 1) {
+        warnings.push('选择的师傅当前不在线，派单后可能无法及时处理')
+      }
+    }
+
+    return {
+      canAssign: blockingReasons.length === 0,
+      blockingReasons,
+      warnings,
+      requiredFields: [...new Set(requiredFields)],
+    }
+  }
+
+  private async resolveAdminOrderUser(
+    tx: Prisma.TransactionClient,
+    dto: AdminCreateOrderDto,
+    source: string,
+  ) {
+    if (dto.userId) {
+      const user = await tx.user.findFirst({
+        where: { id: BigInt(dto.userId), deletedAt: null },
+      })
+      if (!user) {
+        throw new BusinessException(ErrorCode.COMMON_NOT_FOUND, 'user not found', 404)
+      }
+      return user
+    }
+
+    const customer = dto.customer
+    const phone = this.optionalText(customer?.phone)
+    if (!phone) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'customer phone is required', 400)
+    }
+
+    const existing = await tx.user.findFirst({
+      where: { phone, deletedAt: null },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    })
+    if (existing) return existing
+
+    return tx.user.create({
+      data: {
+        phone,
+        nickname: this.optionalText(customer?.nickname) || phone,
+        gender: customer?.gender ?? 0,
+        cityCode: this.optionalText(customer?.cityCode) || null,
+        source,
+        adminRemark: this.optionalText(customer?.adminRemark) || null,
+        status: 1,
+      },
+    })
+  }
+
+  private async resolveAdminOrderAddress(
+    tx: Prisma.TransactionClient,
+    userId: number,
+    dto: AdminCreateOrderDto,
+  ) {
+    if (dto.addressId) {
+      const address = await tx.address.findFirst({
+        where: {
+          id: BigInt(dto.addressId),
+          ownerType: 'user',
+          ownerId: BigInt(userId),
+          addressType: 'service',
+          status: 1,
+          deletedAt: null,
+        },
+      })
+      if (!address) {
+        throw new BusinessException(ErrorCode.USER_ADDRESS_NOT_FOUND, 'address not found', 404)
+      }
+      return address
+    }
+
+    if (!dto.address) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'addressId or address is required', 400)
+    }
+
+    const address = dto.address
+    const existingCount = await tx.address.count({
+      where: {
+        ownerType: 'user',
+        ownerId: BigInt(userId),
+        addressType: 'service',
+        status: 1,
+        deletedAt: null,
+      },
+    })
+    const isDefault = address.isDefault === true || existingCount === 0
+    if (isDefault) {
+      await tx.address.updateMany({
+        where: {
+          ownerType: 'user',
+          ownerId: BigInt(userId),
+          addressType: 'service',
+          status: 1,
+          deletedAt: null,
+        },
+        data: { isDefault: false },
+      })
+    }
+
+    return tx.address.create({
+      data: {
+        ownerType: 'user',
+        ownerId: BigInt(userId),
+        addressType: 'service',
+        contactName: address.contactName,
+        contactPhone: address.contactPhone,
+        country: '中国',
+        province: this.optionalText(address.provinceName) || null,
+        city: this.optionalText(address.cityName) || null,
+        district: this.optionalText(address.districtName) || null,
+        street: this.optionalText(address.streetName) || null,
+        addressTitle: this.optionalText(address.addressTitle) || null,
+        detailAddress: address.detailAddress,
+        houseNumber: this.optionalText(address.houseNumber) || null,
+        formattedAddress: this.composeAddressText(address),
+        latitude: address.latitude ?? null,
+        longitude: address.longitude ?? null,
+        coordinateType: this.optionalText(address.coordinateType) || 'gcj02',
+        poiId: this.optionalText(address.poiId) || null,
+        mapProvider: this.optionalText(address.mapProvider) || null,
+        isDefault,
+        source: 'admin',
+        status: 1,
+      },
+    })
+  }
+
+  private createServiceSnapshot(service: Awaited<ReturnType<OrdersRepository['findActiveService']>>) {
+    if (!service) {
+      throw new BusinessException(ErrorCode.SERVICE_NOT_FOUND, 'service not found', 404)
+    }
+    const serviceCardType = this.memberCards.calculateServiceCardType(service)
+    return {
+      id: Number(service.id),
+      code: service.code,
+      categoryId: Number(service.categoryId),
+      name: service.name,
+      description: service.description || '',
+      coverImage: service.coverImage || '',
+      basePrice: service.basePrice.toNumber(),
+      priceUnit: service.priceUnit,
+      durationMinutes: service.durationMinutes || 0,
+      cardType: serviceCardType,
+      consumeUnit: service.consumeUnit || 0,
+      consultationRequired: serviceCardType === MEMBER_CARD_TYPE.CONSULTATION,
+      status: service.status,
+      sortOrder: service.sortOrder,
+    }
+  }
+
+  private createAddressSnapshot(address: Address) {
+    return {
+      addressId: Number(address.id),
+      id: Number(address.id),
+      ownerType: address.ownerType,
+      addressType: address.addressType,
+      contactName: address.contactName,
+      contactPhone: address.contactPhone,
+      provinceName: address.province || '',
+      cityName: address.city || '',
+      districtName: address.district || '',
+      streetName: address.street || '',
+      addressTitle: address.addressTitle || '',
+      detailAddress: address.detailAddress,
+      houseNumber: address.houseNumber || '',
+      formattedAddress: address.formattedAddress,
+      latitude: address.latitude?.toNumber() ?? null,
+      longitude: address.longitude?.toNumber() ?? null,
+      coordinateType: address.coordinateType || '',
+      poiId: address.poiId || '',
+      mapProvider: address.mapProvider || '',
+    }
+  }
+
+  private composeAddressText(address: NonNullable<AdminCreateOrderDto['address']>) {
+    return [
+      address.provinceName,
+      address.cityName,
+      address.districtName,
+      address.streetName,
+      address.addressTitle,
+      address.detailAddress,
+      address.houseNumber,
+    ].map(value => this.optionalText(value)).filter(Boolean).join('')
+  }
+
+  private serviceNameFromSnapshot(value: Prisma.JsonValue) {
+    if (!this.isJsonObject(value)) return ''
+    const name = value.name
+    return typeof name === 'string' ? name : ''
+  }
+
+  private isJsonObject(value: Prisma.JsonValue): value is Prisma.JsonObject {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+  }
+
+  private optionalText(value: unknown) {
+    if (value === undefined || value === null) return undefined
+    const text = String(value).trim()
+    return text || undefined
   }
 
   private async getOrderDetailOrThrow(orderId: number): Promise<OrderDetailRecord> {
@@ -1195,22 +1550,6 @@ export class OrdersService {
   private assertOrderStaffId(order: Order, staffId: number) {
     if (Number(order.staffId || 0) !== staffId) {
       throw new BusinessException(ErrorCode.STAFF_FORBIDDEN, 'staff order forbidden', 403)
-    }
-  }
-
-  private async assertStaffCanTakeOrder(staffId: number) {
-    await this.assertStaffAvailable(staffId)
-
-    const busyCount = await this.repository.countStaffBusyOrders(staffId)
-    if (busyCount > 0) {
-      throw new BusinessException(ErrorCode.ORDER_ASSIGNMENT_INVALID, 'staff has unfinished order', 409)
-    }
-  }
-
-  private async assertStaffAvailable(staffId: number) {
-    const staff = await this.repository.findWorkingStaff(staffId)
-    if (!staff) {
-      throw new BusinessException(ErrorCode.STAFF_FORBIDDEN, 'staff is not available', 403)
     }
   }
 
@@ -1376,7 +1715,40 @@ export class OrdersService {
       next.photos = next.photoUrls
     }
 
+    if (Array.isArray(next.tickets)) {
+      next.tickets = next.tickets.map((ticket: Record<string, any>) => {
+        const copy = { ...ticket }
+        if (Array.isArray(copy.latestImages)) {
+          copy.latestImageOssUrls = copy.latestImages.slice()
+          copy.latestImages = this.storage.signUrlList(copy.latestImages)
+        }
+        return copy
+      })
+    }
+
+    if (next.latestTicket && typeof next.latestTicket === 'object' && Array.isArray(next.latestTicket.latestImages)) {
+      next.latestTicket = {
+        ...next.latestTicket,
+        latestImageOssUrls: next.latestTicket.latestImages.slice(),
+        latestImages: this.storage.signUrlList(next.latestTicket.latestImages),
+      }
+    }
+
     return next as T
+  }
+
+  private presentStaffWorkStatus(staffId: number, workStatus: number) {
+    return {
+      staffId,
+      workStatus,
+      workStatusText: this.workStatusText(workStatus),
+    }
+  }
+
+  private workStatusText(workStatus: number) {
+    if (workStatus === 1) return 'online'
+    if (workStatus === 2) return 'busy'
+    return 'offline'
   }
 
   private async getStaffProfileStats(staffId: number, period: 'today' | 'week' | 'month' | 'total') {
@@ -1390,9 +1762,23 @@ export class OrdersService {
       status: ORDER_STATUS.COMPLETED,
       ...(range ? { completedAt: { gte: range.start, lt: range.end } } : {}),
     }
+    const activeWhere: Prisma.OrderWhereInput = {
+      staffId: BigInt(staffId),
+      status: {
+        in: [
+          ORDER_STATUS.DISPATCHED,
+          ORDER_STATUS.ACCEPTED,
+          ORDER_STATUS.ON_THE_WAY,
+          ORDER_STATUS.IN_SERVICE,
+          ORDER_STATUS.PENDING_CONFIRM,
+        ],
+      },
+      ...(range ? { appointmentStartTime: { gte: range.start, lt: range.end } } : {}),
+    }
 
-    const [newOrderCount, completedOrderCount, completedAmount] = await Promise.all([
+    const [newOrderCount, activeOrderCount, completedOrderCount, completedAmount] = await Promise.all([
       this.repository.client.order.count({ where: createdWhere }),
+      this.repository.client.order.count({ where: activeWhere }),
       this.repository.client.order.count({ where: completedWhere }),
       this.repository.client.order.aggregate({
         where: completedWhere,
@@ -1404,7 +1790,7 @@ export class OrdersService {
       period,
       newStaffCount: 0,
       newOrderCount,
-      writeOrderCount: 0,
+      writeOrderCount: activeOrderCount,
       completedOrderCount,
       commissionAmount: completedAmount._sum.payableAmount?.toNumber() || 0,
       bonusAmount: 0,

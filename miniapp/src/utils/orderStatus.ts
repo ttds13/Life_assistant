@@ -29,7 +29,6 @@ const orderStatusMap: Record<string, OrderStatusDisplay> = {
   accepted: { text: '已接单', className: 'bg-[#EAF3FF] text-[#1677FF]' },
   staff_accepted: { text: '已接单', className: 'bg-[#EAF3FF] text-[#1677FF]' },
   staff_accept: { text: '师傅接单', className: 'bg-[#EAF3FF] text-[#1677FF]' },
-  staff_claim: { text: '师傅接单', className: 'bg-[#EAF3FF] text-[#1677FF]' },
   staff_reject: { text: '师傅拒单', className: 'bg-[#FEF2F2] text-[#EF4444]' },
 
   on_the_way: { text: '上门中', className: 'bg-[#EAF3FF] text-[#1677FF]' },

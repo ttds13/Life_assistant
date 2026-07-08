@@ -158,7 +158,7 @@ const UserAPI = {
 
   /** 修改个人中心用户信息 */
   updateProfile(data: UserProfileForm) {
-    return request({
+    return request<unknown, UserProfileDetail>({
       url: `${USER_BASE_URL}/profile`,
       method: "put",
       data,

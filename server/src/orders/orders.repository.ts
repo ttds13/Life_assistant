@@ -45,8 +45,31 @@ export const ORDER_DETAIL_INCLUDE = Prisma.validator<Prisma.OrderInclude>()({
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: 1,
   },
+  refunds: {
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+  },
+  tickets: {
+    orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    include: {
+      messages: {
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 1,
+      },
+    },
+  },
   photos: {
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  },
+  checkins: {
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  },
+  memberCardRecords: {
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: {
+      userMemberCard: {
+        include: { card: true },
+      },
+    },
   },
   assignments: {
     orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
@@ -211,53 +234,6 @@ export class OrdersRepository {
     ])
 
     return { total, items }
-  }
-
-  async findAvailableStaffOrders(params: {
-    page: number
-    pageSize: number
-  }) {
-    const where: Prisma.OrderWhereInput = {
-      status: ORDER_STATUS.PENDING_DISPATCH,
-      staffId: null,
-      cancelledAt: null,
-      orderType: { in: [...STAFF_VISIBLE_ORDER_TYPES] },
-    }
-
-    const [total, items] = await this.prisma.$transaction([
-      this.prisma.order.count({ where }),
-      this.prisma.order.findMany({
-        where,
-        include: ORDER_DETAIL_INCLUDE,
-        orderBy: [{ appointmentStartTime: 'asc' }, { id: 'asc' }],
-        skip: (params.page - 1) * params.pageSize,
-        take: params.pageSize,
-      }),
-    ])
-
-    return { total, items }
-  }
-
-  findWorkingStaff(staffId: number) {
-    return this.prisma.staff.findFirst({
-      where: {
-        id: BigInt(staffId),
-        status: 1,
-        workStatus: 1,
-        deletedAt: null,
-      },
-    })
-  }
-
-  countStaffBusyOrders(staffId: number, excludeOrderId?: number) {
-    return this.prisma.order.count({
-      where: {
-        staffId: BigInt(staffId),
-        status: { in: STAFF_BUSY_ORDER_STATUSES },
-        orderType: { in: [...STAFF_VISIBLE_ORDER_TYPES] },
-        ...(excludeOrderId ? { id: { not: BigInt(excludeOrderId) } } : {}),
-      },
-    })
   }
 
   findAutoAssignableStaff(orderId: number) {
