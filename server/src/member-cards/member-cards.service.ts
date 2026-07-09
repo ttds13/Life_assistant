@@ -4,17 +4,27 @@ import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { PrismaService } from '../prisma/prisma.service'
+import { ORDER_ACTION } from '../orders/constants/order-action'
 import { ORDER_STATUS } from '../orders/constants/order-status'
 import { ORDER_TYPE } from '../orders/constants/order-type'
+import { PAYMENT_CHANNEL } from '../payments/constants/payment-channel'
+import { PAYMENT_STATUS } from '../payments/constants/payment-status'
 import {
   MEMBER_CARD_RECORD_TYPE,
   MEMBER_CARD_TYPE,
   USER_MEMBER_CARD_STATUS,
 } from './constants/member-card'
-import type { GrantMemberCardDto } from './dto/grant-member-card.dto'
+import type { AdminCreateMemberCardPurchaseDto, GrantMemberCardDto } from './dto/grant-member-card.dto'
 
 type CardWithTemplate = Prisma.UserMemberCardGetPayload<{ include: { card: true } }>
 type MemberCardClient = PrismaService | Prisma.TransactionClient
+type CardServiceRuleWithService = Prisma.MemberCardServiceRuleGetPayload<{ include: { service: true } }>
+type MemberCardTemplate = Prisma.MemberCardGetPayload<Record<string, never>> & {
+  serviceRuleItems?: CardServiceRuleWithService[]
+}
+type CardWithRules = Prisma.UserMemberCardGetPayload<{ include: { card: true } }> & {
+  card: MemberCardTemplate
+}
 type ServiceCardRule = {
   id: bigint
   code: string
@@ -41,6 +51,9 @@ interface ConsumeParams {
 interface FreezeParams extends ConsumeParams {
   tx: Prisma.TransactionClient
   orderId: bigint
+  operatorType?: string
+  operatorId?: bigint
+  remark?: string
 }
 
 interface CompleteParams {
@@ -50,6 +63,7 @@ interface CompleteParams {
     userId: bigint
     memberCardId: bigint | null
     memberCardConsumeUnits: number
+    memberCardRuleSnapshot?: Prisma.JsonValue | null
     appointmentStartTime: Date
     appointmentEndTime: Date
     serviceId: bigint
@@ -58,6 +72,14 @@ interface CompleteParams {
   operatorType: string
   operatorId: bigint
   remark?: string
+}
+
+interface ResolvedMemberCardRule {
+  applicable: boolean
+  consumeUnits: number
+  ruleSource: string
+  ruleId: bigint | null
+  reason?: string
 }
 
 const MEMBER_CARD_PURCHASE_SERVICE_CODE = 'member_card_purchase'
@@ -86,7 +108,17 @@ export class MemberCardsService {
         expireAt: { gt: now },
         card: { status: 1 },
       },
-      include: { card: true },
+      include: {
+        card: {
+          include: {
+            serviceRuleItems: {
+              where: { status: 1 },
+              include: { service: true },
+              orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+            },
+          },
+        },
+      },
       orderBy: [{ expireAt: 'asc' }, { id: 'desc' }],
     })
 
@@ -98,12 +130,14 @@ export class MemberCardsService {
 
     return cards
       .map((item) => {
-        const available = service ? this.isCardApplicable(item, service) : item.remainingUnits > 0
-        const consumeUnits = service && available ? this.calculateConsumeUnits(item, service) : 0
+        const resolved = service ? this.resolveMemberCardRule(item, service) : null
+        const available = service ? Boolean(resolved?.applicable) : item.remainingUnits > 0
+        const consumeUnits = service && resolved?.applicable ? resolved.consumeUnits : 0
         return this.presentUserCard(item, {
           available,
           consumeUnits,
           serviceName: service?.name || '',
+          ruleSource: resolved?.ruleSource || '',
         })
       })
       .filter(item => !serviceId || item.available)
@@ -114,6 +148,13 @@ export class MemberCardsService {
       where: {
         status: 1,
         cardType: { not: MEMBER_CARD_TYPE.CONSULTATION },
+      },
+      include: {
+        serviceRuleItems: {
+          where: { status: 1 },
+          include: { service: true },
+          orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+        },
       },
       orderBy: [{ price: 'asc' }, { id: 'asc' }],
     })
@@ -127,6 +168,13 @@ export class MemberCardsService {
         id: BigInt(cardId),
         status: 1,
         cardType: { not: MEMBER_CARD_TYPE.CONSULTATION },
+      },
+      include: {
+        serviceRuleItems: {
+          where: { status: 1 },
+          include: { service: true },
+          orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+        },
       },
     })
     if (!card) throw new BusinessException(ErrorCode.COMMON_NOT_FOUND, 'member card not found', 404)
@@ -214,6 +262,220 @@ export class MemberCardsService {
       totalAmount: card.price.toNumber(),
       payableAmount: card.price.toNumber(),
       createdAt: order.createdAt.toISOString(),
+    }
+  }
+
+  async createAdminPurchaseOrder(dto: AdminCreateMemberCardPurchaseDto, context: AdminContext) {
+    const [user, card] = await Promise.all([
+      this.prisma.user.findFirst({ where: { id: BigInt(dto.userId), deletedAt: null, status: 1 } }),
+      this.prisma.memberCard.findFirst({ where: { id: BigInt(dto.cardId), status: 1 } }),
+    ])
+    if (!user) throw new BusinessException(ErrorCode.COMMON_NOT_FOUND, 'user not found', 404)
+    if (!card) throw new BusinessException(ErrorCode.COMMON_NOT_FOUND, 'member card not found', 404)
+    if (card.cardType === MEMBER_CARD_TYPE.CONSULTATION) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'consultation card cannot be purchased directly', 400)
+    }
+
+    const paymentMode = this.normalizeAdminPurchasePaymentMode(dto.paymentMode)
+    const source = this.normalizeSource(dto.source || 'offline')
+    const payableAmount = new Prisma.Decimal(dto.payableAmount ?? card.price.toNumber())
+    if (payableAmount.lessThan(0)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'payable amount must be non-negative', 400)
+    }
+    if (!payableAmount.equals(card.price) && !dto.adminRemark) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'adminRemark is required when payable amount differs from card price', 400)
+    }
+    if (paymentMode === 'offline_paid' && payableAmount.lessThanOrEqualTo(0)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'offline paid member card purchase amount must be greater than zero', 400)
+    }
+
+    const discountAmount = card.price.greaterThan(payableAmount)
+      ? card.price.sub(payableAmount)
+      : new Prisma.Decimal(0)
+    const purchaseService = await this.ensurePurchaseService(this.prisma)
+    const totalUnits = this.resolveCardTotalUnits(card)
+    const now = new Date()
+    const serviceSnapshot = this.buildPurchaseSnapshot(card, totalUnits)
+    const addressSnapshot = {
+      contactName: user.nickname || '',
+      contactPhone: user.phone || '',
+      formattedAddress: source === 'offline' ? '线下会员卡购买' : '后台会员卡购买',
+    }
+    const paidAt = paymentMode === 'offline_paid'
+      ? this.parseAdminPurchaseDate(dto.offlinePaidAt, 'offlinePaidAt')
+      : null
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.create({
+        data: {
+          orderNo: this.createOrderNo(),
+          userId: user.id,
+          serviceId: purchaseService.id,
+          orderType: ORDER_TYPE.MEMBER_CARD_PURCHASE,
+          status: ORDER_STATUS.PENDING_PAYMENT,
+          serviceSnapshot: serviceSnapshot as Prisma.InputJsonObject,
+          addressSnapshot: addressSnapshot as Prisma.InputJsonObject,
+          appointmentStartTime: now,
+          appointmentEndTime: now,
+          originalAmount: card.price,
+          discountAmount,
+          payableAmount,
+          paidAmount: 0,
+          purchaseCardId: card.id,
+          memberCardConsumeUnits: totalUnits,
+          remark: dto.remark || null,
+          adminRemark: dto.adminRemark || null,
+          source,
+        },
+      })
+
+      await tx.orderStatusLog.create({
+        data: {
+          orderId: order.id,
+          fromStatus: null,
+          toStatus: ORDER_STATUS.PENDING_PAYMENT,
+          operatorType: 'admin',
+          operatorId: BigInt(context.adminId),
+          action: ORDER_ACTION.ADMIN_CREATE_ORDER,
+          requestId: context.requestId,
+          remark: dto.adminRemark || 'admin created offline member card purchase order',
+          detail: {
+            orderType: ORDER_TYPE.MEMBER_CARD_PURCHASE,
+            cardId: Number(card.id),
+            totalUnits,
+            source,
+            paymentMode,
+            payableAmount: payableAmount.toNumber(),
+          } as Prisma.InputJsonObject,
+        },
+      })
+
+      let paymentNo: string | null = null
+      let grantedCardId: number | null = null
+      if (paymentMode === 'offline_paid') {
+        paymentNo = this.createOfflinePaymentNo(order.orderNo)
+        const payment = await tx.payment.create({
+          data: {
+            paymentNo,
+            orderId: order.id,
+            userId: order.userId,
+            channel: PAYMENT_CHANNEL.OFFLINE,
+            amount: payableAmount,
+            status: PAYMENT_STATUS.SUCCESS,
+            transactionNo: `OFFLINE_${order.orderNo}`,
+            paidAt,
+            callbackRaw: JSON.stringify({
+              channel: PAYMENT_CHANNEL.OFFLINE,
+              source,
+              paymentMode,
+              requestId: context.requestId,
+              adminId: context.adminId,
+              remark: dto.paymentRemark || dto.adminRemark || dto.remark || '',
+            }),
+          },
+        })
+
+        const granted = await this.grantForPaidPurchaseOrder(tx, order, 'admin', BigInt(context.adminId))
+        grantedCardId = granted ? Number(granted.id) : null
+
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            status: ORDER_STATUS.COMPLETED,
+            paidAmount: payableAmount,
+            paidAt,
+            completedAt: paidAt,
+            version: { increment: 1 },
+          },
+        })
+        await tx.orderStatusLog.create({
+          data: {
+            orderId: order.id,
+            fromStatus: ORDER_STATUS.PENDING_PAYMENT,
+            toStatus: ORDER_STATUS.COMPLETED,
+            operatorType: 'admin',
+            operatorId: BigInt(context.adminId),
+            action: ORDER_ACTION.PAY_SUCCESS,
+            requestId: context.requestId,
+            remark: dto.paymentRemark || 'admin confirmed offline member card purchase payment',
+            detail: {
+              paymentNo,
+              amount: payableAmount.toNumber(),
+              orderType: ORDER_TYPE.MEMBER_CARD_PURCHASE,
+              purchaseCardId: Number(card.id),
+              grantedUserMemberCardId: grantedCardId,
+              totalUnits,
+            } as Prisma.InputJsonObject,
+          },
+        })
+        await tx.paymentNotifyLog.create({
+          data: {
+            paymentId: payment.id,
+            paymentNo,
+            channel: PAYMENT_CHANNEL.OFFLINE,
+            rawBody: JSON.stringify({
+              orderId: Number(order.id),
+              requestId: context.requestId,
+              adminId: context.adminId,
+              remark: dto.paymentRemark || '',
+            }),
+            processResult: 'success',
+          },
+        })
+      }
+
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'member-card:purchase-order:create',
+        module: 'marketing',
+        targetType: 'order',
+        targetId: order.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: {
+          orderNo: order.orderNo,
+          userId: dto.userId,
+          cardId: dto.cardId,
+          source,
+          paymentMode,
+          payableAmount: payableAmount.toNumber(),
+          paymentNo,
+          grantedUserMemberCardId: grantedCardId,
+          remark: dto.remark || '',
+          adminRemark: dto.adminRemark || '',
+        },
+      })
+
+      return order
+    })
+
+    return {
+      id: String(created.id),
+      orderNo: created.orderNo,
+      orderType: created.orderType,
+      status: paymentMode === 'offline_paid' ? ORDER_STATUS.COMPLETED : created.status,
+      userId: Number(created.userId),
+      userName: user.nickname || '',
+      userPhone: user.phone || '',
+      serviceName: card.name,
+      appointmentStartTime: created.appointmentStartTime.toISOString(),
+      appointmentEndTime: created.appointmentEndTime.toISOString(),
+      appointmentTime: created.appointmentStartTime.toISOString(),
+      addressText: addressSnapshot.formattedAddress,
+      totalAmount: card.price.toNumber(),
+      originalAmount: card.price.toNumber(),
+      discountAmount: discountAmount.toNumber(),
+      payableAmount: payableAmount.toNumber(),
+      paidAmount: paymentMode === 'offline_paid' ? payableAmount.toNumber() : 0,
+      source,
+      remark: dto.remark || '',
+      adminRemark: dto.adminRemark || '',
+      purchaseCardId: Number(card.id),
+      memberCardConsumeUnits: totalUnits,
+      paidAt: paidAt?.toISOString() || null,
+      completedAt: paymentMode === 'offline_paid' ? paidAt?.toISOString() || null : null,
+      createdAt: created.createdAt.toISOString(),
+      updatedAt: created.updatedAt.toISOString(),
     }
   }
 
@@ -428,6 +690,14 @@ export class MemberCardsService {
 
     const totalUnits = this.resolveCardTotalUnits(card, dto.totalUnits)
     const expireAt = this.addDays(new Date(), dto.validityDays || card.validityDays)
+    const source = this.normalizeSource(dto.source || 'admin')
+    const paymentChannel = this.normalizeSource(dto.paymentChannel || (source === 'offline' ? 'offline' : 'admin'))
+    const grantRemark = this.buildGrantRemark(dto.remark, {
+      source,
+      offlinePaymentAmount: dto.offlinePaymentAmount,
+      paymentChannel,
+      paymentRemark: dto.paymentRemark,
+    })
 
     const created = await this.prisma.$transaction(async (tx) => {
       const userCard = await tx.userMemberCard.create({
@@ -438,7 +708,7 @@ export class MemberCardsService {
           remainingUnits: totalUnits,
           frozenUnits: 0,
           status: USER_MEMBER_CARD_STATUS.ACTIVE,
-          source: 'admin',
+          source,
           expireAt,
         },
         include: { card: true },
@@ -455,7 +725,7 @@ export class MemberCardsService {
           afterUnits: totalUnits,
           operatorType: 'admin',
           operatorId: BigInt(context.adminId),
-          remark: dto.remark || 'admin grant member card',
+          remark: grantRemark,
         },
       })
 
@@ -472,6 +742,10 @@ export class MemberCardsService {
           cardId: dto.cardId,
           totalUnits,
           expireAt: expireAt.toISOString(),
+          source,
+          offlinePaymentAmount: dto.offlinePaymentAmount ?? null,
+          paymentChannel,
+          paymentRemark: dto.paymentRemark || '',
           remark: dto.remark || '',
         },
       })
@@ -487,11 +761,12 @@ export class MemberCardsService {
     if (!userCard) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card is not available', 409)
     }
-    if (!this.isCardApplicable(userCard, params.service)) {
+    const resolvedRule = this.resolveMemberCardRule(userCard, params.service)
+    if (!resolvedRule.applicable) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card is not applicable to this service', 409)
     }
 
-    const consumeUnits = this.calculateConsumeUnits(userCard, params.service)
+    const consumeUnits = resolvedRule.consumeUnits
     const availableUnits = userCard.remainingUnits - userCard.frozenUnits
     if (consumeUnits < 1 || availableUnits < consumeUnits) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card balance is insufficient', 409, {
@@ -517,15 +792,16 @@ export class MemberCardsService {
         units: consumeUnits,
         beforeUnits: userCard.remainingUnits - userCard.frozenUnits,
         afterUnits: updated.remainingUnits - updated.frozenUnits,
-        operatorType: 'user',
-        operatorId: BigInt(params.userId),
-        remark: 'freeze for appointment',
+        operatorType: params.operatorType || 'user',
+        operatorId: params.operatorId || BigInt(params.userId),
+        remark: params.remark || 'freeze for appointment',
       },
     })
 
     return {
       userCard: updated,
       consumeUnits,
+      ruleSnapshot: this.buildRuleSnapshot(userCard, params.service, resolvedRule, consumeUnits),
     }
   }
 
@@ -574,19 +850,33 @@ export class MemberCardsService {
 
     const userCard = await params.tx.userMemberCard.findUnique({
       where: { id: params.order.memberCardId },
-      include: { card: true },
+      include: {
+        card: {
+          include: {
+            serviceRuleItems: {
+              where: { status: 1 },
+              include: { service: true },
+              orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+            },
+          },
+        },
+      },
     })
     if (!userCard) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card not found', 409)
     }
 
+    const snapshot = this.parseRuleSnapshot(params.order.memberCardRuleSnapshot)
     const service = await this.findServiceForCard(params.tx, params.order.serviceId)
-    if (!service) {
+    const snapshotService = snapshot ? this.serviceFromRuleSnapshot(snapshot) : null
+    const serviceForConsume = service || snapshotService
+    if (!serviceForConsume) {
       throw new BusinessException(ErrorCode.SERVICE_NOT_FOUND, 'service not found', 404)
     }
 
     const reservedUnits = params.order.memberCardConsumeUnits
-    const actualUnits = this.calculateFinalConsumeUnits(userCard, service, params.order, params.actualMinutes)
+    const plannedUnits = snapshot?.consumeUnits || this.resolveMemberCardRule(userCard, serviceForConsume).consumeUnits
+    const actualUnits = this.calculateFinalConsumeUnits(userCard, serviceForConsume, params.order, params.actualMinutes, plannedUnits)
     if (actualUnits > reservedUnits) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'actual consume exceeds frozen member card units', 409, {
         reservedUnits,
@@ -675,7 +965,17 @@ export class MemberCardsService {
         expireAt: { gt: new Date() },
         card: { status: 1 },
       },
-      include: { card: true },
+      include: {
+        card: {
+          include: {
+            serviceRuleItems: {
+              where: { status: 1 },
+              include: { service: true },
+              orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+            },
+          },
+        },
+      },
     })
   }
 
@@ -695,48 +995,161 @@ export class MemberCardsService {
     })
   }
 
-  private isCardApplicable(userCard: CardWithTemplate, service: ConsumeParams['service']) {
+  private resolveMemberCardRule(userCard: CardWithRules, service: ConsumeParams['service']): ResolvedMemberCardRule {
     const serviceCardType = this.calculateServiceCardType(service)
-    if (!MEMBER_CARD_SERVICE_TYPES.has(serviceCardType)) return false
-    if (userCard.card.cardType !== serviceCardType) return false
-    if (userCard.remainingUnits - userCard.frozenUnits <= 0) return false
+    if (!MEMBER_CARD_SERVICE_TYPES.has(serviceCardType)) {
+      return { applicable: false, consumeUnits: 0, ruleSource: 'service_card_type', ruleId: null, reason: 'service does not support member card' }
+    }
+    if (userCard.card.cardType !== serviceCardType) {
+      return { applicable: false, consumeUnits: 0, ruleSource: 'card_type_mismatch', ruleId: null, reason: 'card type mismatch' }
+    }
+    if (userCard.remainingUnits - userCard.frozenUnits <= 0) {
+      return { applicable: false, consumeUnits: 0, ruleSource: 'balance', ruleId: null, reason: 'no available balance' }
+    }
+
+    const structuredRule = this.findStructuredServiceRule(userCard.card, service)
+    if (structuredRule) {
+      return {
+        applicable: true,
+        consumeUnits: structuredRule.consumeUnits,
+        ruleSource: 'member_card_service_rule',
+        ruleId: structuredRule.id,
+      }
+    }
+    if (this.hasStructuredServiceRules(userCard.card)) {
+      return { applicable: false, consumeUnits: 0, ruleSource: 'member_card_service_rule', ruleId: null, reason: 'service not in structured card rules' }
+    }
 
     const applicableServices = this.parseApplicableServices(userCard.card.applicableServices)
-    if (!applicableServices.length) return true
-    const serviceId = String(service.id)
-    return applicableServices.includes(serviceId)
-      || applicableServices.includes(service.code)
-      || applicableServices.includes(service.name)
-  }
+    if (applicableServices.length) {
+      const serviceId = String(service.id)
+      const matched = applicableServices.includes(serviceId)
+        || applicableServices.includes(service.code)
+        || applicableServices.includes(service.name)
+      if (!matched) {
+        return { applicable: false, consumeUnits: 0, ruleSource: 'legacy_applicable_services', ruleId: null, reason: 'service not in legacy card rules' }
+      }
+    }
 
-  private calculateConsumeUnits(userCard: CardWithTemplate, service: ConsumeParams['service']) {
-    const ruleUnits = this.getRuleConsumeUnits(userCard.card.serviceRules, service)
-    if (ruleUnits) return ruleUnits
+    const legacyRuleUnits = this.getRuleConsumeUnits(userCard.card.serviceRules, service)
+    if (legacyRuleUnits) {
+      return { applicable: true, consumeUnits: legacyRuleUnits, ruleSource: 'legacy_service_rules', ruleId: null }
+    }
 
     if (userCard.card.cardType === MEMBER_CARD_TYPE.TIME) {
-      return service.consumeUnit || service.durationMinutes || userCard.card.unitMinutes || userCard.card.minConsumeUnits || 1
+      return {
+        applicable: true,
+        consumeUnits: service.consumeUnit || service.durationMinutes || userCard.card.unitMinutes || userCard.card.minConsumeUnits || 1,
+        ruleSource: service.consumeUnit ? 'service_default' : service.durationMinutes ? 'service_duration' : 'card_minimum',
+        ruleId: null,
+      }
     }
     if (userCard.card.cardType === MEMBER_CARD_TYPE.TIMES) {
-      return service.consumeUnit || userCard.card.minConsumeUnits || 1
+      return {
+        applicable: true,
+        consumeUnits: service.consumeUnit || userCard.card.minConsumeUnits || 1,
+        ruleSource: service.consumeUnit ? 'service_default' : 'card_minimum',
+        ruleId: null,
+      }
     }
-    return 0
+    return { applicable: false, consumeUnits: 0, ruleSource: 'unsupported_card_type', ruleId: null }
+  }
+
+  private isCardApplicable(userCard: CardWithRules, service: ConsumeParams['service']) {
+    return this.resolveMemberCardRule(userCard, service).applicable
+  }
+
+  private calculateConsumeUnits(userCard: CardWithRules, service: ConsumeParams['service']) {
+    return this.resolveMemberCardRule(userCard, service).consumeUnits
+  }
+
+  private hasStructuredServiceRules(card: MemberCardTemplate) {
+    return Array.isArray(card.serviceRuleItems) && card.serviceRuleItems.length > 0
+  }
+
+  private findStructuredServiceRule(card: MemberCardTemplate, service: ConsumeParams['service']) {
+    const rules = Array.isArray(card.serviceRuleItems) ? card.serviceRuleItems : []
+    return rules.find(rule => rule.status === 1 && rule.serviceId === service.id && rule.consumeUnits > 0) || null
+  }
+
+  private buildRuleSnapshot(
+    userCard: CardWithRules,
+    service: ConsumeParams['service'],
+    resolvedRule: ResolvedMemberCardRule,
+    frozenUnits: number,
+  ) {
+    return {
+      userMemberCardId: Number(userCard.id),
+      memberCardTemplateId: Number(userCard.cardId),
+      memberCardName: userCard.card.name,
+      cardType: userCard.card.cardType,
+      serviceId: Number(service.id),
+      serviceCode: service.code,
+      serviceName: service.name,
+      servicePriceUnit: service.priceUnit,
+      serviceDurationMinutes: service.durationMinutes || 0,
+      serviceDefaultConsumeUnit: service.consumeUnit || 0,
+      ruleSource: resolvedRule.ruleSource,
+      ruleId: resolvedRule.ruleId ? Number(resolvedRule.ruleId) : null,
+      consumeUnits: resolvedRule.consumeUnits,
+      frozenUnits,
+      createdAt: new Date().toISOString(),
+    }
+  }
+
+  private parseRuleSnapshot(value: Prisma.JsonValue | null | undefined) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const record = value as Record<string, unknown>
+    const consumeUnits = Number(record.consumeUnits)
+    if (!Number.isInteger(consumeUnits) || consumeUnits <= 0) return null
+    return {
+      userMemberCardId: Number(record.userMemberCardId) || 0,
+      memberCardTemplateId: Number(record.memberCardTemplateId) || 0,
+      memberCardName: typeof record.memberCardName === 'string' ? record.memberCardName : '',
+      cardType: typeof record.cardType === 'string' ? record.cardType : '',
+      serviceId: Number(record.serviceId) || 0,
+      serviceCode: typeof record.serviceCode === 'string' ? record.serviceCode : '',
+      serviceName: typeof record.serviceName === 'string' ? record.serviceName : '',
+      servicePriceUnit: typeof record.servicePriceUnit === 'string' ? record.servicePriceUnit : '',
+      serviceDurationMinutes: Number(record.serviceDurationMinutes) || 0,
+      serviceDefaultConsumeUnit: Number(record.serviceDefaultConsumeUnit) || 0,
+      ruleSource: typeof record.ruleSource === 'string' ? record.ruleSource : 'snapshot',
+      ruleId: Number(record.ruleId) || null,
+      consumeUnits,
+      frozenUnits: Number(record.frozenUnits) || consumeUnits,
+    }
+  }
+
+  private serviceFromRuleSnapshot(snapshot: NonNullable<ReturnType<MemberCardsService['parseRuleSnapshot']>>): ServiceCardRule | null {
+    if (!snapshot.serviceId) return null
+    return {
+      id: BigInt(snapshot.serviceId),
+      code: snapshot.serviceCode,
+      name: snapshot.serviceName,
+      priceUnit: snapshot.servicePriceUnit,
+      durationMinutes: snapshot.serviceDurationMinutes || null,
+      cardType: snapshot.cardType,
+      consumeUnit: snapshot.serviceDefaultConsumeUnit || null,
+      consultationRequired: false,
+    }
   }
 
   private calculateFinalConsumeUnits(
-    userCard: CardWithTemplate,
+    userCard: CardWithRules,
     service: ConsumeParams['service'],
     order: { appointmentStartTime: Date, appointmentEndTime: Date },
     actualMinutes?: number,
+    plannedUnits?: number,
   ) {
-    const plannedUnits = this.calculateConsumeUnits(userCard, service)
+    const planned = plannedUnits || this.calculateConsumeUnits(userCard, service)
     if (userCard.card.cardType !== MEMBER_CARD_TYPE.TIME || !userCard.card.allowHalfDeduct) {
-      return plannedUnits
+      return planned
     }
 
     const plannedMinutes = service.durationMinutes
       || Math.max(1, Math.round((order.appointmentEndTime.getTime() - order.appointmentStartTime.getTime()) / 60000))
     const usedMinutes = actualMinutes && actualMinutes > 0 ? actualMinutes : plannedMinutes
-    return usedMinutes <= plannedMinutes / 2 ? Math.ceil(plannedUnits / 2) : plannedUnits
+    return usedMinutes <= plannedMinutes / 2 ? Math.ceil(planned / 2) : planned
   }
 
   private getRuleConsumeUnits(value: Prisma.JsonValue | null, service: ConsumeParams['service']) {
@@ -774,13 +1187,15 @@ export class MemberCardsService {
   }
 
   private presentUserCard(
-    item: CardWithTemplate,
-    options?: { available?: boolean, consumeUnits?: number, serviceName?: string },
+    item: CardWithRules,
+    options?: { available?: boolean, consumeUnits?: number, serviceName?: string, ruleSource?: string },
   ) {
     const usableUnits = Math.max(0, item.remainingUnits - item.frozenUnits)
     return {
       id: Number(item.id),
       cardId: Number(item.cardId),
+      userMemberCardId: Number(item.id),
+      memberCardTemplateId: Number(item.cardId),
       name: item.card.name,
       cardType: item.card.cardType,
       unitName: item.card.unitName,
@@ -795,12 +1210,14 @@ export class MemberCardsService {
       available: options?.available ?? usableUnits > 0,
       consumeUnits: options?.consumeUnits || 0,
       serviceName: options?.serviceName || '',
+      effectiveRuleSource: options?.ruleSource || '',
       applicableServices: this.parseApplicableServices(item.card.applicableServices),
       serviceRules: item.card.serviceRules || {},
+      serviceRuleList: this.presentServiceRuleList(item.card.serviceRuleItems || []),
     }
   }
 
-  private presentCardTemplate(card: Prisma.MemberCardGetPayload<Record<string, never>>) {
+  private presentCardTemplate(card: MemberCardTemplate) {
     const totalUnits = this.resolveCardTotalUnits(card)
     return {
       id: Number(card.id),
@@ -816,8 +1233,25 @@ export class MemberCardsService {
       minConsumeUnits: card.minConsumeUnits,
       applicableServices: this.parseApplicableServices(card.applicableServices),
       serviceRules: card.serviceRules || {},
+      serviceRuleList: this.presentServiceRuleList(card.serviceRuleItems || []),
       status: card.status,
     }
+  }
+
+  private presentServiceRuleList(rules: CardServiceRuleWithService[]) {
+    return rules.map(rule => ({
+      id: Number(rule.id),
+      memberCardId: Number(rule.memberCardId),
+      serviceId: Number(rule.serviceId),
+      serviceCode: rule.service.code,
+      serviceName: rule.service.name,
+      serviceCardType: rule.service.cardType,
+      serviceConsumeUnit: rule.service.consumeUnit || 0,
+      serviceStatus: rule.service.status,
+      consumeUnits: rule.consumeUnits,
+      status: rule.status,
+      remark: rule.remark || '',
+    }))
   }
 
   private buildPurchaseSnapshot(card: Prisma.MemberCardGetPayload<Record<string, never>>, totalUnits: number) {
@@ -895,9 +1329,40 @@ export class MemberCardsService {
     return `MC${timestamp}${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`
   }
 
+  private buildGrantRemark(
+    remark: string | undefined,
+    meta: { source: string, offlinePaymentAmount?: number, paymentChannel?: string, paymentRemark?: string },
+  ) {
+    const parts = [remark || 'admin grant member card', `source=${meta.source}`]
+    if (meta.offlinePaymentAmount !== undefined) parts.push(`offlineAmount=${meta.offlinePaymentAmount}`)
+    if (meta.paymentChannel) parts.push(`paymentChannel=${meta.paymentChannel}`)
+    if (meta.paymentRemark) parts.push(`paymentRemark=${meta.paymentRemark}`)
+    return parts.join('; ').slice(0, 256)
+  }
+
   private normalizeSource(source?: string) {
     const value = (source || 'miniapp').trim()
     return /^[a-zA-Z0-9_-]{1,16}$/.test(value) ? value : 'miniapp'
+  }
+
+  private normalizeAdminPurchasePaymentMode(paymentMode?: string) {
+    const value = (paymentMode || 'offline_paid').trim()
+    if (value === 'offline_paid' || value === 'unpaid') return value
+    throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'paymentMode must be offline_paid or unpaid', 400)
+  }
+
+  private parseAdminPurchaseDate(value: string | undefined, field: string) {
+    if (!value) return new Date()
+    const date = new Date(value.includes('T') ? value : value.replace(' ', 'T'))
+    if (Number.isNaN(date.getTime())) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, `invalid ${field}`, 400)
+    }
+    return date
+  }
+
+  private createOfflinePaymentNo(orderNo: string) {
+    const random = Math.floor(Math.random() * 100000).toString().padStart(5, '0')
+    return `OF${Date.now()}${random}`.slice(0, 64) || `OF${orderNo}`
   }
 
   private addDays(date: Date, days: number) {

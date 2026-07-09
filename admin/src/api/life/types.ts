@@ -135,11 +135,27 @@ export interface AdminCreateOrderPayload {
   appointmentStartTime: string;
   appointmentEndTime: string;
   source?: string;
+  paymentMode?: string;
+  memberCardId?: number;
+  offlinePaidAt?: string;
+  offlinePaymentRemark?: string;
   remark?: string;
   adminRemark?: string;
   originalAmount?: number;
   discountAmount?: number;
   payableAmount?: number;
+}
+
+export interface AdminCreateMemberCardPurchasePayload {
+  userId: number;
+  cardId: number;
+  source?: string;
+  paymentMode?: "offline_paid" | "unpaid";
+  payableAmount?: number;
+  offlinePaidAt?: string;
+  paymentRemark?: string;
+  remark?: string;
+  adminRemark?: string;
 }
 
 export interface DispatchCheckResult {
@@ -478,9 +494,14 @@ export interface OrderListItem {
   remark?: string;
   adminRemark?: string;
   memberCardId?: number | null;
+  userMemberCardId?: number | null;
+  memberCardTemplateId?: number | null;
   memberCardConsumeUnits?: number;
   memberCardName?: string;
   memberCardUnitName?: string;
+  memberCardRuleSource?: string;
+  memberCardRuleSnapshot?: Record<string, unknown> | null;
+  memberCardRuleChanged?: boolean;
   plannedConsumeUnits?: number;
   actualConsumeUnits?: number;
   releasedUnits?: number;
@@ -524,6 +545,8 @@ export interface OrderDetail extends OrderListItem {
   memberCard?: {
     id: number;
     cardId: number;
+    userMemberCardId?: number;
+    memberCardTemplateId?: number;
     name: string;
     cardType: string;
     unitName: string;

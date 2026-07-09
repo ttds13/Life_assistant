@@ -194,6 +194,7 @@ model Service {
   orders     Order[]
   reviews    Review[]
   favorites  ServiceFavorite[]
+  memberCardRules MemberCardServiceRule[]
 
   @@index([categoryId])
   @@index([status])
@@ -328,6 +329,7 @@ model Order {
   couponId             BigInt?   @map("coupon_id")
   memberCardId         BigInt?   @map("member_card_id")
   memberCardConsumeUnits Int     @default(0) @map("member_card_consume_units")
+  memberCardRuleSnapshot Json?   @map("member_card_rule_snapshot")
   purchaseCardId       BigInt?   @map("purchase_card_id")
   grantedUserMemberCardId BigInt? @map("granted_user_member_card_id")
   linkedPurchaseOrderId BigInt?  @map("linked_purchase_order_id")
@@ -720,8 +722,28 @@ model MemberCard {
   updatedAt          DateTime @updatedAt @map("updated_at")
 
   userCards UserMemberCard[]
+  serviceRuleItems MemberCardServiceRule[]
 
   @@map("member_cards")
+}
+
+model MemberCardServiceRule {
+  id           BigInt   @id @default(autoincrement())
+  memberCardId BigInt   @map("member_card_id")
+  serviceId    BigInt   @map("service_id")
+  consumeUnits Int      @map("consume_units")
+  status       Int      @default(1) @db.SmallInt
+  remark       String?  @db.VarChar(256)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  memberCard MemberCard @relation(fields: [memberCardId], references: [id])
+  service    Service    @relation(fields: [serviceId], references: [id])
+
+  @@unique([memberCardId, serviceId])
+  @@index([serviceId])
+  @@index([memberCardId, status])
+  @@map("member_card_service_rules")
 }
 
 model UserMemberCard {

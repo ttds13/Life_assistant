@@ -21,6 +21,12 @@ function toOptionalBoolean(value: unknown): boolean | undefined {
   return ['true', '1', 'yes'].includes(String(value).trim().toLowerCase())
 }
 
+function trimOptional(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const result = value.trim()
+  return result || undefined
+}
+
 export class AdminOrderCustomerDto {
   @IsOptional()
   @IsString()
@@ -160,16 +166,42 @@ export class AdminCreateOrderDto {
   @IsOptional()
   @IsString()
   @MaxLength(16)
+  @Transform(({ value }) => trimOptional(value))
   source?: string
 
   @IsOptional()
   @IsString()
+  @MaxLength(16)
+  @Transform(({ value }) => trimOptional(value))
+  paymentMode?: string
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  memberCardId?: number
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  offlinePaidAt?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  @Transform(({ value }) => trimOptional(value))
+  offlinePaymentRemark?: string
+
+  @IsOptional()
+  @IsString()
   @MaxLength(512)
+  @Transform(({ value }) => trimOptional(value))
   remark?: string
 
   @IsOptional()
   @IsString()
   @MaxLength(512)
+  @Transform(({ value }) => trimOptional(value))
   adminRemark?: string
 
   @IsOptional()

@@ -240,6 +240,7 @@ export class OrdersService {
           where: { id: order.id },
           data: {
             memberCardConsumeUnits: freeze.consumeUnits,
+            memberCardRuleSnapshot: freeze.ruleSnapshot as Prisma.InputJsonObject,
             discountAmount: service.basePrice,
           },
         })
@@ -279,6 +280,7 @@ export class OrdersService {
         detail: {
           orderType: isConsultationOrder ? ORDER_TYPE.CONSULTATION : ORDER_TYPE.SERVICE_BOOKING,
           memberCardId: dto.memberCardId || null,
+          userMemberCardId: dto.memberCardId || null,
           cardType: serviceCardType,
           source: this.normalizeOrderSource(dto.source),
           promotionKey: dto.promotionKey || null,
@@ -516,16 +518,34 @@ export class OrdersService {
     this.assertAppointmentWithinBusinessHours(appointmentStart, appointmentEnd)
 
     const source = this.normalizeOrderSource(dto.source || 'admin')
+    const paymentMode = this.normalizeAdminPaymentMode(dto.paymentMode, dto.memberCardId)
     const orderNo = this.createOrderNo()
     const serviceSnapshot = this.createServiceSnapshot(service)
     const originalAmount = new Prisma.Decimal(dto.originalAmount ?? service.basePrice.toNumber())
-    const discountAmount = new Prisma.Decimal(dto.discountAmount ?? 0)
-    const payableAmount = new Prisma.Decimal(dto.payableAmount ?? Math.max(0, originalAmount.sub(discountAmount).toNumber()))
+    const serviceCardType = this.memberCards.calculateServiceCardType(service)
+    const isMemberCardOrder = paymentMode === 'member_card'
+    const isConsultationOrder = serviceCardType === MEMBER_CARD_TYPE.CONSULTATION
+    if (paymentMode === 'member_card' && !dto.memberCardId) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'memberCardId is required for member card payment mode', 400)
+    }
+    const discountAmount = isMemberCardOrder
+      ? originalAmount
+      : new Prisma.Decimal(dto.discountAmount ?? 0)
+    const payableAmount = isMemberCardOrder || isConsultationOrder
+      ? new Prisma.Decimal(0)
+      : new Prisma.Decimal(dto.payableAmount ?? Math.max(0, originalAmount.sub(discountAmount).toNumber()))
+    const initialStatus = isMemberCardOrder || isConsultationOrder || paymentMode === 'offline_paid'
+      ? ORDER_STATUS.PENDING_DISPATCH
+      : ORDER_STATUS.PENDING_PAYMENT
+    const offlinePaidAt = paymentMode === 'offline_paid'
+      ? (dto.offlinePaidAt ? this.parseAdminDate(dto.offlinePaidAt, 'offlinePaidAt') : new Date())
+      : null
 
     const created = await this.repository.client.$transaction(async (tx) => {
       const user = await this.resolveAdminOrderUser(tx, dto, source)
       const address = await this.resolveAdminOrderAddress(tx, Number(user.id), dto)
       const addressSnapshot = this.createAddressSnapshot(address)
+      let offlinePaymentNo: string | null = null
 
       const order = await tx.order.create({
         data: {
@@ -533,7 +553,7 @@ export class OrdersService {
           userId: user.id,
           serviceId: service.id,
           orderType: ORDER_TYPE.SERVICE_BOOKING,
-          status: ORDER_STATUS.PENDING_DISPATCH,
+          status: initialStatus,
           serviceSnapshot: serviceSnapshot as Prisma.InputJsonObject,
           addressSnapshot: addressSnapshot as Prisma.InputJsonObject,
           appointmentStartTime: appointmentStart,
@@ -541,7 +561,9 @@ export class OrdersService {
           originalAmount,
           discountAmount,
           payableAmount,
-          paidAmount: 0,
+          paidAmount: paymentMode === 'offline_paid' ? payableAmount : 0,
+          paidAt: paymentMode === 'offline_paid' && payableAmount.greaterThan(0) ? offlinePaidAt : null,
+          memberCardId: dto.memberCardId ? BigInt(dto.memberCardId) : null,
           remark: dto.remark || null,
           adminRemark: dto.adminRemark || null,
           source,
@@ -549,33 +571,104 @@ export class OrdersService {
         },
       })
 
+      if (isMemberCardOrder && dto.memberCardId) {
+        const freeze = await this.memberCards.freezeForOrder({
+          tx,
+          userId: Number(user.id),
+          userMemberCardId: dto.memberCardId,
+          orderId: order.id,
+          service,
+          operatorType: 'admin',
+          operatorId: BigInt(adminId),
+          remark: 'admin freeze for offline appointment',
+        })
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            memberCardConsumeUnits: freeze.consumeUnits,
+            memberCardRuleSnapshot: freeze.ruleSnapshot as Prisma.InputJsonObject,
+            discountAmount: originalAmount,
+            payableAmount: 0,
+            paidAmount: 0,
+            paidAt: null,
+          },
+        })
+      }
+
+      if (paymentMode === 'offline_paid' && payableAmount.greaterThan(0)) {
+        offlinePaymentNo = this.createOfflinePaymentNo(order.orderNo)
+        const payment = await tx.payment.create({
+          data: {
+            paymentNo: offlinePaymentNo,
+            orderId: order.id,
+            userId: order.userId,
+            channel: PAYMENT_CHANNEL.OFFLINE,
+            amount: payableAmount,
+            status: PAYMENT_STATUS.SUCCESS,
+            transactionNo: `OFFLINE_${order.orderNo}`,
+            paidAt: offlinePaidAt || new Date(),
+            callbackRaw: JSON.stringify({
+              channel: PAYMENT_CHANNEL.OFFLINE,
+              source,
+              paymentMode,
+              requestId,
+              adminId,
+              remark: dto.offlinePaymentRemark || dto.adminRemark || dto.remark || '',
+            }),
+          },
+        })
+        await tx.paymentNotifyLog.create({
+          data: {
+            paymentId: payment.id,
+            paymentNo: offlinePaymentNo,
+            channel: PAYMENT_CHANNEL.OFFLINE,
+            rawBody: JSON.stringify({
+              orderId: Number(order.id),
+              source,
+              paymentMode,
+              requestId,
+              adminId,
+              remark: dto.offlinePaymentRemark || '',
+            }),
+            processResult: 'success',
+          },
+        })
+        await this.users.ensureEarnedPointsForPaidOrder(tx, order, payableAmount)
+      }
+
       await tx.orderStatusLog.create({
         data: {
           orderId: order.id,
           fromStatus: null,
-          toStatus: ORDER_STATUS.PENDING_DISPATCH,
+          toStatus: initialStatus,
           operatorType: 'admin',
           operatorId: BigInt(adminId),
           action: ORDER_ACTION.ADMIN_CREATE_ORDER,
           requestId,
-          remark: dto.adminRemark || 'admin created external order',
+          remark: dto.adminRemark || 'admin created offline channel order',
           detail: {
             userId: Number(user.id),
             addressId: Number(address.id),
             source,
+            paymentMode,
+            memberCardId: dto.memberCardId || null,
+            payableAmount: payableAmount.toNumber(),
+            offlinePaymentNo,
           } as Prisma.InputJsonObject,
         },
       })
 
-      await this.notifications.createAdminOrderNotification({
-        tx,
-        orderId: order.id,
-        orderNo: order.orderNo,
-        serviceName: this.serviceNameFromSnapshot(order.serviceSnapshot),
-        appointmentStartTime: order.appointmentStartTime,
-        type: 'admin_pending_dispatch',
-        runId: this.extractDay38RunId(order.adminRemark || order.remark || ''),
-      })
+      if (initialStatus === ORDER_STATUS.PENDING_DISPATCH) {
+        await this.notifications.createAdminOrderNotification({
+          tx,
+          orderId: order.id,
+          orderNo: order.orderNo,
+          serviceName: this.serviceNameFromSnapshot(order.serviceSnapshot),
+          appointmentStartTime: order.appointmentStartTime,
+          type: 'admin_pending_dispatch',
+          runId: this.extractDay38RunId(order.adminRemark || order.remark || ''),
+        })
+      }
 
       await this.adminAudit.writeWithClient(tx, {
         adminId,
@@ -591,6 +684,9 @@ export class OrdersService {
           addressId: Number(address.id),
           serviceId: Number(service.id),
           source,
+          paymentMode,
+          memberCardId: dto.memberCardId || null,
+          offlinePaymentNo,
         },
       })
 
@@ -606,8 +702,8 @@ export class OrdersService {
       await tx.$queryRaw`SELECT id FROM orders WHERE id = ${BigInt(orderId)} FOR UPDATE`
       const order = await tx.order.findUnique({ where: { id: BigInt(orderId) } })
       if (!order) throw new BusinessException(ErrorCode.ORDER_NOT_FOUND, 'order not found', 404)
-      if (order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE || order.memberCardId) {
-        throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'offline payment only supports cash service orders', 409)
+      if (order.memberCardId) {
+        throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'offline payment only supports cash service orders and member card purchase orders', 409)
       }
       if (![ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PENDING_DISPATCH].includes(order.status as any)) {
         throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order cannot confirm offline payment here', 409)
@@ -647,6 +743,60 @@ export class OrdersService {
           processResult: 'success',
         },
       })
+      if (order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE) {
+        if (order.status !== ORDER_STATUS.PENDING_PAYMENT) {
+          throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'member card purchase order is not waiting for payment', 409)
+        }
+        const grantedCard = await this.memberCards.grantForPaidPurchaseOrder(tx, order, 'admin', BigInt(adminId))
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            status: ORDER_STATUS.COMPLETED,
+            paidAmount: amount,
+            paidAt,
+            completedAt: paidAt,
+            version: { increment: 1 },
+          },
+        })
+        await tx.orderStatusLog.create({
+          data: {
+            orderId: order.id,
+            fromStatus: ORDER_STATUS.PENDING_PAYMENT,
+            toStatus: ORDER_STATUS.COMPLETED,
+            operatorType: 'admin',
+            operatorId: BigInt(adminId),
+            action: 'admin_confirm_offline_payment',
+            requestId,
+            remark: dto.remark || 'admin confirmed offline member card purchase payment',
+            detail: {
+              paymentNo,
+              amount: amount.toNumber(),
+              orderType: order.orderType,
+              purchaseCardId: order.purchaseCardId ? Number(order.purchaseCardId) : null,
+              grantedUserMemberCardId: grantedCard ? Number(grantedCard.id) : order.grantedUserMemberCardId ? Number(order.grantedUserMemberCardId) : null,
+              totalUnits: order.memberCardConsumeUnits,
+            },
+          },
+        })
+        await this.adminAudit.writeWithClient(tx, {
+          adminId,
+          action: 'order:offline-payment:confirm',
+          module: 'order',
+          targetType: 'order',
+          targetId: order.id,
+          requestId,
+          ip,
+          detail: {
+            paymentNo,
+            amount: amount.toNumber(),
+            paidAt: paidAt.toISOString(),
+            remark: dto.remark || '',
+            orderType: order.orderType,
+            grantedUserMemberCardId: grantedCard ? Number(grantedCard.id) : null,
+          },
+        })
+        return
+      }
       await tx.order.update({
         where: { id: order.id },
         data: {
@@ -725,6 +875,9 @@ export class OrdersService {
     const refundDeductPoints = order.pointLedgers
       .filter(item => item.type === 'refund_deduct')
       .reduce((sum, item) => sum + item.points, 0)
+    const isManualCashSource = order.source !== 'miniapp'
+      && order.orderType !== ORDER_TYPE.MEMBER_CARD_PURCHASE
+      && !order.memberCardId
     const couponRecord = order.couponId
       ? await this.repository.client.userCoupon.findFirst({
           where: {
@@ -796,8 +949,8 @@ export class OrdersService {
       },
       {
         key: 'offline_payment',
-        passed: order.source !== 'offline' && order.source !== 'admin' || !order.paidAt || paidPayments.some(payment => payment.channel === PAYMENT_CHANNEL.OFFLINE),
-        message: (order.source === 'offline' || order.source === 'admin') && order.paidAt && !paidPayments.some(payment => payment.channel === PAYMENT_CHANNEL.OFFLINE)
+        passed: !isManualCashSource || !order.paidAt || paidPayments.some(payment => payment.channel === PAYMENT_CHANNEL.OFFLINE),
+        message: isManualCashSource && order.paidAt && !paidPayments.some(payment => payment.channel === PAYMENT_CHANNEL.OFFLINE)
           ? '外来订单已收款但缺少 offline payment'
           : '外来订单支付口径正常',
       },
@@ -2004,6 +2157,15 @@ export class OrdersService {
     return /^[a-zA-Z0-9_-]{1,16}$/.test(value) ? value : 'miniapp'
   }
 
+  private normalizeAdminPaymentMode(paymentMode?: string, memberCardId?: number) {
+    if (memberCardId) return 'member_card'
+    const value = (paymentMode || 'offline_paid').trim()
+    if (['offline_paid', 'paid', 'offline'].includes(value)) return 'offline_paid'
+    if (['unpaid', 'pending_payment', 'offline_unpaid'].includes(value)) return 'unpaid'
+    if (['member_card', 'card'].includes(value)) return 'member_card'
+    throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid paymentMode', 400)
+  }
+
   private assertAdminUpdateDoesNotBypassAccounting(order: OrderDetailRecord, dto: AdminUpdateOrderDto) {
     const blockedFields = [
       dto.status !== undefined ? 'status' : '',
@@ -2248,7 +2410,7 @@ export class OrdersService {
   }
 
   private extractDay38RunId(text: string) {
-    const matched = text.match(/DAY38_TEST_[A-Za-z0-9_-]+/)
+    const matched = text.match(/DAY(?:38|39|40|41|42|43)_TEST_[A-Za-z0-9_-]+/)
     return matched?.[0]
   }
 

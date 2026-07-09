@@ -4,6 +4,7 @@ import type {
   AuditType,
   AddressRecord,
   AfterSalesTicket,
+  AdminCreateMemberCardPurchasePayload,
   AdminCreateOrderPayload,
   AdminNotificationItem,
   AdminStaffNotificationItem,
@@ -188,6 +189,8 @@ const userSourceOptions = [
   { label: "后台录入", value: "admin" },
   { label: "电话客户", value: "phone" },
   { label: "线下客户", value: "offline" },
+  { label: "微信私域", value: "wechat_private" },
+  { label: "推广渠道", value: "channel" },
 ];
 
 const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
@@ -670,6 +673,8 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "totalTimes", label: "总次数", width: 100 },
       { prop: "price", label: "售价", width: 120, type: "money" },
       { prop: "validityDays", label: "有效天数", width: 110 },
+      { prop: "serviceRuleCount", label: "规则数", width: 90 },
+      { prop: "effectiveRuleSummary", label: "生效规则", minWidth: 220 },
       { prop: "soldCount", label: "已售", width: 90 },
       { prop: "status", label: "状态", width: 90, type: "tag" },
     ],
@@ -684,6 +689,7 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "minConsumeUnits", label: "最小扣减额度", type: "number" },
       { prop: "applicableServices", label: "适用服务", type: "textarea", placeholder: "服务ID、code 或名称，多个用逗号分隔；留空表示通用" },
       { prop: "serviceRules", label: "服务扣减规则", type: "textarea", placeholder: "{\"serviceCode\":{\"consumeUnits\":120}}" },
+      { prop: "serviceRuleList", label: "结构化服务规则", type: "textarea", placeholder: "[{\"serviceId\":1,\"consumeUnits\":120}]" },
       { prop: "price", label: "售价", type: "number", required: true },
       { prop: "validityDays", label: "有效天数", type: "number", required: true },
       { prop: "status", label: "状态", type: "select", options: publishStatusOptions },
@@ -889,7 +895,17 @@ const LifeAPI = {
     });
   },
 
-  grantMemberCard(data: { userId: number | string; cardId: number | string; totalUnits?: number; validityDays?: number; remark?: string }) {
+  grantMemberCard(data: {
+    userId: number | string;
+    cardId: number | string;
+    totalUnits?: number;
+    validityDays?: number;
+    remark?: string;
+    source?: string;
+    offlinePaymentAmount?: number;
+    paymentChannel?: string;
+    paymentRemark?: string;
+  }) {
     return request({
       url: `${ADMIN_BASE_URL}/member-cards/grant`,
       method: "post",
@@ -899,7 +915,42 @@ const LifeAPI = {
         totalUnits: data.totalUnits ? Number(data.totalUnits) : undefined,
         validityDays: data.validityDays ? Number(data.validityDays) : undefined,
         remark: data.remark,
+        source: data.source,
+        offlinePaymentAmount: data.offlinePaymentAmount !== undefined ? Number(data.offlinePaymentAmount) : undefined,
+        paymentChannel: data.paymentChannel,
+        paymentRemark: data.paymentRemark,
       },
+    });
+  },
+
+  createAdminMemberCardPurchase(data: AdminCreateMemberCardPurchasePayload) {
+    return request<unknown, OrderDetail>({
+      url: `${ADMIN_BASE_URL}/member-cards/purchase-orders`,
+      method: "post",
+      data,
+    });
+  },
+
+  getMemberCardServiceRules(id: string) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/member-cards/${id}/service-rules`,
+      method: "get",
+    });
+  },
+
+  updateMemberCardServiceRules(id: string, serviceRuleList: unknown[]) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/member-cards/${id}/service-rules`,
+      method: "put",
+      data: { serviceRuleList },
+    });
+  },
+
+  getMemberCardRuleAudit(queryParams: LifeQueryParams) {
+    return request<unknown, ServerPageResult<LifeResourceRecord>>({
+      url: `${ADMIN_BASE_URL}/member-cards/rule-audit`,
+      method: "get",
+      params: toAdminQuery(queryParams),
     });
   },
 

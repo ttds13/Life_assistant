@@ -96,6 +96,7 @@ export function presentUserOrder(order: OrderDetailRecord) {
     orderType: order.orderType,
     staffId: order.staffId ? Number(order.staffId) : null,
     memberCardId: order.memberCardId ? Number(order.memberCardId) : null,
+    userMemberCardId: memberCardUsage.userMemberCardId,
     memberCardConsumeUnits: order.memberCardConsumeUnits,
     purchaseCardId: order.purchaseCardId ? Number(order.purchaseCardId) : null,
     grantedUserMemberCardId: order.grantedUserMemberCardId ? Number(order.grantedUserMemberCardId) : null,
@@ -116,8 +117,12 @@ export function presentUserOrder(order: OrderDetailRecord) {
     staffName: order.staff?.name || '',
     staffPhone: order.staff?.phone || '',
     staffRating: order.staff ? decimalToNumber(order.staff.rating) : undefined,
+    memberCardTemplateId: memberCardUsage.memberCardTemplateId,
     memberCardName: memberCardUsage.memberCardName,
     memberCardUnitName: memberCardUsage.memberCardUnitName,
+    memberCardRuleSource: memberCardUsage.memberCardRuleSource,
+    memberCardRuleSnapshot: memberCardUsage.memberCardRuleSnapshot,
+    memberCardRuleChanged: memberCardUsage.memberCardRuleChanged,
     plannedConsumeUnits: memberCardUsage.plannedConsumeUnits,
     actualConsumeUnits: memberCardUsage.actualConsumeUnits,
     releasedUnits: memberCardUsage.releasedUnits,
@@ -191,6 +196,10 @@ function firstMemberCardRecord(order: OrderDetailRecord) {
   return order.memberCardRecords[0] || null
 }
 
+function memberCardRuleSnapshot(order: OrderDetailRecord) {
+  return jsonRecord(order.memberCardRuleSnapshot)
+}
+
 function memberCardUnitName(order: OrderDetailRecord) {
   const record = firstMemberCardRecord(order)
   if (record?.userMemberCard.card.unitName) return record.userMemberCard.card.unitName
@@ -226,22 +235,47 @@ function presentMemberCardRecord(record: OrderDetailRecord['memberCardRecords'][
 function presentMemberCardUsage(order: OrderDetailRecord) {
   const record = firstMemberCardRecord(order)
   const unitName = memberCardUnitName(order)
+  const ruleSnapshot = memberCardRuleSnapshot(order)
   const frozenUnits = sumMemberCardRecordUnits(order, 'freeze')
   const plannedConsumeUnits = order.memberCardConsumeUnits || frozenUnits
   const actualConsumeUnits = sumMemberCardRecordUnits(order, 'consume')
   const releasedUnits = sumMemberCardRecordUnits(order, 'release')
+  const snapshotConsumeUnits = numberValue(ruleSnapshot.consumeUnits)
+  const snapshotServiceDefaultConsumeUnit = numberValue(ruleSnapshot.serviceDefaultConsumeUnit)
+  const currentServiceConsumeUnit = order.service?.consumeUnit || 0
+  const memberCardTemplateId = numberValue(ruleSnapshot.memberCardTemplateId, record ? Number(record.userMemberCard.cardId) : 0)
+  const userMemberCardId = order.memberCardId
+    ? Number(order.memberCardId)
+    : record
+      ? Number(record.userMemberCardId)
+      : order.grantedUserMemberCardId
+        ? Number(order.grantedUserMemberCardId)
+        : null
 
   return {
+    userMemberCardId,
+    memberCardTemplateId: memberCardTemplateId || null,
     memberCardName: record?.userMemberCard.card.name || '',
     memberCardUnitName: unitName,
     frozenUnits,
     plannedConsumeUnits,
     actualConsumeUnits,
     releasedUnits,
+    memberCardRuleSource: stringValue(ruleSnapshot.ruleSource),
+    memberCardRuleSnapshot: Object.keys(ruleSnapshot).length ? ruleSnapshot : null,
+    memberCardRuleChanged: Boolean(
+      snapshotConsumeUnits
+      && (
+        snapshotConsumeUnits !== plannedConsumeUnits
+        || snapshotServiceDefaultConsumeUnit !== currentServiceConsumeUnit
+      ),
+    ),
     memberCard: record
       ? {
           id: Number(record.userMemberCard.id),
           cardId: Number(record.userMemberCard.cardId),
+          userMemberCardId: Number(record.userMemberCard.id),
+          memberCardTemplateId: Number(record.userMemberCard.cardId),
           name: record.userMemberCard.card.name,
           cardType: record.userMemberCard.card.cardType,
           unitName,

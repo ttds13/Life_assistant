@@ -99,12 +99,23 @@
             <el-descriptions :column="2" border class="mb-4">
               <el-descriptions-item label="会员卡">{{ order?.memberCardName || order?.memberCard?.name || "-" }}</el-descriptions-item>
               <el-descriptions-item label="单位">{{ order?.memberCardUnitName || order?.memberCard?.unitName || "-" }}</el-descriptions-item>
+              <el-descriptions-item label="用户卡ID">{{ order?.userMemberCardId || order?.memberCardId || "-" }}</el-descriptions-item>
+              <el-descriptions-item label="模板ID">{{ order?.memberCardTemplateId || order?.memberCard?.memberCardTemplateId || order?.memberCard?.cardId || "-" }}</el-descriptions-item>
+              <el-descriptions-item label="规则来源">{{ order?.memberCardRuleSource || "-" }}</el-descriptions-item>
+              <el-descriptions-item label="规则变化">
+                <el-tag :type="order?.memberCardRuleChanged ? 'warning' : 'success'">
+                  {{ order?.memberCardRuleChanged ? "当前规则已变化" : "与当前规则一致" }}
+                </el-tag>
+              </el-descriptions-item>
               <el-descriptions-item label="冻结额度">{{ formatUnits(order?.frozenUnits) }}</el-descriptions-item>
               <el-descriptions-item label="预计扣减">{{ formatUnits(order?.plannedConsumeUnits || order?.memberCardConsumeUnits) }}</el-descriptions-item>
               <el-descriptions-item label="实际扣减">{{ formatUnits(order?.actualConsumeUnits) }}</el-descriptions-item>
               <el-descriptions-item label="释放额度">{{ formatUnits(order?.releasedUnits) }}</el-descriptions-item>
               <el-descriptions-item label="卡内余额">{{ formatUnits(order?.memberCard?.remainingUnits) }}</el-descriptions-item>
               <el-descriptions-item label="仍冻结">{{ formatUnits(order?.memberCard?.frozenUnits) }}</el-descriptions-item>
+              <el-descriptions-item label="规则快照" :span="2">
+                <pre class="json-snapshot">{{ formatJson(order?.memberCardRuleSnapshot) }}</pre>
+              </el-descriptions-item>
             </el-descriptions>
 
             <el-table :data="memberCardRecords" border>
@@ -335,7 +346,7 @@
 
     <el-dialog v-model="offlineVisible" title="确认线下收款" width="520px">
       <el-alert
-        title="确认后会生成 offline 支付流水、积分流水，并将现金服务订单推进到待派单。"
+        :title="offlinePaymentAlertTitle"
         type="warning"
         show-icon
         :closable="false"
@@ -469,7 +480,22 @@ const assignments = computed(() => order.value?.assignments || []);
 const memberCardRecords = computed(() => order.value?.memberCardRecords || []);
 const timelineItems = computed(() => order.value?.statusLogs || []);
 const hasMemberCardUsage = computed(() =>
-  Boolean(order.value?.memberCardId || order.value?.memberCardName || order.value?.memberCard || memberCardRecords.value.length),
+  Boolean(order.value?.userMemberCardId || order.value?.memberCardId || order.value?.memberCardName || order.value?.memberCard || memberCardRecords.value.length),
+);
+const isPendingMemberCardPurchasePayment = computed(() =>
+  Boolean(
+    order.value
+    && order.value.orderType === "member_card_purchase"
+    && order.value.status === "pending_payment"
+    && !order.value.paidAt
+    && !order.value.grantedUserMemberCardId
+    && order.value.payableAmount > 0,
+  ),
+);
+const offlinePaymentAlertTitle = computed(() =>
+  order.value?.orderType === "member_card_purchase"
+    ? "确认后会生成 offline 支付流水、发放会员卡，并将会员卡购买订单完成。"
+    : "确认后会生成 offline 支付流水、积分流水，并将现金服务订单推进到待派单。"
 );
 const serviceSpecText = computed(() => {
   if (!order.value) return "-";
@@ -494,11 +520,17 @@ const canConfirmOfflinePayment = computed(() =>
   Boolean(
     order.value
     && canUpdateOrders.value
-    && !order.value.paidAt
-    && !order.value.memberCardId
-    && order.value.orderType !== "member_card_purchase"
-    && order.value.payableAmount > 0
-    && ["pending_payment", "pending_dispatch"].includes(order.value.status),
+    && (
+      isPendingMemberCardPurchasePayment.value
+      || (
+        !order.value.paidAt
+        && !order.value.userMemberCardId
+        && !order.value.memberCardId
+        && order.value.orderType !== "member_card_purchase"
+        && order.value.payableAmount > 0
+        && ["pending_payment", "pending_dispatch"].includes(order.value.status)
+      )
+    ),
   ),
 );
 
@@ -606,6 +638,7 @@ async function submitOfflinePayment() {
     ElMessage.warning("线下收款金额必须等于订单应付金额");
     return;
   }
+  const isMemberCardPurchase = order.value.orderType === "member_card_purchase";
   offlineSubmitting.value = true;
   try {
     order.value = await LifeAPI.confirmOfflinePayment(order.value.id, {
@@ -613,7 +646,11 @@ async function submitOfflinePayment() {
       paidAt: offlineForm.paidAt || undefined,
       remark: offlineForm.remark || undefined,
     });
-    ElMessage.success("线下收款已确认，支付、积分和待派单通知已生成");
+    ElMessage.success(
+      isMemberCardPurchase
+        ? "线下收款已确认，支付流水和会员卡发放流水已生成"
+        : "线下收款已确认，支付、积分和待派单通知已生成"
+    );
     offlineVisible.value = false;
     await loadAccounting();
   } finally {
@@ -739,6 +776,11 @@ function formatUnits(value?: number | null, unitName?: string) {
   const unit = unitName || order.value?.memberCardUnitName || order.value?.memberCard?.unitName || "";
   return `${value}${unit}`;
 }
+
+function formatJson(value?: Record<string, unknown> | null) {
+  if (!value || !Object.keys(value).length) return "-";
+  return JSON.stringify(value, null, 2);
+}
 </script>
 
 <style scoped lang="scss">
@@ -807,6 +849,17 @@ function formatUnits(value?: number | null, unitName?: string) {
   gap: 8px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+
+.json-snapshot {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--el-text-color-secondary);
 }
 
 .notification-history {

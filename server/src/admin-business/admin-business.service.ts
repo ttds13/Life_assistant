@@ -222,18 +222,45 @@ export class AdminBusinessService {
 
   async createUser(body: JsonRecord, context: AdminWriteContext) {
     const phone = this.requiredString(body.phone, 'phone required')
-    const existing = await this.prisma.user.findFirst({
-      where: { phone, deletedAt: null },
-      select: { id: true },
-    })
-    if (existing) {
-      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'customer already exists', 409, {
-        existingUserId: Number(existing.id),
-      })
-    }
-
     const source = this.normalizeUserSource(body.source)
     const addressBody = this.optionalObject(body.address)
+    const existing = await this.prisma.user.findFirst({
+      where: { phone, deletedAt: null },
+      select: { id: true, adminRemark: true, source: true },
+    })
+    if (existing) {
+      await this.prisma.$transaction(async (tx) => {
+        if ((body.adminRemark || body.source) && (!existing.adminRemark || !existing.source)) {
+          await tx.user.update({
+            where: { id: existing.id },
+            data: {
+              adminRemark: existing.adminRemark || this.optionalString(body.adminRemark) || null,
+              source: existing.source || source,
+            },
+          })
+        }
+        const address = addressBody
+          ? await this.createUserServiceAddress(tx, existing.id, addressBody)
+          : null
+        await this.audit.writeWithClient(tx, {
+          adminId: context.adminId,
+          action: 'user:reuse',
+          module: 'user',
+          targetType: 'user',
+          targetId: existing.id,
+          requestId: context.requestId,
+          ip: context.ip,
+          detail: {
+            userId: Number(existing.id),
+            source,
+            phone,
+            addressId: address ? Number(address.id) : null,
+          },
+        })
+      })
+      return this.getUser(Number(existing.id))
+    }
+
     const created = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
@@ -2095,7 +2122,14 @@ export class AdminBusinessService {
       this.prisma.memberCard.count({ where }),
       this.prisma.memberCard.findMany({
         where,
-        include: { _count: { select: { userCards: true } } },
+        include: {
+          _count: { select: { userCards: true, serviceRuleItems: true } },
+          serviceRuleItems: {
+            where: { status: 1 },
+            include: { service: true },
+            orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+          },
+        },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: this.skip(page),
         take: page.pageSize,
@@ -2114,6 +2148,9 @@ export class AdminBusinessService {
       minConsumeUnits: card.minConsumeUnits,
       applicableServices: Array.isArray(card.applicableServices) ? card.applicableServices.join(',') : '',
       serviceRules: card.serviceRules ? JSON.stringify(card.serviceRules) : '',
+      serviceRuleList: this.presentMemberCardServiceRules(card.serviceRuleItems),
+      serviceRuleCount: card._count.serviceRuleItems,
+      effectiveRuleSummary: this.memberCardRuleSummary(card.serviceRuleItems),
       price: this.decimalToNumber(card.price),
       validityDays: card.validityDays,
       soldCount: card._count.userCards,
@@ -2146,6 +2183,7 @@ export class AdminBusinessService {
           status: this.publishStatusToNumber(this.optionalString(body.status) || 'draft'),
         },
       })
+      await this.syncMemberCardServiceRulesFromBody(tx, card, body)
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
         action: 'member-card:create',
@@ -2183,6 +2221,9 @@ export class AdminBusinessService {
           status: body.status ? this.publishStatusToNumber(String(body.status)) : current.status,
         },
       })
+      if (this.shouldSyncMemberCardServiceRules(body)) {
+        await this.syncMemberCardServiceRulesFromBody(tx, card, body)
+      }
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
         action: 'member-card:update',
@@ -2218,9 +2259,130 @@ export class AdminBusinessService {
     return { id, status: this.publishStatus(status) }
   }
 
+  async getMemberCardServiceRules(id: number) {
+    const card = await this.prisma.memberCard.findUnique({
+      where: { id: BigInt(id) },
+      include: {
+        serviceRuleItems: {
+          include: { service: true },
+          orderBy: [{ status: 'desc' }, { serviceId: 'asc' }, { id: 'asc' }],
+        },
+      },
+    })
+    if (!card) throw this.notFound('member card not found')
+    return {
+      id: String(card.id),
+      name: card.name,
+      cardType: card.cardType,
+      totalUnits: card.totalUnits || card.totalTimes,
+      serviceRuleList: this.presentMemberCardServiceRules(card.serviceRuleItems),
+      serviceRuleCount: card.serviceRuleItems.length,
+      effectiveRuleSummary: this.memberCardRuleSummary(card.serviceRuleItems),
+      applicableServices: Array.isArray(card.applicableServices) ? card.applicableServices.join(',') : '',
+      serviceRules: card.serviceRules || {},
+    }
+  }
+
+  async updateMemberCardServiceRules(id: number, body: JsonRecord, context: AdminWriteContext) {
+    const card = await this.prisma.memberCard.findUnique({ where: { id: BigInt(id) } })
+    if (!card) throw this.notFound('member card not found')
+    await this.prisma.$transaction(async (tx) => {
+      await this.replaceMemberCardServiceRules(tx, card, this.parseMemberCardServiceRuleInput(body.serviceRuleList ?? body.rules ?? body.serviceRulesV2) || [])
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'member-card:service-rules:update',
+        module: 'marketing',
+        targetType: 'member_card',
+        targetId: id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: {
+          ruleCount: (this.parseMemberCardServiceRuleInput(body.serviceRuleList ?? body.rules ?? body.serviceRulesV2) || []).length,
+        },
+      })
+    })
+    return this.getMemberCardServiceRules(id)
+  }
+
+  async auditMemberCardRules(query: AdminPageQueryDto) {
+    const page = this.getPage(query)
+    const cards = await this.prisma.memberCard.findMany({
+      include: {
+        serviceRuleItems: {
+          include: { service: true },
+          orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+        },
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    })
+
+    const issues: Array<Record<string, unknown>> = []
+    for (const card of cards) {
+      const totalUnits = card.totalUnits || card.totalTimes
+      const legacyApplicable = this.jsonStringArray(card.applicableServices)
+      if (legacyApplicable.length && !card.serviceRuleItems.length) {
+        issues.push({
+          level: 'warning',
+          code: 'legacy_json_not_migrated',
+          memberCardId: Number(card.id),
+          memberCardName: card.name,
+          message: 'legacy applicableServices exists but structured service rules are empty',
+        })
+      }
+      for (const rule of card.serviceRuleItems) {
+        const serviceCardType = this.resolveServiceCardType(rule.service)
+        if (serviceCardType !== card.cardType) {
+          issues.push({
+            level: 'error',
+            code: 'card_type_mismatch',
+            memberCardId: Number(card.id),
+            memberCardName: card.name,
+            serviceId: Number(rule.serviceId),
+            serviceName: rule.service.name,
+            cardType: card.cardType,
+            serviceCardType,
+            message: 'member card type does not match service card type',
+          })
+        }
+        if (rule.service.deletedAt || rule.service.status !== 1) {
+          issues.push({
+            level: 'warning',
+            code: 'service_inactive',
+            memberCardId: Number(card.id),
+            memberCardName: card.name,
+            serviceId: Number(rule.serviceId),
+            serviceName: rule.service.name,
+            message: 'structured rule references inactive or deleted service',
+          })
+        }
+        if (rule.consumeUnits <= 0 || rule.consumeUnits > totalUnits) {
+          issues.push({
+            level: rule.consumeUnits <= 0 ? 'error' : 'warning',
+            code: 'consume_units_invalid',
+            memberCardId: Number(card.id),
+            memberCardName: card.name,
+            serviceId: Number(rule.serviceId),
+            serviceName: rule.service.name,
+            consumeUnits: rule.consumeUnits,
+            totalUnits,
+            message: 'consume units must be positive and should not exceed card total units',
+          })
+        }
+      }
+    }
+
+    const keyword = page.keyword?.toLowerCase()
+    const filtered = keyword
+      ? issues.filter(item => JSON.stringify(item).toLowerCase().includes(keyword))
+      : issues
+    const start = this.skip(page)
+    return this.pageResult(filtered.slice(start, start + page.pageSize), page, filtered.length)
+  }
+
   async listUserMemberCards(query: AdminPageQueryDto) {
     const page = this.getPage(query)
     const where: Prisma.UserMemberCardWhereInput = {}
+    if (query.userId) where.userId = BigInt(Number(query.userId))
     if (query.status) where.status = query.status
     if (query.source) where.source = query.source
     if (query.cardType) where.card = { cardType: query.cardType }
@@ -2240,7 +2402,15 @@ export class AdminBusinessService {
         where,
         include: {
           user: { select: { id: true, nickname: true, phone: true } },
-          card: true,
+          card: {
+            include: {
+              serviceRuleItems: {
+                where: { status: 1 },
+                include: { service: true },
+                orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+              },
+            },
+          },
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: this.skip(page),
@@ -2269,6 +2439,8 @@ export class AdminBusinessService {
         cardName: card.card.name,
         cardType: card.card.cardType,
         unitName: card.card.unitName,
+        serviceRuleCount: card.card.serviceRuleItems.length,
+        effectiveRuleSummary: this.memberCardRuleSummary(card.card.serviceRuleItems),
         source: card.source,
         remainingUnits: card.remainingUnits,
         frozenUnits: card.frozenUnits,
@@ -2287,7 +2459,18 @@ export class AdminBusinessService {
   async getUserMemberCard(id: number) {
     const card = await this.prisma.userMemberCard.findUnique({
       where: { id: BigInt(id) },
-      include: { user: true, card: true },
+      include: {
+        user: true,
+        card: {
+          include: {
+            serviceRuleItems: {
+              where: { status: 1 },
+              include: { service: true },
+              orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+            },
+          },
+        },
+      },
     })
     if (!card) throw this.notFound('user member card not found')
     return {
@@ -2300,6 +2483,9 @@ export class AdminBusinessService {
       cardType: card.card.cardType,
       unitName: card.card.unitName,
       unitMinutes: card.card.unitMinutes || 0,
+      serviceRuleList: this.presentMemberCardServiceRules(card.card.serviceRuleItems),
+      serviceRuleCount: card.card.serviceRuleItems.length,
+      effectiveRuleSummary: this.memberCardRuleSummary(card.card.serviceRuleItems),
       source: card.source,
       remainingUnits: card.remainingUnits,
       frozenUnits: card.frozenUnits,
@@ -3478,6 +3664,279 @@ export class AdminBusinessService {
 
   private isDateOnly(value: unknown) {
     return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.trim())
+  }
+
+  private shouldSyncMemberCardServiceRules(body: JsonRecord) {
+    return Object.prototype.hasOwnProperty.call(body, 'serviceRuleList')
+      || Object.prototype.hasOwnProperty.call(body, 'rules')
+      || Object.prototype.hasOwnProperty.call(body, 'serviceRulesV2')
+      || Object.prototype.hasOwnProperty.call(body, 'applicableServices')
+      || Object.prototype.hasOwnProperty.call(body, 'serviceRules')
+  }
+
+  private async syncMemberCardServiceRulesFromBody(
+    tx: Prisma.TransactionClient,
+    card: {
+      id: bigint
+      cardType: string
+      totalUnits: number
+      totalTimes: number
+      unitMinutes: number | null
+      minConsumeUnits: number
+      applicableServices: Prisma.JsonValue
+      serviceRules: Prisma.JsonValue | null
+    },
+    body: JsonRecord,
+  ) {
+    const structured = this.parseMemberCardServiceRuleInput(body.serviceRuleList ?? body.rules ?? body.serviceRulesV2)
+    const rules = structured ?? await this.buildRulesFromLegacyMemberCardConfig(tx, card)
+    if (rules === undefined) return
+    await this.replaceMemberCardServiceRules(tx, card, rules)
+  }
+
+  private async replaceMemberCardServiceRules(
+    tx: Prisma.TransactionClient,
+    card: {
+      id: bigint
+      cardType: string
+      totalUnits: number
+      totalTimes: number
+      unitMinutes: number | null
+      minConsumeUnits: number
+    },
+    rules: Array<{ serviceId: number, consumeUnits: number, status?: number, remark?: string }>,
+  ) {
+    const normalizedInput = rules.map(rule => ({
+      serviceId: Number(rule.serviceId),
+      consumeUnits: Number(rule.consumeUnits),
+      status: rule.status === 0 ? 0 : 1,
+      remark: rule.remark || null,
+    }))
+    const deduped = new Map<number, (typeof normalizedInput)[number]>()
+    for (const rule of normalizedInput) {
+      deduped.set(rule.serviceId, rule)
+    }
+    const normalized = [...deduped.values()]
+
+    const serviceIds = [...new Set(normalized.map(rule => rule.serviceId))]
+    const services = serviceIds.length
+      ? await tx.service.findMany({ where: { id: { in: serviceIds.map(id => BigInt(id)) } } })
+      : []
+    const serviceMap = new Map(services.map(service => [Number(service.id), service]))
+
+    for (const rule of normalized) {
+      if (!Number.isInteger(rule.serviceId) || rule.serviceId <= 0) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'serviceId required for member card service rule', 400)
+      }
+      if (!Number.isInteger(rule.consumeUnits) || rule.consumeUnits <= 0) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'consumeUnits must be a positive integer', 400)
+      }
+      const service = serviceMap.get(rule.serviceId)
+      if (!service) {
+        throw new BusinessException(ErrorCode.COMMON_NOT_FOUND, `service not found: ${rule.serviceId}`, 404)
+      }
+      const serviceCardType = this.resolveServiceCardType(service)
+      if (serviceCardType !== card.cardType) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card type does not match service card type', 400, {
+          serviceId: rule.serviceId,
+          serviceCardType,
+          cardType: card.cardType,
+        })
+      }
+    }
+
+    await tx.memberCardServiceRule.deleteMany({ where: { memberCardId: card.id } })
+    if (!normalized.length) return
+    await tx.memberCardServiceRule.createMany({
+      data: normalized.map(rule => ({
+        memberCardId: card.id,
+        serviceId: BigInt(rule.serviceId),
+        consumeUnits: rule.consumeUnits,
+        status: rule.status,
+        remark: rule.remark,
+      })),
+    })
+  }
+
+  private parseMemberCardServiceRuleInput(value: unknown): Array<{ serviceId: number, consumeUnits: number, status?: number, remark?: string }> | undefined {
+    if (value === undefined || value === null) return undefined
+    let parsed: unknown = value
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (!trimmed) return []
+      try {
+        parsed = JSON.parse(trimmed) as unknown
+      }
+      catch {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid serviceRuleList JSON', 400)
+      }
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>
+      if (Array.isArray(record.rules)) parsed = record.rules
+      else if (Array.isArray(record.serviceRuleList)) parsed = record.serviceRuleList
+    }
+    if (!Array.isArray(parsed)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'serviceRuleList must be an array', 400)
+    }
+    return parsed.map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid service rule item', 400)
+      }
+      const record = item as Record<string, unknown>
+      const serviceId = Number(record.serviceId ?? record.id)
+      const consumeUnits = Number(record.consumeUnits ?? record.consumeUnit ?? record.units)
+      const rawStatus = record.status
+      const status = rawStatus === undefined || rawStatus === null || rawStatus === ''
+        ? 1
+        : ['active', 'published', '1', 'true'].includes(String(rawStatus).trim().toLowerCase()) || rawStatus === 1
+          ? 1
+          : 0
+      return {
+        serviceId,
+        consumeUnits,
+        status,
+        remark: this.optionalString(record.remark),
+      }
+    })
+  }
+
+  private async buildRulesFromLegacyMemberCardConfig(
+    tx: Prisma.TransactionClient,
+    card: {
+      cardType: string
+      totalUnits: number
+      totalTimes: number
+      unitMinutes: number | null
+      minConsumeUnits: number
+      applicableServices: Prisma.JsonValue
+      serviceRules: Prisma.JsonValue | null
+    },
+  ) {
+    const applicableServices = this.jsonStringArray(card.applicableServices)
+    if (!applicableServices.length) return undefined
+    const result: Array<{ serviceId: number, consumeUnits: number, status?: number, remark?: string }> = []
+    const seen = new Set<string>()
+    for (const key of applicableServices) {
+      const service = await this.findServiceByLegacyMemberCardKey(tx, key)
+      if (!service || seen.has(String(service.id))) continue
+      seen.add(String(service.id))
+      result.push({
+        serviceId: Number(service.id),
+        consumeUnits: this.legacyMemberCardConsumeUnits(card, service),
+        status: 1,
+        remark: 'migrated from legacy member card JSON',
+      })
+    }
+    return result
+  }
+
+  private findServiceByLegacyMemberCardKey(tx: Prisma.TransactionClient, key: string) {
+    const trimmed = key.trim()
+    if (!trimmed) return null
+    const numericId = /^\d+$/.test(trimmed) ? BigInt(trimmed) : undefined
+    return tx.service.findFirst({
+      where: {
+        OR: [
+          ...(numericId ? [{ id: numericId }] : []),
+          { code: trimmed },
+          { name: trimmed },
+        ],
+      },
+      orderBy: { id: 'asc' },
+    })
+  }
+
+  private legacyMemberCardConsumeUnits(
+    card: {
+      cardType: string
+      unitMinutes: number | null
+      minConsumeUnits: number
+      serviceRules: Prisma.JsonValue | null
+    },
+    service: {
+      id: bigint
+      code: string
+      name: string
+      durationMinutes: number | null
+      consumeUnit: number | null
+    },
+  ) {
+    const ruleUnits = this.legacyRuleConsumeUnits(card.serviceRules, service)
+    if (ruleUnits) return ruleUnits
+    if (card.cardType === 'time') {
+      return service.consumeUnit || service.durationMinutes || card.unitMinutes || card.minConsumeUnits || 1
+    }
+    return service.consumeUnit || card.minConsumeUnits || 1
+  }
+
+  private legacyRuleConsumeUnits(value: Prisma.JsonValue | null, service: { id: bigint, code: string, name: string }) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return 0
+    const record = value as Record<string, unknown>
+    for (const key of [String(service.id), service.code, service.name]) {
+      const rule = record[key]
+      if (typeof rule === 'number' && Number.isInteger(rule) && rule > 0) return rule
+      if (rule && typeof rule === 'object' && !Array.isArray(rule)) {
+        const consumeUnits = Number((rule as Record<string, unknown>).consumeUnits)
+        if (Number.isInteger(consumeUnits) && consumeUnits > 0) return consumeUnits
+      }
+    }
+    return 0
+  }
+
+  private resolveServiceCardType(service: {
+    priceUnit: string
+    durationMinutes: number | null
+    cardType: string
+    consultationRequired?: boolean | null
+  }) {
+    if (service.consultationRequired || service.cardType === 'consultation') return 'consultation'
+    if (service.cardType === 'time' || service.cardType === 'times' || service.cardType === 'none') return service.cardType
+    if ((service.durationMinutes || 0) > 0) return 'time'
+    if (['hour', 'minute'].includes(service.priceUnit.toLowerCase())) return 'time'
+    if (['times', 'count', 'piece'].includes(service.priceUnit.toLowerCase())) return 'times'
+    return 'none'
+  }
+
+  private presentMemberCardServiceRules(rules: Array<{
+    id: bigint
+    memberCardId: bigint
+    serviceId: bigint
+    consumeUnits: number
+    status: number
+    remark: string | null
+    service: {
+      id: bigint
+      code: string
+      name: string
+      cardType: string
+      consumeUnit: number | null
+      durationMinutes: number | null
+      status: number
+      deletedAt: Date | null
+    }
+  }>) {
+    return rules.map(rule => ({
+      id: Number(rule.id),
+      memberCardId: Number(rule.memberCardId),
+      serviceId: Number(rule.serviceId),
+      serviceCode: rule.service.code,
+      serviceName: rule.service.name,
+      serviceCardType: rule.service.cardType,
+      serviceConsumeUnit: rule.service.consumeUnit || 0,
+      serviceDurationMinutes: rule.service.durationMinutes || 0,
+      serviceStatus: rule.service.deletedAt ? 'deleted' : this.activeStatus(rule.service.status),
+      consumeUnits: rule.consumeUnits,
+      effectiveConsumeUnits: rule.consumeUnits,
+      status: this.activeStatus(rule.status),
+      remark: rule.remark || '',
+    }))
+  }
+
+  private memberCardRuleSummary(rules: Array<{ service: { name: string }, consumeUnits: number }>) {
+    if (!rules.length) return 'all matching card-type services'
+    return rules.slice(0, 3).map(rule => `${rule.service.name}:${rule.consumeUnits}`).join(', ')
+      + (rules.length > 3 ? ` +${rules.length - 3}` : '')
   }
 
   private normalizeUserMemberCardStatus(value: string) {

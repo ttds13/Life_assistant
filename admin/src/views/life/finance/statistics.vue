@@ -180,6 +180,8 @@ const sourceOptions = [
   { label: "后台录入", value: "admin" },
   { label: "电话订单", value: "phone" },
   { label: "线下订单", value: "offline" },
+  { label: "微信私域", value: "wechat_private" },
+  { label: "推广渠道", value: "channel" },
   { label: "推广订单", value: "promotion" },
   { label: "视频号", value: "channels" },
 ];

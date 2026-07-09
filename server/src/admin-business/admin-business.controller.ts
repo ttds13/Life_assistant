@@ -304,6 +304,25 @@ export class AdminBusinessController {
     return this.service.listMemberCards(query)
   }
 
+  @Get('member-cards/rule-audit')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_LIST)
+  auditMemberCardRules(@Query() query: AdminPageQueryDto) {
+    return this.service.auditMemberCardRules(query)
+  }
+
+  @Get('member-cards/:id/service-rules')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_LIST)
+  getMemberCardServiceRules(@Param('id') idText: string) {
+    return this.service.getMemberCardServiceRules(this.parseId(idText))
+  }
+
+  @Put('member-cards/:id/service-rules')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_UPDATE)
+  @HttpCode(200)
+  updateMemberCardServiceRules(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
+    return this.service.updateMemberCardServiceRules(this.parseId(idText), body, this.context(request))
+  }
+
   @Post('member-cards')
   @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_CREATE)
   @HttpCode(200)

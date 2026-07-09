@@ -341,9 +341,9 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="customerVisible" title="新增客户" width="720px">
+    <el-dialog v-model="customerVisible" title="快速新增线下客户" width="720px">
       <el-alert
-        title="用于后台录入电话、线下或外来客户；手机号已存在时后端会阻止重复创建。"
+        title="只需要填写手机号、客户姓名和服务地址；来源、联系人、联系电话、默认地址等由系统自动补齐。手机号已存在时会复用客户。"
         type="info"
         show-icon
         :closable="false"
@@ -351,82 +351,111 @@
       />
       <el-form :model="customerForm" label-width="110px">
         <el-row :gutter="12">
-          <el-col :span="12">
+          <el-col :span="10">
             <el-form-item label="客户姓名">
               <el-input v-model="customerForm.nickname" maxlength="64" placeholder="不填则使用手机号" />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :span="14">
             <el-form-item label="手机号" required>
               <el-input v-model="customerForm.phone" maxlength="20" placeholder="客户手机号" />
             </el-form-item>
           </el-col>
         </el-row>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="来源">
-              <el-select v-model="customerForm.source" style="width: 100%">
-                <el-option label="后台录入" value="admin" />
-                <el-option label="电话客户" value="phone" />
-                <el-option label="线下客户" value="offline" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="城市编码">
-              <el-input v-model="customerForm.cityCode" maxlength="20" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-form-item label="客户备注">
-          <el-input v-model="customerForm.adminRemark" type="textarea" :rows="2" maxlength="512" show-word-limit />
-        </el-form-item>
+        <el-alert
+          v-if="existingCustomer"
+          type="warning"
+          show-icon
+          :closable="false"
+          class="existing-customer-tip"
+        >
+          <template #title>
+            手机号已存在，保存时将复用该客户
+          </template>
+          <div>
+            {{ customerSummary(existingCustomer) }}
+          </div>
+        </el-alert>
 
         <el-divider content-position="left">默认服务地址</el-divider>
         <el-form-item label="同步创建">
           <el-switch v-model="customerForm.createAddress" />
         </el-form-item>
         <template v-if="customerForm.createAddress">
-          <el-row :gutter="12">
-            <el-col :span="12">
-              <el-form-item label="联系人" required>
-                <el-input v-model="customerForm.contactName" maxlength="64" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item label="联系电话" required>
-                <el-input v-model="customerForm.contactPhone" maxlength="20" />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-row :gutter="12">
-            <el-col :span="8">
-              <el-form-item label="城市">
-                <el-input v-model="customerForm.cityName" maxlength="32" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="区县">
-                <el-input v-model="customerForm.districtName" maxlength="32" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="小区/地点">
-                <el-input v-model="customerForm.addressTitle" maxlength="128" />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-form-item label="详细地址" required>
-            <el-input v-model="customerForm.detailAddress" type="textarea" :rows="2" maxlength="256" show-word-limit />
+          <el-form-item label="服务地址">
+            <el-input
+              v-model="customerForm.detailAddress"
+              type="textarea"
+              :rows="2"
+              maxlength="256"
+              show-word-limit
+              placeholder="可直接填写小区、楼栋、门牌、补充说明；不填则只创建客户"
+            />
           </el-form-item>
           <el-form-item label="门牌号">
-            <el-input v-model="customerForm.houseNumber" maxlength="64" />
+            <el-input v-model="customerForm.houseNumber" maxlength="64" placeholder="如 8栋808，可选" />
           </el-form-item>
         </template>
+        <el-form-item label="客户备注">
+          <el-input v-model="customerForm.adminRemark" type="textarea" :rows="2" maxlength="512" show-word-limit />
+        </el-form-item>
+        <el-collapse v-model="customerAdvancedVisible" class="quick-customer-advanced">
+          <el-collapse-item title="高级选项" name="advanced">
+            <el-row :gutter="12">
+              <el-col :span="12">
+                <el-form-item label="来源">
+                  <el-select v-model="customerForm.source" style="width: 100%">
+                    <el-option label="线下客户" value="offline" />
+                    <el-option label="后台录入" value="admin" />
+                    <el-option label="电话客户" value="phone" />
+                    <el-option label="微信私域" value="wechat_private" />
+                    <el-option label="推广渠道" value="channel" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="城市编码">
+                  <el-input v-model="customerForm.cityCode" maxlength="20" />
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <template v-if="customerForm.createAddress">
+              <el-row :gutter="12">
+                <el-col :span="12">
+                  <el-form-item label="联系人">
+                    <el-input v-model="customerForm.contactName" maxlength="64" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="12">
+                  <el-form-item label="联系电话">
+                    <el-input v-model="customerForm.contactPhone" maxlength="20" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+              <el-row :gutter="12">
+                <el-col :span="8">
+                  <el-form-item label="城市">
+                    <el-input v-model="customerForm.cityName" maxlength="32" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label="区县">
+                    <el-input v-model="customerForm.districtName" maxlength="32" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label="小区/地点">
+                    <el-input v-model="customerForm.addressTitle" maxlength="128" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </template>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
       <template #footer>
         <el-button @click="customerVisible = false">取消</el-button>
-        <el-button type="primary" :loading="customerSaving" @click="submitCustomer">创建客户</el-button>
+        <el-button type="primary" :loading="customerSaving" @click="submitCustomer">保存客户</el-button>
       </template>
     </el-dialog>
 
@@ -445,6 +474,26 @@
         <el-form-item label="有效天数">
           <el-input-number v-model="grantCardForm.validityDays" :min="0" :step="1" style="width: 100%" />
           <div class="form-tip">0 表示使用模板默认有效期。</div>
+        </el-form-item>
+        <el-form-item label="发卡来源">
+          <el-select v-model="grantCardForm.source" style="width: 100%">
+            <el-option label="后台发放" value="admin" />
+            <el-option label="线下购买" value="offline" />
+            <el-option label="后台调整" value="adjust" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="收款金额">
+          <el-input-number v-model="grantCardForm.offlinePaymentAmount" :min="0" :precision="2" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="收款方式">
+          <el-select v-model="grantCardForm.paymentChannel" style="width: 100%">
+            <el-option label="线下收款" value="offline" />
+            <el-option label="后台发放" value="admin" />
+            <el-option label="微信私域" value="wechat_private" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="收款备注">
+          <el-input v-model="grantCardForm.paymentRemark" maxlength="256" />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="grantCardForm.remark" type="textarea" :rows="3" maxlength="256" show-word-limit />
@@ -606,6 +655,9 @@ const addressLoading = ref(false);
 const addressSaving = ref(false);
 const customerVisible = ref(false);
 const customerSaving = ref(false);
+const customerAdvancedVisible = ref<string[]>([]);
+const customerLookupLoading = ref(false);
+const existingCustomer = ref<LifeResourceRecord>();
 const grantCardVisible = ref(false);
 const grantCardSaving = ref(false);
 const grantCardUser = ref<LifeResourceRecord>();
@@ -660,6 +712,10 @@ const grantCardForm = reactive({
   cardId: 0,
   totalUnits: 0,
   validityDays: 0,
+  source: "admin",
+  offlinePaymentAmount: 0,
+  paymentChannel: "offline",
+  paymentRemark: "",
   remark: "",
 });
 const pointAdjustForm = reactive({
@@ -697,6 +753,44 @@ const promotionTargetTip = computed(() => {
   if (promotionTargetType.value === "member_card") return "选择会员卡后会生成会员卡详情页路径。";
   if (promotionTargetType.value === "category") return "选择分类后会生成服务列表页路径。";
   return "目标类型为首页时，固定链接会直接回到小程序首页。";
+});
+let customerPhoneLookupTimer: ReturnType<typeof setTimeout> | undefined;
+
+watch(
+  () => customerForm.phone,
+  (phone, oldPhone) => {
+    const nextPhone = phone.trim();
+    if (!customerForm.contactPhone || customerForm.contactPhone === oldPhone) {
+      customerForm.contactPhone = nextPhone;
+    }
+    if (!customerForm.nickname && !customerForm.contactName) {
+      customerForm.contactName = nextPhone;
+    }
+    scheduleCustomerPhoneLookup(nextPhone);
+  }
+);
+
+watch(
+  () => customerForm.nickname,
+  (nickname, oldNickname) => {
+    const nextName = nickname.trim() || customerForm.phone.trim();
+    if (!customerForm.contactName || customerForm.contactName === oldNickname || customerForm.contactName === customerForm.phone.trim()) {
+      customerForm.contactName = nextName;
+    }
+  }
+);
+
+watch(
+  () => customerForm.detailAddress,
+  (address) => {
+    if (!customerForm.addressTitle && address.trim()) {
+      customerForm.addressTitle = address.trim().slice(0, 20);
+    }
+  }
+);
+
+onBeforeUnmount(() => {
+  if (customerPhoneLookupTimer) clearTimeout(customerPhoneLookupTimer);
 });
 
 watch(
@@ -747,6 +841,49 @@ function handleCreate() {
   seedPromotionTargetOption();
   void loadPromotionTargetOptions();
   formVisible.value = true;
+}
+
+function scheduleCustomerPhoneLookup(phone: string) {
+  if (customerPhoneLookupTimer) clearTimeout(customerPhoneLookupTimer);
+  existingCustomer.value = undefined;
+  if (phone.length < 5) return;
+  customerPhoneLookupTimer = setTimeout(() => {
+    void lookupCustomerByPhone(phone);
+  }, 300);
+}
+
+async function lookupCustomerByPhone(phone: string) {
+  customerLookupLoading.value = true;
+  try {
+    const data = await LifeAPI.getResourcePage("users", {
+      pageNum: 1,
+      pageSize: 5,
+      keywords: phone,
+    });
+    if (customerForm.phone.trim() !== phone) return;
+    existingCustomer.value = (data.list || []).find((item) => recordText(item, "phone") === phone);
+  } finally {
+    customerLookupLoading.value = false;
+  }
+}
+
+function customerSummary(customer: LifeResourceRecord) {
+  const name = recordText(customer, "nickname") || recordText(customer, "phone") || `客户#${customer.id}`;
+  const phone = recordText(customer, "phone") || "-";
+  const source = formatValue(recordText(customer, "source"), "tag");
+  const orderCount = recordNumber(customer, "orderCount");
+  const paid = money(customer.totalPaid);
+  return `${name} / ${phone} / ${source} / 历史订单 ${orderCount} 单 / 累计消费 ￥${paid}`;
+}
+
+function recordText(record: LifeResourceRecord | undefined, key: string) {
+  const value = record?.[key];
+  return value === undefined || value === null ? "" : String(value);
+}
+
+function recordNumber(record: LifeResourceRecord | undefined, key: string) {
+  const value = Number(record?.[key]);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function handleView(row: LifeResourceRecord) {
@@ -817,6 +954,10 @@ function openGrantCard(row: LifeResourceRecord) {
   grantCardForm.cardId = 0;
   grantCardForm.totalUnits = 0;
   grantCardForm.validityDays = 0;
+  grantCardForm.source = "admin";
+  grantCardForm.offlinePaymentAmount = 0;
+  grantCardForm.paymentChannel = "offline";
+  grantCardForm.paymentRemark = "";
   grantCardForm.remark = "";
   grantCardVisible.value = true;
 }
@@ -834,6 +975,10 @@ async function submitGrantCard() {
       cardId: grantCardForm.cardId,
       totalUnits: grantCardForm.totalUnits || undefined,
       validityDays: grantCardForm.validityDays || undefined,
+      source: grantCardForm.source,
+      offlinePaymentAmount: grantCardForm.offlinePaymentAmount || undefined,
+      paymentChannel: grantCardForm.paymentChannel || undefined,
+      paymentRemark: grantCardForm.paymentRemark.trim() || undefined,
       remark: grantCardForm.remark.trim() || undefined,
     });
     ElMessage.success("会员卡已发放");
@@ -1051,7 +1196,7 @@ async function submitCustomer() {
   customerSaving.value = true;
   try {
     await LifeAPI.createResource("users", payload);
-    ElMessage.success("客户已创建");
+    ElMessage.success("客户已创建或复用");
     customerVisible.value = false;
     await fetchPage();
   } finally {
@@ -1183,6 +1328,18 @@ function normalizeFormValue(prop: string, value: unknown) {
     if (value === true || value === "true" || value === "active") return "true";
     if (value === false || value === "false" || value === "disabled") return "false";
   }
+  if (prop === "serviceRuleList" && Array.isArray(value)) {
+    return JSON.stringify(value.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const record = item as Record<string, unknown>;
+      return {
+        serviceId: record.serviceId,
+        consumeUnits: record.consumeUnits,
+        status: record.status,
+        remark: record.remark,
+      };
+    }), null, 2);
+  }
   return value;
 }
 
@@ -1201,9 +1358,10 @@ function resetAddressForm(row?: AddressRecord) {
 }
 
 function resetCustomerForm() {
+  if (customerPhoneLookupTimer) clearTimeout(customerPhoneLookupTimer);
   customerForm.nickname = "";
   customerForm.phone = "";
-  customerForm.source = "admin";
+  customerForm.source = "offline";
   customerForm.cityCode = "";
   customerForm.adminRemark = "";
   customerForm.createAddress = true;
@@ -1216,6 +1374,9 @@ function resetCustomerForm() {
   customerForm.addressTitle = "";
   customerForm.detailAddress = "";
   customerForm.houseNumber = "";
+  customerAdvancedVisible.value = [];
+  customerLookupLoading.value = false;
+  existingCustomer.value = undefined;
 }
 
 function validateAddressForm() {
@@ -1242,46 +1403,44 @@ function buildAddressPayload() {
 }
 
 function buildCustomerPayload() {
-  if (!customerForm.phone.trim()) {
+  const phone = customerForm.phone.trim();
+  const nickname = customerForm.nickname.trim();
+  const detailAddress = customerForm.detailAddress.trim();
+  const houseNumber = customerForm.houseNumber.trim();
+  const shouldCreateAddress = customerForm.createAddress && Boolean(detailAddress);
+
+  if (!phone) {
     ElMessage.warning("请填写客户手机号");
     return null;
   }
-  if (customerForm.createAddress) {
-    if (!customerForm.contactName.trim()) {
-      ElMessage.warning("请填写地址联系人");
-      return null;
-    }
-    if (!customerForm.contactPhone.trim()) {
-      ElMessage.warning("请填写地址联系电话");
-      return null;
-    }
-    if (!customerForm.detailAddress.trim()) {
-      ElMessage.warning("请填写详细地址");
-      return null;
-    }
+  if (customerForm.createAddress && !detailAddress && houseNumber) {
+    ElMessage.warning("已填写门牌号时，请同时填写服务地址");
+    return null;
   }
 
   const payload: Record<string, unknown> = {
-    nickname: customerForm.nickname.trim() || undefined,
-    phone: customerForm.phone.trim(),
+    nickname: nickname || phone,
+    phone,
     source: customerForm.source,
     cityCode: customerForm.cityCode.trim() || undefined,
     adminRemark: customerForm.adminRemark.trim() || undefined,
     status: "active",
   };
 
-  if (customerForm.createAddress) {
+  if (shouldCreateAddress) {
+    const contactName = customerForm.contactName.trim() || nickname || phone;
+    const contactPhone = customerForm.contactPhone.trim() || phone;
     payload.address = {
       addressType: "service",
-      contactName: customerForm.contactName.trim(),
-      contactPhone: customerForm.contactPhone.trim(),
+      contactName,
+      contactPhone,
       provinceName: customerForm.provinceName.trim() || undefined,
       cityName: customerForm.cityName.trim() || undefined,
       districtName: customerForm.districtName.trim() || undefined,
       streetName: customerForm.streetName.trim() || undefined,
-      addressTitle: customerForm.addressTitle.trim() || undefined,
-      detailAddress: customerForm.detailAddress.trim(),
-      houseNumber: customerForm.houseNumber.trim() || undefined,
+      addressTitle: customerForm.addressTitle.trim() || detailAddress.slice(0, 20),
+      detailAddress,
+      houseNumber: houseNumber || undefined,
       isDefault: true,
     };
   }
@@ -1409,7 +1568,7 @@ function resolveTagType(value: unknown) {
   if (value === true) return "success";
   if (value === false) return "info";
   if (value === "active" || value === "published" || value === "online" || value === "staff" || value === "available" || value === "earn") return "success";
-  if (value === "service" || value === "member_card" || value === "category" || value === "home" || value === "channels") return "primary";
+  if (value === "service" || value === "member_card" || value === "category" || value === "home" || value === "channels" || value === "channel") return "primary";
   if (value === "processing" || value === "released" || value === "admin_adjust") return "primary";
   if (value === "pending" || value === "busy" || value === "open" || value === "locked" || value === "refund_deduct") return "warning";
   if (value === "rejected" || value === "bug" || value === "invalid") return "danger";
@@ -1446,9 +1605,11 @@ function formatValue(value: unknown, type?: string) {
       category: "服务分类",
       home: "首页",
       channels: "视频号",
+      channel: "推广渠道",
       miniapp: "小程序",
       admin: "后台",
       phone: "电话",
+      wechat_private: "微信私域",
       promotion: "推广",
       available: "可用",
       locked: "锁定",
@@ -1574,6 +1735,16 @@ function buildDeleteConfirmText(name: string) {
   font-size: 12px;
   line-height: 18px;
   color: var(--el-text-color-secondary);
+}
+
+.quick-customer-advanced {
+  margin-top: 4px;
+  border-top: 0;
+  border-bottom: 0;
+}
+
+.existing-customer-tip {
+  margin: -4px 0 12px;
 }
 
 .life-copy-cell {

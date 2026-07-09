@@ -6,7 +6,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { getRequestId, RequestWithContext } from '../common/utils/request-context'
-import { GrantMemberCardDto } from './dto/grant-member-card.dto'
+import { AdminCreateMemberCardPurchaseDto, GrantMemberCardDto } from './dto/grant-member-card.dto'
 import { PurchaseMemberCardDto } from './dto/purchase-member-card.dto'
 import { MemberCardsService } from './member-cards.service'
 
@@ -49,6 +49,22 @@ export class MemberCardsController {
       throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'missing admin identity', 403)
     }
     return this.memberCards.grantCard(dto, {
+      adminId,
+      requestId: getRequestId(request),
+      ip: this.getClientIp(request),
+    })
+  }
+
+  @Post('admin/member-cards/purchase-orders')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_GRANT)
+  @HttpCode(200)
+  createAdminPurchaseOrder(@Req() request: RequestWithContext, @Body() dto: AdminCreateMemberCardPurchaseDto) {
+    const adminId = request.user?.adminId || request.user?.userId
+    if (!adminId) {
+      throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'missing admin identity', 403)
+    }
+    return this.memberCards.createAdminPurchaseOrder(dto, {
       adminId,
       requestId: getRequestId(request),
       ip: this.getClientIp(request),
