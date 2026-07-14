@@ -8,6 +8,7 @@ import type {
   AdminCreateOrderPayload,
   AdminNotificationItem,
   AdminStaffNotificationItem,
+  AdminUsableCoupon,
   AdminUserPointsSummary,
   AdminWithdrawDetail,
   AdminWithdrawRequest,
@@ -158,6 +159,7 @@ const memberCardRecordTypeOptions = [
   { label: "冻结", value: "freeze", tagType: "warning" },
   { label: "释放", value: "release", tagType: "primary" },
   { label: "核销", value: "consume", tagType: "danger" },
+  { label: '后台调整', value: 'admin_adjust', tagType: 'primary' },
 ] satisfies LifeStatusOption[];
 
 const pointLedgerTypeOptions = [
@@ -701,15 +703,21 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
     description: "查看用户已购买或后台发放的会员卡余额、冻结额度和有效期。",
     searchPlaceholder: "用户昵称 / 手机号 / 会员卡名称",
     statusOptions: userMemberCardStatusOptions,
+    rowActions: [
+      { key: "adjust_member_card_time", label: "调整时长", type: "primary" },
+      { key: "manual_consume_member_card", label: "手动核销", type: "danger" },
+      { key: "view_member_card_records", label: "查看流水", type: "success" },
+      { key: "view_purchase_order", label: "来源订单", type: "info" },
+    ],
     columns: [
       { prop: "userName", label: "用户", minWidth: 120 },
       { prop: "userPhone", label: "手机号", width: 130 },
       { prop: "cardName", label: "会员卡", minWidth: 160 },
       { prop: "cardType", label: "卡类型", width: 100, type: "tag" },
       { prop: "source", label: "来源", width: 100, type: "tag" },
-      { prop: "remainingUnits", label: "剩余额度", width: 100 },
-      { prop: "frozenUnits", label: "冻结额度", width: 100 },
-      { prop: "usableUnits", label: "可用额度", width: 100 },
+      { prop: "remainingUnits", label: "总剩余", width: 100 },
+      { prop: "frozenUnits", label: "已冻结", width: 100 },
+      { prop: "usableUnits", label: "可用余额", width: 100 },
       { prop: "remainingTimes", label: "兼容次数", width: 100 },
       { prop: "purchaseOrderNo", label: "购买订单", minWidth: 150 },
       { prop: "expireAt", label: "有效期", width: 170, type: "datetime" },
@@ -785,6 +793,7 @@ function toAdminQuery(queryParams: LifeQueryParams) {
     startDate: queryParams.startDate || undefined,
     endDate: queryParams.endDate || undefined,
     userId: queryParams.userId || undefined,
+    userMemberCardId: queryParams.userMemberCardId || undefined,
     couponId: queryParams.couponId || undefined,
     targetType: queryParams.targetType || undefined,
     staffId: queryParams.staffId || undefined,
@@ -840,6 +849,22 @@ const LifeAPI = {
       url: `${ADMIN_BASE_URL}/users/${id}/points/adjust`,
       method: "post",
       data,
+    });
+  },
+
+  adjustUserMemberCardTime(id: string | number, data: { mode: string; deltaUnits?: number; targetRemainingUnits?: number; reason: string }) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/user-member-cards/${id}/adjust-time`,
+      method: "post",
+      data,
+    });
+  },
+
+  getUsableUserCoupons(id: string | number, params?: { serviceId?: string | number; amount?: number; target?: string }) {
+    return request<unknown, AdminUsableCoupon[]>({
+      url: `${ADMIN_BASE_URL}/users/${id}/coupons/usable`,
+      method: "get",
+      params,
     });
   },
 

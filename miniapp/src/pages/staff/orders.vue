@@ -44,10 +44,42 @@ function chooseActualMinutes(task: StaffTask) {
       return
     }
     const planned = task.plannedConsumeUnits || task.memberCardConsumeUnits || 120
-    const half = Math.max(60, Math.ceil(planned / 2))
+    const half = Math.max(1, Math.ceil(planned / 2))
+    const options = Array.from(new Set([half, planned])).map(value => ({ label: `${value} 分钟`, value }))
+    const customIndex = options.length
     uni.showActionSheet({
-      itemList: [`${half} 分钟`, `${planned} 分钟`],
-      success: res => resolve(res.tapIndex === 0 ? half : planned),
+      itemList: [...options.map(item => item.label), '手动输入'],
+      success: (res) => {
+        if (res.tapIndex === customIndex) {
+          inputActualMinutes(planned).then(resolve)
+          return
+        }
+        resolve(options[res.tapIndex]?.value)
+      },
+      fail: () => resolve(undefined),
+    })
+  })
+}
+
+function inputActualMinutes(planned: number) {
+  return new Promise<number | undefined>((resolve) => {
+    ;(uni.showModal as any)({
+      title: '确认实际服务时长',
+      editable: true,
+      placeholderText: `请输入 1-${planned} 分钟`,
+      success: (res: any) => {
+        if (!res.confirm) {
+          resolve(undefined)
+          return
+        }
+        const minutes = Number(res.content)
+        if (!Number.isInteger(minutes) || minutes < 1 || minutes > planned) {
+          uni.showToast({ icon: 'none', title: '时长不正确' })
+          resolve(undefined)
+          return
+        }
+        resolve(minutes)
+      },
       fail: () => resolve(undefined),
     })
   })

@@ -41,6 +41,9 @@
       <div class="page-toolbar">
         <div class="page-toolbar__left">
           <el-tag type="primary" effect="plain">共 {{ total }} 条</el-tag>
+          <el-tag v-if="queryParams.userMemberCardId" type="success" effect="plain" closable @close="clearUserMemberCardFilter">
+            用户会员卡 #{{ queryParams.userMemberCardId }}
+          </el-tag>
         </div>
         <div class="page-toolbar__right">
           <el-button icon="refresh" @click="fetchPage">刷新</el-button>
@@ -74,10 +77,11 @@
               <span class="life-copy-cell__text">{{ formatValue(row[column.prop], column.type) }}</span>
               <copy-button v-if="copyTextValue(row[column.prop])" :text="copyTextValue(row[column.prop])" />
             </div>
+            <span v-else-if="isMemberCardUnitColumn(column.prop)">{{ formatCardUnits(row[column.prop], row) }}</span>
             <span v-else>{{ formatValue(row[column.prop], column.type) }}</span>
           </template>
         </el-table-column>
-        <el-table-column fixed="right" label="操作" width="340">
+        <el-table-column fixed="right" label="操作" width="430">
           <template #default="{ row }">
             <el-button type="primary" link size="small" icon="view" @click="handleView(row)">
               查看
@@ -553,6 +557,79 @@
       </div>
     </el-dialog>
 
+    <el-dialog v-model="memberCardAdjustVisible" :title="memberCardAdjustTitle" width="720px">
+      <el-descriptions v-if="memberCardAdjustRow" :column="3" border>
+        <el-descriptions-item label="用户">{{ memberCardAdjustRow.userName || memberCardAdjustRow.userPhone || memberCardAdjustRow.userId }}</el-descriptions-item>
+        <el-descriptions-item label="手机号">{{ memberCardAdjustRow.userPhone || "-" }}</el-descriptions-item>
+        <el-descriptions-item label="会员卡">{{ memberCardAdjustRow.cardName || memberCardAdjustRow.id }}</el-descriptions-item>
+        <el-descriptions-item label="来源订单">{{ memberCardAdjustRow.purchaseOrderNo || "-" }}</el-descriptions-item>
+        <el-descriptions-item label="状态">
+          <el-tag :type="resolveTagType(memberCardAdjustRow.status)">
+            {{ formatValue(memberCardAdjustRow.status, "tag") }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="总剩余">{{ formatCardUnits(memberCardAdjustRow.remainingUnits, memberCardAdjustRow) }}</el-descriptions-item>
+        <el-descriptions-item label="已冻结">{{ formatCardUnits(memberCardAdjustRow.frozenUnits, memberCardAdjustRow) }}</el-descriptions-item>
+        <el-descriptions-item label="可用余额">{{ formatCardUnits(memberCardAdjustRow.usableUnits, memberCardAdjustRow) }}</el-descriptions-item>
+      </el-descriptions>
+      <el-alert
+        v-if="numberCell(memberCardAdjustRow?.frozenUnits) > 0"
+        class="mt-3"
+        type="warning"
+        show-icon
+        :closable="false"
+        title="当前会员卡存在已冻结时长，调整后的总剩余不能小于已冻结时长。"
+      />
+
+      <el-divider content-position="left">调整设置</el-divider>
+      <el-form :model="memberCardAdjustForm" label-width="110px">
+        <el-form-item v-if="!memberCardManualConsume" label="操作方式" required>
+          <el-radio-group v-model="memberCardAdjustForm.operation">
+            <el-radio-button label="increase">增加时长</el-radio-button>
+            <el-radio-button label="deduct">扣除时长</el-radio-button>
+            <el-radio-button label="target">改为指定剩余</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="memberCardAdjustForm.operation !== 'target'" :label="memberCardAdjustForm.operation === 'deduct' ? '扣除分钟数' : '增加分钟数'" required>
+          <el-input-number v-model="memberCardAdjustForm.units" :min="1" :step="10" style="width: 100%" />
+          <div class="form-tip">
+            {{ memberCardAdjustForm.operation === "deduct" ? "用于线下已使用、人工核销或异常扣除。" : "用于客户补偿、赠送或售后修正。" }}
+          </div>
+        </el-form-item>
+        <el-form-item v-else label="目标总剩余" required>
+          <el-input-number v-model="memberCardAdjustForm.targetRemainingUnits" :min="0" :step="10" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="调整后预览">
+          <div class="member-card-preview">
+            <div>调整前：总剩余 {{ formatCardUnits(memberCardAdjustPreview.beforeRemainingUnits, memberCardAdjustRow) }}，已冻结 {{ formatCardUnits(memberCardAdjustPreview.frozenUnits, memberCardAdjustRow) }}，可用 {{ formatCardUnits(memberCardAdjustPreview.beforeUsableUnits, memberCardAdjustRow) }}</div>
+            <div>本次变化：{{ formatSignedCardUnits(memberCardAdjustPreview.deltaUnits, memberCardAdjustRow) }}</div>
+            <el-tag :type="memberCardAdjustPreviewValid ? 'success' : 'danger'">
+              调整后：总剩余 {{ formatCardUnits(memberCardAdjustPreview.remainingUnits, memberCardAdjustRow) }}，已冻结 {{ formatCardUnits(memberCardAdjustPreview.frozenUnits, memberCardAdjustRow) }}，可用 {{ formatCardUnits(memberCardAdjustPreview.usableUnits, memberCardAdjustRow) }}
+            </el-tag>
+          </div>
+        </el-form-item>
+        <el-form-item :label="memberCardAdjustForm.operation === 'deduct' ? '扣除原因' : '调整原因'" required>
+          <el-input
+            v-model="memberCardAdjustForm.reason"
+            type="textarea"
+            :rows="3"
+            maxlength="160"
+            show-word-limit
+            :placeholder="memberCardAdjustReasonPlaceholder"
+          />
+        </el-form-item>
+        <el-form-item label="内部备注">
+          <el-input v-model="memberCardAdjustForm.remark" maxlength="80" placeholder="可选，例如客服工单号、线下服务时间" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="memberCardAdjustVisible = false">取消</el-button>
+        <el-button type="primary" :loading="memberCardAdjustSaving" @click="submitMemberCardAdjust">
+          {{ memberCardAdjustSubmitText }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="grantCouponVisible" title="给用户发券" width="520px">
       <el-form :model="grantCouponForm" label-width="100px">
         <el-form-item label="优惠券">
@@ -666,6 +743,9 @@ const pointsLoading = ref(false);
 const pointsSaving = ref(false);
 const pointsUser = ref<LifeResourceRecord>();
 const pointsSummary = ref<AdminUserPointsSummary>();
+const memberCardAdjustVisible = ref(false);
+const memberCardAdjustSaving = ref(false);
+const memberCardAdjustRow = ref<LifeResourceRecord>();
 const grantCouponVisible = ref(false);
 const grantCouponSaving = ref(false);
 const grantCouponRow = ref<LifeResourceRecord>();
@@ -723,6 +803,15 @@ const pointAdjustForm = reactive({
   amount: 0,
   remark: "",
 });
+type MemberCardAdjustOperation = "increase" | "deduct" | "target";
+const memberCardAdjustForm = reactive({
+  operation: "increase" as MemberCardAdjustOperation,
+  units: 0,
+  targetRemainingUnits: 0,
+  reason: "",
+  remark: "",
+  manualConsume: false,
+});
 const grantCouponForm = reactive({
   userId: "",
   phone: "",
@@ -733,6 +822,9 @@ const queryParams = reactive({
   pageSize: 10,
   keywords: "",
   status: "",
+  userMemberCardId: "",
+  orderId: "",
+  orderNo: "",
 });
 
 const statusOptions = computed<LifeStatusOption[]>(() => pageConfig.value?.statusOptions || []);
@@ -754,6 +846,38 @@ const promotionTargetTip = computed(() => {
   if (promotionTargetType.value === "category") return "选择分类后会生成服务列表页路径。";
   return "目标类型为首页时，固定链接会直接回到小程序首页。";
 });
+const memberCardAdjustPreview = computed(() => {
+  const row = memberCardAdjustRow.value;
+  const beforeRemainingUnits = numberCell(row?.remainingUnits);
+  const frozenUnits = numberCell(row?.frozenUnits);
+  const deltaUnits = memberCardAdjustForm.operation === "target"
+    ? memberCardAdjustForm.targetRemainingUnits - beforeRemainingUnits
+    : memberCardAdjustForm.operation === "deduct"
+      ? -Math.abs(memberCardAdjustForm.units)
+      : Math.abs(memberCardAdjustForm.units);
+  const remainingUnits = memberCardAdjustForm.operation === "target"
+    ? memberCardAdjustForm.targetRemainingUnits
+    : beforeRemainingUnits + deltaUnits;
+  return {
+    beforeRemainingUnits,
+    remainingUnits,
+    frozenUnits,
+    beforeUsableUnits: beforeRemainingUnits - frozenUnits,
+    usableUnits: remainingUnits - frozenUnits,
+    deltaUnits,
+  };
+});
+const memberCardAdjustPreviewValid = computed(() =>
+  Number.isInteger(memberCardAdjustPreview.value.remainingUnits)
+  && memberCardAdjustPreview.value.remainingUnits >= memberCardAdjustPreview.value.frozenUnits
+  && memberCardAdjustPreview.value.remainingUnits >= 0
+);
+const memberCardManualConsume = computed(() => memberCardAdjustForm.manualConsume);
+const memberCardAdjustTitle = computed(() => memberCardManualConsume.value ? "手动核销会员卡" : "调整用户会员卡时长");
+const memberCardAdjustReasonPlaceholder = computed(() =>
+  memberCardManualConsume.value ? "例如：用户线下已使用30分钟" : "例如：客户补偿30分钟、余额修正、异常扣除"
+);
+const memberCardAdjustSubmitText = computed(() => memberCardManualConsume.value ? "确认核销并记录流水" : "确认调整并记录流水");
 let customerPhoneLookupTimer: ReturnType<typeof setTimeout> | undefined;
 
 watch(
@@ -794,15 +918,33 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => moduleKey.value,
+  () => [
+    moduleKey.value,
+    route.query.keywords,
+    route.query.status,
+    route.query.userMemberCardId,
+    route.query.orderId,
+    route.query.orderNo,
+  ],
   () => {
     queryParams.pageNum = 1;
-    queryParams.keywords = "";
-    queryParams.status = "";
+    applyRouteFilters();
     fetchPage();
   },
   { immediate: true }
 );
+
+function routeQueryText(value: unknown) {
+  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
+}
+
+function applyRouteFilters() {
+  queryParams.keywords = routeQueryText(route.query.keywords);
+  queryParams.status = routeQueryText(route.query.status);
+  queryParams.userMemberCardId = routeQueryText(route.query.userMemberCardId);
+  queryParams.orderId = routeQueryText(route.query.orderId);
+  queryParams.orderNo = routeQueryText(route.query.orderNo);
+}
 
 async function fetchPage() {
   loading.value = true;
@@ -823,6 +965,17 @@ function handleReset() {
   queryParams.pageNum = 1;
   queryParams.keywords = "";
   queryParams.status = "";
+  queryParams.userMemberCardId = "";
+  queryParams.orderId = "";
+  queryParams.orderNo = "";
+  fetchPage();
+}
+
+function clearUserMemberCardFilter() {
+  queryParams.userMemberCardId = "";
+  queryParams.orderId = "";
+  queryParams.orderNo = "";
+  queryParams.pageNum = 1;
   fetchPage();
 }
 
@@ -917,6 +1070,18 @@ function handleRowAction(action: string, row: LifeResourceRecord) {
   }
   if (action === "points") {
     void openUserPoints(row);
+  }
+  if (action === "adjust_member_card_time") {
+    openMemberCardAdjust(row);
+  }
+  if (action === "manual_consume_member_card") {
+    openMemberCardManualConsume(row);
+  }
+  if (action === "view_member_card_records") {
+    openMemberCardRecords(row);
+  }
+  if (action === "view_purchase_order") {
+    openPurchaseOrder(row);
   }
   if (action === "grant_coupon") {
     openGrantCoupon(row);
@@ -1024,6 +1189,86 @@ async function submitPointAdjust() {
     await fetchPage();
   } finally {
     pointsSaving.value = false;
+  }
+}
+
+function resetMemberCardAdjustForm(row: LifeResourceRecord, operation: MemberCardAdjustOperation, manualConsume = false) {
+  memberCardAdjustRow.value = row;
+  memberCardAdjustForm.operation = operation;
+  memberCardAdjustForm.units = 0;
+  memberCardAdjustForm.targetRemainingUnits = numberCell(row.remainingUnits);
+  memberCardAdjustForm.reason = manualConsume ? "手动核销：" : "";
+  memberCardAdjustForm.remark = "";
+  memberCardAdjustForm.manualConsume = manualConsume;
+  memberCardAdjustVisible.value = true;
+}
+
+function openMemberCardAdjust(row: LifeResourceRecord) {
+  resetMemberCardAdjustForm(row, "increase");
+}
+
+function openMemberCardManualConsume(row: LifeResourceRecord) {
+  resetMemberCardAdjustForm(row, "deduct", true);
+}
+
+function openMemberCardRecords(row: LifeResourceRecord) {
+  router.push({
+    path: "/marketing/member-card-records",
+    query: { userMemberCardId: String(row.id) },
+  });
+}
+
+function openPurchaseOrder(row: LifeResourceRecord) {
+  const purchaseOrderId = row.purchaseOrderId;
+  if (!purchaseOrderId) {
+    ElMessage.info("当前会员卡没有关联购买订单");
+    return;
+  }
+  router.push(`/orders/detail/${purchaseOrderId}`);
+}
+
+async function submitMemberCardAdjust() {
+  const row = memberCardAdjustRow.value;
+  if (!row) return;
+  const rawReason = memberCardAdjustForm.reason.trim();
+  if (!rawReason || rawReason === "手动核销：") {
+    ElMessage.warning("请填写调整原因");
+    return;
+  }
+  if (memberCardAdjustForm.operation !== "target" && (!Number.isInteger(memberCardAdjustForm.units) || memberCardAdjustForm.units <= 0)) {
+    ElMessage.warning("请填写大于 0 的整数分钟数");
+    return;
+  }
+  if (memberCardAdjustForm.operation === "target" && (!Number.isInteger(memberCardAdjustForm.targetRemainingUnits) || memberCardAdjustForm.targetRemainingUnits < 0)) {
+    ElMessage.warning("目标总剩余必须为非负整数");
+    return;
+  }
+  if (!memberCardAdjustPreviewValid.value) {
+    ElMessage.warning("调整后总剩余不能小于已冻结");
+    return;
+  }
+
+  memberCardAdjustSaving.value = true;
+  try {
+    const mode = memberCardAdjustForm.operation === "target" ? "target" : "delta";
+    const deltaUnits = memberCardAdjustForm.operation === "target"
+      ? undefined
+      : memberCardAdjustForm.operation === "deduct"
+        ? -Math.abs(memberCardAdjustForm.units)
+        : Math.abs(memberCardAdjustForm.units);
+    const remark = memberCardAdjustForm.remark.trim();
+    const reason = remark ? `${rawReason}；备注：${remark}` : rawReason;
+    await LifeAPI.adjustUserMemberCardTime(String(row.id), {
+      mode,
+      deltaUnits,
+      targetRemainingUnits: memberCardAdjustForm.operation === "target" ? memberCardAdjustForm.targetRemainingUnits : undefined,
+      reason,
+    });
+    ElMessage.success(memberCardManualConsume.value ? "会员卡已手动核销" : "会员卡时长已调整");
+    memberCardAdjustVisible.value = false;
+    await fetchPage();
+  } finally {
+    memberCardAdjustSaving.value = false;
   }
 }
 
@@ -1579,6 +1824,28 @@ function money(value: unknown) {
   return Number(value || 0).toLocaleString("zh-CN");
 }
 
+function numberCell(value: unknown) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatCardUnits(value: unknown, row?: LifeResourceRecord) {
+  const unit = String(row?.unitName || (row?.cardType === "time" ? "分钟" : "次"));
+  return `${numberCell(value)}${unit}`;
+}
+
+function formatSignedCardUnits(value: unknown, row?: LifeResourceRecord) {
+  const number = numberCell(value);
+  const prefix = number > 0 ? "+" : "";
+  const unit = String(row?.unitName || (row?.cardType === "time" ? "分钟" : "次"));
+  return `${prefix}${number}${unit}`;
+}
+
+function isMemberCardUnitColumn(prop: string) {
+  return ["remainingUnits", "frozenUnits", "usableUnits", "units", "beforeUnits", "afterUnits"].includes(prop)
+    && ["userMemberCards", "memberCardRecords"].includes(moduleKey.value);
+}
+
 function formatValue(value: unknown, type?: string) {
   if (value === undefined || value === null || value === "") return "-";
   if (type === "money") return `￥${Number(value).toLocaleString("zh-CN")}`;
@@ -1735,6 +2002,13 @@ function buildDeleteConfirmText(name: string) {
   font-size: 12px;
   line-height: 18px;
   color: var(--el-text-color-secondary);
+}
+
+.member-card-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  line-height: 22px;
 }
 
 .quick-customer-advanced {

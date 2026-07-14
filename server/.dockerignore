@@ -10,3 +10,10 @@ certs
 .git
 .gitignore
 release
+releases
+backups
+admin-dist
+mysql-data
+*.tar
+*.tar.gz
+service-catalog-backup-*.json

@@ -413,6 +413,8 @@ export class PaymentsService {
       }
 
       const grantedCard = await this.memberCards.grantForPaidPurchaseOrder(tx, order, 'system', BigInt(0))
+      await this.coupons.markCouponUsedForOrder(tx, order.id, now)
+      await this.users.ensureEarnedPointsForPaidOrder(tx, order, payment.amount)
 
       await tx.order.update({
         where: { id: order.id },

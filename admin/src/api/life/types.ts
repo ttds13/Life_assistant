@@ -37,6 +37,7 @@ export interface LifeQueryParams {
   startDate?: string;
   endDate?: string;
   userId?: string;
+  userMemberCardId?: string;
   couponId?: string;
   targetType?: string;
   staffId?: string;
@@ -137,6 +138,7 @@ export interface AdminCreateOrderPayload {
   source?: string;
   paymentMode?: string;
   memberCardId?: number;
+  couponId?: number;
   offlinePaidAt?: string;
   offlinePaymentRemark?: string;
   remark?: string;
@@ -149,6 +151,7 @@ export interface AdminCreateOrderPayload {
 export interface AdminCreateMemberCardPurchasePayload {
   userId: number;
   cardId: number;
+  couponId?: number;
   source?: string;
   paymentMode?: "offline_paid" | "unpaid";
   payableAmount?: number;
@@ -156,6 +159,22 @@ export interface AdminCreateMemberCardPurchasePayload {
   paymentRemark?: string;
   remark?: string;
   adminRemark?: string;
+}
+
+export interface AdminUsableCoupon {
+  id: number;
+  userCouponId: number;
+  couponId: number;
+  name: string;
+  type: string;
+  amount: number;
+  minAmount: number;
+  status: string;
+  rawStatus?: string;
+  discountAmount: number;
+  expireAt: string;
+  startTime?: string;
+  endTime?: string;
 }
 
 export interface DispatchCheckResult {
@@ -506,6 +525,20 @@ export interface OrderListItem {
   actualConsumeUnits?: number;
   releasedUnits?: number;
   frozenUnits?: number;
+  memberCard?: {
+    id: number;
+    cardId: number;
+    userMemberCardId?: number;
+    memberCardTemplateId?: number;
+    name: string;
+    cardType: string;
+    unitName: string;
+    unitMinutes: number;
+    remainingUnits: number;
+    frozenUnits: number;
+    usableUnits?: number;
+    status: string;
+  } | null;
   purchaseCardId?: number | null;
   grantedUserMemberCardId?: number | null;
   acceptedAt?: string | null;
@@ -542,19 +575,6 @@ export interface OrderDetail extends OrderListItem {
     amount: number;
     type?: string;
   }>;
-  memberCard?: {
-    id: number;
-    cardId: number;
-    userMemberCardId?: number;
-    memberCardTemplateId?: number;
-    name: string;
-    cardType: string;
-    unitName: string;
-    unitMinutes: number;
-    remainingUnits: number;
-    frozenUnits: number;
-    status: string;
-  } | null;
   memberCardRecords?: Array<{
     id: number;
     userMemberCardId: number;

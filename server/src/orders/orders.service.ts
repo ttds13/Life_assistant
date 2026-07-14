@@ -528,12 +528,15 @@ export class OrdersService {
     if (paymentMode === 'member_card' && !dto.memberCardId) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'memberCardId is required for member card payment mode', 400)
     }
-    const discountAmount = isMemberCardOrder
+    if (dto.couponId && (isMemberCardOrder || isConsultationOrder)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'coupon can only be used for cash service orders', 400)
+    }
+    const baseDiscountAmount = isMemberCardOrder
       ? originalAmount
       : new Prisma.Decimal(dto.discountAmount ?? 0)
-    const payableAmount = isMemberCardOrder || isConsultationOrder
+    const basePayableAmount = isMemberCardOrder || isConsultationOrder
       ? new Prisma.Decimal(0)
-      : new Prisma.Decimal(dto.payableAmount ?? Math.max(0, originalAmount.sub(discountAmount).toNumber()))
+      : new Prisma.Decimal(dto.payableAmount ?? Math.max(0, originalAmount.sub(baseDiscountAmount).toNumber()))
     const initialStatus = isMemberCardOrder || isConsultationOrder || paymentMode === 'offline_paid'
       ? ORDER_STATUS.PENDING_DISPATCH
       : ORDER_STATUS.PENDING_PAYMENT
@@ -559,10 +562,10 @@ export class OrdersService {
           appointmentStartTime: appointmentStart,
           appointmentEndTime: appointmentEnd,
           originalAmount,
-          discountAmount,
-          payableAmount,
-          paidAmount: paymentMode === 'offline_paid' ? payableAmount : 0,
-          paidAt: paymentMode === 'offline_paid' && payableAmount.greaterThan(0) ? offlinePaidAt : null,
+          discountAmount: baseDiscountAmount,
+          payableAmount: basePayableAmount,
+          paidAmount: paymentMode === 'offline_paid' ? basePayableAmount : 0,
+          paidAt: paymentMode === 'offline_paid' && basePayableAmount.greaterThan(0) ? offlinePaidAt : null,
           memberCardId: dto.memberCardId ? BigInt(dto.memberCardId) : null,
           remark: dto.remark || null,
           adminRemark: dto.adminRemark || null,
@@ -570,6 +573,34 @@ export class OrdersService {
           cityCode: dto.customer?.cityCode || service.cityCode || address.city || null,
         },
       })
+
+      let discountAmount = baseDiscountAmount
+      let payableAmount = basePayableAmount
+      if (dto.couponId) {
+        const couponPreview = await this.coupons.lockCouponForOrder({
+          tx,
+          userId: user.id,
+          couponId: dto.couponId,
+          serviceId: service.id,
+          amount: originalAmount,
+          orderId: order.id,
+        })
+        discountAmount = couponPreview.discountAmount
+        payableAmount = couponPreview.payableAmount
+        if (paymentMode === 'unpaid' && payableAmount.lessThanOrEqualTo(0)) {
+          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'zero payable coupon order cannot wait for offline payment', 400)
+        }
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            couponId: couponPreview.couponId,
+            discountAmount,
+            payableAmount,
+            paidAmount: paymentMode === 'offline_paid' ? payableAmount : 0,
+            paidAt: paymentMode === 'offline_paid' ? (offlinePaidAt || new Date()) : null,
+          },
+        })
+      }
 
       if (isMemberCardOrder && dto.memberCardId) {
         const freeze = await this.memberCards.freezeForOrder({
@@ -595,7 +626,7 @@ export class OrdersService {
         })
       }
 
-      if (paymentMode === 'offline_paid' && payableAmount.greaterThan(0)) {
+      if (paymentMode === 'offline_paid' && (payableAmount.greaterThan(0) || dto.couponId)) {
         offlinePaymentNo = this.createOfflinePaymentNo(order.orderNo)
         const payment = await tx.payment.create({
           data: {
@@ -633,7 +664,8 @@ export class OrdersService {
             processResult: 'success',
           },
         })
-        await this.users.ensureEarnedPointsForPaidOrder(tx, order, payableAmount)
+        await this.coupons.markCouponUsedForOrder(tx, order.id, offlinePaidAt || new Date())
+        await this.users.ensureEarnedPointsForPaidOrder(tx, { ...order, payableAmount }, payableAmount)
       }
 
       await tx.orderStatusLog.create({
@@ -652,6 +684,8 @@ export class OrdersService {
             source,
             paymentMode,
             memberCardId: dto.memberCardId || null,
+            couponId: dto.couponId || null,
+            discountAmount: discountAmount.toNumber(),
             payableAmount: payableAmount.toNumber(),
             offlinePaymentNo,
           } as Prisma.InputJsonObject,
@@ -686,6 +720,9 @@ export class OrdersService {
           source,
           paymentMode,
           memberCardId: dto.memberCardId || null,
+          couponId: dto.couponId || null,
+          discountAmount: discountAmount.toNumber(),
+          payableAmount: payableAmount.toNumber(),
           offlinePaymentNo,
         },
       })
@@ -748,6 +785,8 @@ export class OrdersService {
           throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'member card purchase order is not waiting for payment', 409)
         }
         const grantedCard = await this.memberCards.grantForPaidPurchaseOrder(tx, order, 'admin', BigInt(adminId))
+        await this.coupons.markCouponUsedForOrder(tx, order.id, paidAt)
+        await this.users.ensureEarnedPointsForPaidOrder(tx, order, amount)
         await tx.order.update({
           where: { id: order.id },
           data: {
@@ -819,6 +858,7 @@ export class OrdersService {
           detail: { paymentNo, amount: amount.toNumber() },
         },
       })
+      await this.coupons.markCouponUsedForOrder(tx, order.id, paidAt)
       await this.users.ensureEarnedPointsForPaidOrder(tx, order, amount)
       await this.notifications.createAdminOrderNotification({
         tx,
@@ -878,6 +918,7 @@ export class OrdersService {
     const isManualCashSource = order.source !== 'miniapp'
       && order.orderType !== ORDER_TYPE.MEMBER_CARD_PURCHASE
       && !order.memberCardId
+    const shouldHaveEarnPoints = Boolean(order.paidAt && !order.memberCardId && order.paidAmount.greaterThan(0))
     const couponRecord = order.couponId
       ? await this.repository.client.userCoupon.findFirst({
           where: {
@@ -896,6 +937,15 @@ export class OrdersService {
           orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
         })
       : null
+    const couponStatusExpected = !order.couponId
+      ? true
+      : !couponRecord
+        ? false
+        : order.paidAt && !isRefunded
+          ? couponRecord.status === USER_COUPON_STATUS.USED
+          : order.status === ORDER_STATUS.PENDING_PAYMENT
+            ? couponRecord.status === USER_COUPON_STATUS.LOCKED
+            : true
     const checks = [
       {
         key: 'payment',
@@ -914,18 +964,18 @@ export class OrdersService {
       },
       {
         key: 'points',
-        passed: !order.paidAt || order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE || hasEarnPoints,
-        message: order.paidAt && order.orderType !== ORDER_TYPE.MEMBER_CARD_PURCHASE && !hasEarnPoints ? '支付成功后缺少积分流水' : '积分发放流水正常',
+        passed: !shouldHaveEarnPoints || hasEarnPoints,
+        message: shouldHaveEarnPoints && !hasEarnPoints ? '支付成功后缺少积分流水' : '积分发放流水正常',
       },
       {
         key: 'refund_points',
-        passed: !isRefunded || order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE || earnPoints <= 0 || refundDeductPoints < 0,
-        message: isRefunded && order.orderType !== ORDER_TYPE.MEMBER_CARD_PURCHASE && earnPoints > 0 && refundDeductPoints >= 0 ? '退款后缺少积分扣回流水' : '退款积分扣回正常',
+        passed: !isRefunded || earnPoints <= 0 || refundDeductPoints < 0,
+        message: isRefunded && earnPoints > 0 && refundDeductPoints >= 0 ? '退款后缺少积分扣回流水' : '退款积分扣回正常',
       },
       {
         key: 'coupon',
-        passed: !order.couponId || Boolean(couponRecord),
-        message: order.couponId && !couponRecord ? '订单使用优惠券但缺少用户券锁定/释放记录' : '优惠券锁定/核销/释放记录正常',
+        passed: couponStatusExpected,
+        message: !couponStatusExpected ? '订单优惠券锁定/核销状态不正确' : '优惠券锁定/核销/释放记录正常',
       },
       {
         key: 'refund',

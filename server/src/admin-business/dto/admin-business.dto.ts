@@ -71,6 +71,21 @@ export class AdminPageQueryDto {
   @IsOptional()
   @IsString()
   @Transform(({ value }) => trimOptional(value))
+  userMemberCardId?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  orderId?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  orderNo?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
   targetType?: string
 
   @IsOptional()

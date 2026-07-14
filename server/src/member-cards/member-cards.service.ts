@@ -3,12 +3,14 @@ import { Prisma } from '@prisma/client'
 import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
+import { CouponsService } from '../coupons/coupons.service'
 import { PrismaService } from '../prisma/prisma.service'
 import { ORDER_ACTION } from '../orders/constants/order-action'
 import { ORDER_STATUS } from '../orders/constants/order-status'
 import { ORDER_TYPE } from '../orders/constants/order-type'
 import { PAYMENT_CHANNEL } from '../payments/constants/payment-channel'
 import { PAYMENT_STATUS } from '../payments/constants/payment-status'
+import { UsersService } from '../users/users.service'
 import {
   MEMBER_CARD_RECORD_TYPE,
   MEMBER_CARD_TYPE,
@@ -97,6 +99,8 @@ export class MemberCardsService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(AdminAuditService) private readonly audit: AdminAuditService,
+    @Inject(CouponsService) private readonly coupons: CouponsService,
+    @Inject(UsersService) private readonly users: UsersService,
   ) {}
 
   async listUserCards(userId: number, serviceId?: number) {
@@ -278,21 +282,31 @@ export class MemberCardsService {
 
     const paymentMode = this.normalizeAdminPurchasePaymentMode(dto.paymentMode)
     const source = this.normalizeSource(dto.source || 'offline')
-    const payableAmount = new Prisma.Decimal(dto.payableAmount ?? card.price.toNumber())
+    let payableAmount = new Prisma.Decimal(dto.payableAmount ?? card.price.toNumber())
     if (payableAmount.lessThan(0)) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'payable amount must be non-negative', 400)
     }
-    if (!payableAmount.equals(card.price) && !dto.adminRemark) {
-      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'adminRemark is required when payable amount differs from card price', 400)
-    }
-    if (paymentMode === 'offline_paid' && payableAmount.lessThanOrEqualTo(0)) {
-      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'offline paid member card purchase amount must be greater than zero', 400)
-    }
-
-    const discountAmount = card.price.greaterThan(payableAmount)
+    const purchaseService = await this.ensurePurchaseService(this.prisma)
+    let discountAmount = card.price.greaterThan(payableAmount)
       ? card.price.sub(payableAmount)
       : new Prisma.Decimal(0)
-    const purchaseService = await this.ensurePurchaseService(this.prisma)
+    if (dto.couponId) {
+      const couponPreview = await this.coupons.previewDiscount({
+        userId: user.id,
+        couponId: dto.couponId,
+        serviceId: purchaseService.id,
+        amount: card.price,
+      })
+      discountAmount = couponPreview.discountAmount
+      payableAmount = couponPreview.payableAmount
+    }
+    else if (!payableAmount.equals(card.price) && !dto.adminRemark) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'adminRemark is required when payable amount differs from card price', 400)
+    }
+    if (paymentMode === 'unpaid' && payableAmount.lessThanOrEqualTo(0)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'zero payable member card purchase cannot wait for offline payment', 400)
+    }
+
     const totalUnits = this.resolveCardTotalUnits(card)
     const now = new Date()
     const serviceSnapshot = this.buildPurchaseSnapshot(card, totalUnits)
@@ -329,6 +343,27 @@ export class MemberCardsService {
         },
       })
 
+      if (dto.couponId) {
+        const couponPreview = await this.coupons.lockCouponForOrder({
+          tx,
+          userId: user.id,
+          couponId: dto.couponId,
+          serviceId: purchaseService.id,
+          amount: card.price,
+          orderId: order.id,
+        })
+        discountAmount = couponPreview.discountAmount
+        payableAmount = couponPreview.payableAmount
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            couponId: couponPreview.couponId,
+            discountAmount,
+            payableAmount,
+          },
+        })
+      }
+
       await tx.orderStatusLog.create({
         data: {
           orderId: order.id,
@@ -345,6 +380,8 @@ export class MemberCardsService {
             totalUnits,
             source,
             paymentMode,
+            couponId: dto.couponId || null,
+            discountAmount: discountAmount.toNumber(),
             payableAmount: payableAmount.toNumber(),
           } as Prisma.InputJsonObject,
         },
@@ -353,6 +390,7 @@ export class MemberCardsService {
       let paymentNo: string | null = null
       let grantedCardId: number | null = null
       if (paymentMode === 'offline_paid') {
+        const paymentPaidAt = paidAt || new Date()
         paymentNo = this.createOfflinePaymentNo(order.orderNo)
         const payment = await tx.payment.create({
           data: {
@@ -363,7 +401,7 @@ export class MemberCardsService {
             amount: payableAmount,
             status: PAYMENT_STATUS.SUCCESS,
             transactionNo: `OFFLINE_${order.orderNo}`,
-            paidAt,
+            paidAt: paymentPaidAt,
             callbackRaw: JSON.stringify({
               channel: PAYMENT_CHANNEL.OFFLINE,
               source,
@@ -377,14 +415,16 @@ export class MemberCardsService {
 
         const granted = await this.grantForPaidPurchaseOrder(tx, order, 'admin', BigInt(context.adminId))
         grantedCardId = granted ? Number(granted.id) : null
+        await this.coupons.markCouponUsedForOrder(tx, order.id, paymentPaidAt)
+        await this.users.ensureEarnedPointsForPaidOrder(tx, { ...order, payableAmount }, payableAmount)
 
         await tx.order.update({
           where: { id: order.id },
           data: {
             status: ORDER_STATUS.COMPLETED,
             paidAmount: payableAmount,
-            paidAt,
-            completedAt: paidAt,
+            paidAt: paymentPaidAt,
+            completedAt: paymentPaidAt,
             version: { increment: 1 },
           },
         })
@@ -405,6 +445,7 @@ export class MemberCardsService {
               purchaseCardId: Number(card.id),
               grantedUserMemberCardId: grantedCardId,
               totalUnits,
+              paidAt: paymentPaidAt.toISOString(),
             } as Prisma.InputJsonObject,
           },
         })
@@ -438,6 +479,8 @@ export class MemberCardsService {
           cardId: dto.cardId,
           source,
           paymentMode,
+          couponId: dto.couponId || null,
+          discountAmount: discountAmount.toNumber(),
           payableAmount: payableAmount.toNumber(),
           paymentNo,
           grantedUserMemberCardId: grantedCardId,
@@ -467,6 +510,7 @@ export class MemberCardsService {
       discountAmount: discountAmount.toNumber(),
       payableAmount: payableAmount.toNumber(),
       paidAmount: paymentMode === 'offline_paid' ? payableAmount.toNumber() : 0,
+      couponId: dto.couponId || null,
       source,
       remark: dto.remark || '',
       adminRemark: dto.adminRemark || '',
@@ -1142,14 +1186,13 @@ export class MemberCardsService {
     plannedUnits?: number,
   ) {
     const planned = plannedUnits || this.calculateConsumeUnits(userCard, service)
-    if (userCard.card.cardType !== MEMBER_CARD_TYPE.TIME || !userCard.card.allowHalfDeduct) {
+    if (userCard.card.cardType !== MEMBER_CARD_TYPE.TIME) {
       return planned
     }
-
-    const plannedMinutes = service.durationMinutes
-      || Math.max(1, Math.round((order.appointmentEndTime.getTime() - order.appointmentStartTime.getTime()) / 60000))
-    const usedMinutes = actualMinutes && actualMinutes > 0 ? actualMinutes : plannedMinutes
-    return usedMinutes <= plannedMinutes / 2 ? Math.ceil(planned / 2) : planned
+    if (!Number.isInteger(actualMinutes) || !actualMinutes || actualMinutes <= 0) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'actualMinutes is required for time member card order', 400)
+    }
+    return actualMinutes
   }
 
   private getRuleConsumeUnits(value: Prisma.JsonValue | null, service: ConsumeParams['service']) {

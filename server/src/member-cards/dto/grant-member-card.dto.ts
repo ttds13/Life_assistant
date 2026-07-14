@@ -82,6 +82,12 @@ export class AdminCreateMemberCardPurchaseDto {
   cardId!: number
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Transform(({ value }) => toOptionalNumber(value))
+  couponId?: number
+
+  @IsOptional()
   @IsString()
   @MaxLength(16)
   @Transform(({ value }) => trimOptional(value))

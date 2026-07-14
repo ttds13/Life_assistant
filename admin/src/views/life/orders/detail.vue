@@ -10,7 +10,22 @@
       </div>
       <div class="order-summary__actions">
         <el-button @click="router.back()">返回</el-button>
-        <el-button v-if="order && canUpdateOrders" type="primary" @click="openEdit">编辑订单</el-button>
+        <el-button v-if="order && canUpdateOrders && !isMemberCardPurchaseOrder" type="primary" @click="openEdit">编辑订单</el-button>
+        <el-button
+          v-if="isMemberCardPurchaseOrder"
+          type="success"
+          :disabled="!memberCardManageId"
+          @click="openMemberCardManage"
+        >
+          管理用户会员卡
+        </el-button>
+        <el-button
+          v-if="isMemberCardPurchaseOrder"
+          :disabled="!memberCardManageId"
+          @click="openMemberCardRecords"
+        >
+          查看会员卡流水
+        </el-button>
         <el-button v-if="order" :loading="accountingLoading" @click="loadAccounting">账务检查</el-button>
         <el-button
           v-if="canConfirmOfflinePayment"
@@ -94,13 +109,31 @@
         </el-card>
 
         <el-card shadow="never">
-          <template #header>会员卡流水</template>
+          <template #header>
+            <div class="card-header-row">
+              <span>{{ isMemberCardPurchaseOrder ? "发放会员卡" : "会员卡流水" }}</span>
+              <div v-if="hasMemberCardUsage" class="card-header-row__actions">
+                <el-button text type="primary" size="small" :disabled="!memberCardManageId" @click="openMemberCardManage">
+                  管理用户会员卡
+                </el-button>
+                <el-button text type="primary" size="small" :disabled="!memberCardManageId" @click="openMemberCardRecords">
+                  查看流水
+                </el-button>
+              </div>
+            </div>
+          </template>
           <template v-if="hasMemberCardUsage">
             <el-descriptions :column="2" border class="mb-4">
               <el-descriptions-item label="会员卡">{{ order?.memberCardName || order?.memberCard?.name || "-" }}</el-descriptions-item>
               <el-descriptions-item label="单位">{{ order?.memberCardUnitName || order?.memberCard?.unitName || "-" }}</el-descriptions-item>
-              <el-descriptions-item label="用户卡ID">{{ order?.userMemberCardId || order?.memberCardId || "-" }}</el-descriptions-item>
+              <el-descriptions-item label="来源订单">{{ order?.orderNo || "-" }}</el-descriptions-item>
+              <el-descriptions-item label="用户卡ID">{{ memberCardManageId || "-" }}</el-descriptions-item>
               <el-descriptions-item label="模板ID">{{ order?.memberCardTemplateId || order?.memberCard?.memberCardTemplateId || order?.memberCard?.cardId || "-" }}</el-descriptions-item>
+              <el-descriptions-item label="卡状态">
+                <el-tag :type="memberCardStatusType(order?.memberCard?.status)">
+                  {{ memberCardStatusText(order?.memberCard?.status) }}
+                </el-tag>
+              </el-descriptions-item>
               <el-descriptions-item label="规则来源">{{ order?.memberCardRuleSource || "-" }}</el-descriptions-item>
               <el-descriptions-item label="规则变化">
                 <el-tag :type="order?.memberCardRuleChanged ? 'warning' : 'success'">
@@ -113,6 +146,7 @@
               <el-descriptions-item label="释放额度">{{ formatUnits(order?.releasedUnits) }}</el-descriptions-item>
               <el-descriptions-item label="卡内余额">{{ formatUnits(order?.memberCard?.remainingUnits) }}</el-descriptions-item>
               <el-descriptions-item label="仍冻结">{{ formatUnits(order?.memberCard?.frozenUnits) }}</el-descriptions-item>
+              <el-descriptions-item label="可用余额">{{ formatUnits(order?.memberCard?.usableUnits) }}</el-descriptions-item>
               <el-descriptions-item label="规则快照" :span="2">
                 <pre class="json-snapshot">{{ formatJson(order?.memberCardRuleSnapshot) }}</pre>
               </el-descriptions-item>
@@ -185,7 +219,8 @@
             <el-divider />
             <div class="accounting-summary">
               <span>支付 {{ accounting.payments.length }}</span>
-              <span>积分 {{ accounting.pointLedgers.length }}</span>
+              <span>优惠券 {{ accounting.couponRecord ? couponStatusText(accounting.couponRecord.status) : "无" }}</span>
+              <span>积分 {{ accountingPointTotal }} 分</span>
               <span>收入 {{ accounting.incomeRecords.length }}</span>
               <span>退款 {{ accounting.refunds.length }}</span>
             </div>
@@ -482,6 +517,10 @@ const timelineItems = computed(() => order.value?.statusLogs || []);
 const hasMemberCardUsage = computed(() =>
   Boolean(order.value?.userMemberCardId || order.value?.memberCardId || order.value?.memberCardName || order.value?.memberCard || memberCardRecords.value.length),
 );
+const isMemberCardPurchaseOrder = computed(() => order.value?.orderType === "member_card_purchase");
+const memberCardManageId = computed(() =>
+  order.value?.grantedUserMemberCardId || order.value?.userMemberCardId || order.value?.memberCardId || order.value?.memberCard?.id || null
+);
 const isPendingMemberCardPurchasePayment = computed(() =>
   Boolean(
     order.value
@@ -494,8 +533,11 @@ const isPendingMemberCardPurchasePayment = computed(() =>
 );
 const offlinePaymentAlertTitle = computed(() =>
   order.value?.orderType === "member_card_purchase"
-    ? "确认后会生成 offline 支付流水、发放会员卡，并将会员卡购买订单完成。"
-    : "确认后会生成 offline 支付流水、积分流水，并将现金服务订单推进到待派单。"
+    ? "确认后会生成 offline 支付流水、核销优惠券、发放会员卡和积分，并将会员卡购买订单完成。"
+    : "确认后会生成 offline 支付流水、核销优惠券、积分流水，并将现金服务订单推进到待派单。"
+);
+const accountingPointTotal = computed(() =>
+  (accounting.value?.pointLedgers || []).reduce((sum, item) => sum + item.points, 0),
 );
 const serviceSpecText = computed(() => {
   if (!order.value) return "-";
@@ -551,6 +593,31 @@ async function loadAccounting() {
   } finally {
     accountingLoading.value = false;
   }
+}
+
+function openMemberCardManage() {
+  if (!memberCardManageId.value) {
+    ElMessage.info("订单完成发卡后才能管理用户会员卡");
+    return;
+  }
+  router.push({
+    path: "/marketing/user-member-cards",
+    query: { userMemberCardId: String(memberCardManageId.value) },
+  });
+}
+
+function openMemberCardRecords() {
+  if (!memberCardManageId.value) {
+    ElMessage.info("订单完成发卡后才能查看会员卡流水");
+    return;
+  }
+  router.push({
+    path: "/marketing/member-card-records",
+    query: {
+      userMemberCardId: String(memberCardManageId.value),
+      orderId: order.value?.id ? String(order.value.id) : undefined,
+    },
+  });
 }
 
 async function openAssign() {
@@ -648,8 +715,8 @@ async function submitOfflinePayment() {
     });
     ElMessage.success(
       isMemberCardPurchase
-        ? "线下收款已确认，支付流水和会员卡发放流水已生成"
-        : "线下收款已确认，支付、积分和待派单通知已生成"
+        ? "线下收款已确认，支付、优惠券、会员卡和积分流水已生成"
+        : "线下收款已确认，支付、优惠券、积分和待派单通知已生成"
     );
     offlineVisible.value = false;
     await loadAccounting();
@@ -709,9 +776,32 @@ function recordTypeMeta(type: string): { label: string; type: TagType } {
     freeze: { label: "冻结", type: "warning" },
     consume: { label: "扣减", type: "danger" },
     release: { label: "释放", type: "primary" },
+    admin_adjust: { label: "后台调整", type: "primary" },
     refund_revoke: { label: "退款回收", type: "info" },
   };
   return map[type] || { label: type, type: "info" };
+}
+
+function memberCardStatusText(status?: string) {
+  const map: Record<string, string> = {
+    active: "正常",
+    disabled: "停用",
+    expired: "已过期",
+    used_up: "已用完",
+    refunded: "已退款",
+  };
+  return status ? map[status] || status : "-";
+}
+
+function memberCardStatusType(status?: string): TagType {
+  const map: Record<string, TagType> = {
+    active: "success",
+    disabled: "info",
+    expired: "warning",
+    used_up: "info",
+    refunded: "info",
+  };
+  return status ? map[status] || "info" : "info";
 }
 
 function orderTypeText(type?: string) {
@@ -751,6 +841,18 @@ function notificationStatusText(status?: string | null) {
     skipped: "通知未配置",
   };
   return status ? map[status] || status : "未记录";
+}
+
+function couponStatusText(status?: string | null) {
+  const map: Record<string, string> = {
+    available: "可用",
+    locked: "已锁定",
+    used: "已核销",
+    expired: "已过期",
+    released: "已释放",
+    invalid: "已作废",
+  };
+  return status ? map[status] || status : "无";
 }
 
 function operatorText(item: OrderDetail["statusLogs"][number]) {
@@ -833,6 +935,12 @@ function formatJson(value?: Record<string, unknown> | null) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
 }
 
 .accounting-check {

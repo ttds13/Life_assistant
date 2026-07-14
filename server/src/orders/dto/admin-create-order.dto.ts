@@ -182,6 +182,12 @@ export class AdminCreateOrderDto {
   memberCardId?: number
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  couponId?: number
+
+  @IsOptional()
   @IsString()
   @Transform(({ value }) => trimOptional(value))
   offlinePaidAt?: string

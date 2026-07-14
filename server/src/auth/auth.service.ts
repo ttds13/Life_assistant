@@ -86,10 +86,18 @@ export class AuthService {
     const { openid, unionid } = await this.callWechatCode2Session(loginCode)
     const phone = await this.callWechatGetPhoneNumber(phoneCode)
 
-    let user = await this.users.findUserByPhone(phone)
-    if (!user) {
-      user = await this.users.findUserByOpenid(openid)
+    const userByPhone = await this.users.findUserByPhone(phone)
+    const userByOpenid = openid ? await this.users.findUserByOpenid(openid) : null
+    if (userByPhone && userByOpenid && userByPhone.id !== userByOpenid.id) {
+      throw new BusinessException(
+        ErrorCode.AUTH_FORBIDDEN,
+        'wechat account already bound to another user',
+        409,
+        { phoneUserId: userByPhone.id, openidUserId: userByOpenid.id },
+      )
     }
+
+    let user = userByPhone || userByOpenid
     if (!user) {
       user = await this.users.createUser({
         phone,
@@ -104,8 +112,12 @@ export class AuthService {
       throw new BusinessException(ErrorCode.AUTH_USER_DISABLED, 'account disabled', 403)
     }
 
-    if (!user.openid || user.openid !== openid || unionid) {
-      user = await this.users.updateUser(user.id, { openid, unionid }) || user
+    const patch: { phone?: string, openid?: string, unionid?: string } = {}
+    if (user.phone !== phone) patch.phone = phone
+    if (!user.openid || user.openid !== openid) patch.openid = openid
+    if (unionid) patch.unionid = unionid
+    if (Object.keys(patch).length) {
+      user = await this.users.updateUser(user.id, patch) || user
     }
 
     const profile = await this.resolveUserProfile(user)

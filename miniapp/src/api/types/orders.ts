@@ -143,6 +143,7 @@ export interface OrderDetail extends UserOrder {
     unitMinutes: number
     remainingUnits: number
     frozenUnits: number
+    usableUnits?: number
     status: string
   } | null
   memberCardRecords?: Array<{

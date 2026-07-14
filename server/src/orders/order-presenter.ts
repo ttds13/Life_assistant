@@ -127,6 +127,7 @@ export function presentUserOrder(order: OrderDetailRecord) {
     actualConsumeUnits: memberCardUsage.actualConsumeUnits,
     releasedUnits: memberCardUsage.releasedUnits,
     frozenUnits: memberCardUsage.frozenUnits,
+    memberCard: memberCardUsage.memberCard,
     acceptedAt: fulfillment.acceptedAt,
     onTheWayAt: fulfillment.onTheWayAt,
     checkinAt: fulfillment.checkinAt,
@@ -282,6 +283,7 @@ function presentMemberCardUsage(order: OrderDetailRecord) {
           unitMinutes: record.userMemberCard.card.unitMinutes || 0,
           remainingUnits: record.userMemberCard.remainingUnits,
           frozenUnits: record.userMemberCard.frozenUnits,
+          usableUnits: Math.max(0, record.userMemberCard.remainingUnits - record.userMemberCard.frozenUnits),
           status: record.userMemberCard.status,
         }
       : null,

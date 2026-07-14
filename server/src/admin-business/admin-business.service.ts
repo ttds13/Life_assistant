@@ -5,6 +5,8 @@ import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { USER_COUPON_STATUS } from '../coupons/coupon-status'
+import { CouponsService } from '../coupons/coupons.service'
+import { MEMBER_CARD_RECORD_TYPE, MEMBER_CARD_TYPE, USER_MEMBER_CARD_STATUS } from '../member-cards/constants/member-card'
 import { ORDER_STATUS } from '../orders/constants/order-status'
 import { PAYMENT_STATUS } from '../payments/constants/payment-status'
 import { PrismaService } from '../prisma/prisma.service'
@@ -45,6 +47,7 @@ export class AdminBusinessService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(AdminAuditService) private readonly audit: AdminAuditService,
+    @Inject(CouponsService) private readonly coupons: CouponsService,
     @Inject(ObjectStorageService) private readonly storage: ObjectStorageService,
     @Inject(RefundsService) private readonly refunds: RefundsService,
     @Inject(WithdrawalsService) private readonly withdrawals: WithdrawalsService,
@@ -1716,6 +1719,27 @@ export class AdminBusinessService {
     }
   }
 
+  async listUsableUserCouponsForOrderEntry(id: number, query: Record<string, unknown>) {
+    const user = await this.prisma.user.findFirst({ where: { id: BigInt(id), deletedAt: null, status: 1 } })
+    if (!user) throw this.notFound('user not found')
+
+    const amount = this.optionalNumber(query.amount, 0) || 0
+    let serviceId = this.optionalNumber(query.serviceId)
+    const target = this.optionalString(query.target)
+    if (!serviceId && target === 'member_card_purchase') {
+      const purchaseService = await this.prisma.service.findFirst({
+        where: { code: 'member_card_purchase' },
+        select: { id: true },
+      })
+      serviceId = purchaseService ? Number(purchaseService.id) : undefined
+    }
+
+    return this.coupons.listUsableUserCoupons(id, {
+      serviceId,
+      amount,
+    })
+  }
+
   async adjustUserPoints(id: number, body: JsonRecord, context: AdminWriteContext) {
     const points = Number(body.points)
     if (!Number.isInteger(points) || points === 0) {
@@ -2382,6 +2406,7 @@ export class AdminBusinessService {
   async listUserMemberCards(query: AdminPageQueryDto) {
     const page = this.getPage(query)
     const where: Prisma.UserMemberCardWhereInput = {}
+    if (query.userMemberCardId) where.id = BigInt(Number(query.userMemberCardId))
     if (query.userId) where.userId = BigInt(Number(query.userId))
     if (query.status) where.status = query.status
     if (query.source) where.source = query.source
@@ -2518,12 +2543,111 @@ export class AdminBusinessService {
     return { id, status }
   }
 
+  async adjustUserMemberCardTime(id: number, body: JsonRecord, context: AdminWriteContext) {
+    const mode = this.optionalString(body.mode) || 'delta'
+    if (!['delta', 'target'].includes(mode)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid adjust mode', 400)
+    }
+    const reason = this.requiredString(body.reason || body.remark, 'adjust reason is required')
+    if (reason.length > 200) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'adjust reason is too long', 400)
+    }
+
+    const updatedId = await this.prisma.$transaction(async (tx) => {
+      const current = await tx.userMemberCard.findUnique({
+        where: { id: BigInt(id) },
+        include: { card: true },
+      })
+      if (!current) throw this.notFound('user member card not found')
+
+      const deltaUnits = Number(body.deltaUnits)
+      const targetRemainingUnits = Number(body.targetRemainingUnits)
+      let nextRemainingUnits: number
+      if (mode === 'delta') {
+        if (!Number.isInteger(deltaUnits) || deltaUnits === 0) {
+          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'deltaUnits must be non-zero integer', 400)
+        }
+        nextRemainingUnits = current.remainingUnits + deltaUnits
+      }
+      else {
+        if (!Number.isInteger(targetRemainingUnits)) {
+          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'targetRemainingUnits must be integer', 400)
+        }
+        nextRemainingUnits = targetRemainingUnits
+      }
+
+      if (!Number.isInteger(nextRemainingUnits) || nextRemainingUnits < 0) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'remainingUnits must be non-negative integer', 400)
+      }
+      if (nextRemainingUnits < current.frozenUnits) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'remainingUnits cannot be less than frozenUnits', 409, {
+          remainingUnits: nextRemainingUnits,
+          frozenUnits: current.frozenUnits,
+        })
+      }
+      if (nextRemainingUnits === current.remainingUnits) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card balance is unchanged', 400)
+      }
+
+      const now = new Date()
+      const nextStatus = this.nextUserMemberCardStatusAfterAdjust(current.status, current.expireAt, nextRemainingUnits, now)
+      const updated = await tx.userMemberCard.update({
+        where: { id: current.id },
+        data: {
+          remainingUnits: nextRemainingUnits,
+          remainingTimes: this.unitsToLegacyTimes(current.card, nextRemainingUnits),
+          status: nextStatus,
+        },
+      })
+
+      await tx.memberCardRecord.create({
+        data: {
+          userMemberCardId: current.id,
+          recordType: MEMBER_CARD_RECORD_TYPE.ADMIN_ADJUST,
+          timesUsed: this.unitsToLegacyTimes(current.card, Math.abs(updated.remainingUnits - current.remainingUnits)),
+          units: updated.remainingUnits - current.remainingUnits,
+          beforeUnits: current.remainingUnits,
+          afterUnits: updated.remainingUnits,
+          operatorType: 'admin',
+          operatorId: BigInt(context.adminId),
+          remark: reason,
+        },
+      })
+
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'user-member-card:time:adjust',
+        module: 'marketing',
+        targetType: 'user_member_card',
+        targetId: id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: {
+          mode,
+          beforeUnits: current.remainingUnits,
+          afterUnits: updated.remainingUnits,
+          frozenUnits: current.frozenUnits,
+          statusBefore: current.status,
+          statusAfter: nextStatus,
+          reason,
+        },
+      })
+
+      return Number(updated.id)
+    })
+
+    return this.getUserMemberCard(updatedId)
+  }
+
   async listMemberCardRecords(query: AdminPageQueryDto) {
     const page = this.getPage(query)
     const where: Prisma.MemberCardRecordWhereInput = {}
     const recordType = query.recordType || query.type
     if (recordType && recordType !== 'all') where.recordType = recordType
+    if (query.userMemberCardId) where.userMemberCardId = BigInt(Number(query.userMemberCardId))
+    if (query.orderId) where.orderId = BigInt(Number(query.orderId))
     if (query.cardType) where.userMemberCard = { card: { cardType: query.cardType } }
+    if (query.orderNo) where.order = { orderNo: { contains: query.orderNo } }
     if (page.keyword) {
       where.OR = [
         { userMemberCard: { user: { nickname: { contains: page.keyword } } } },
@@ -3937,6 +4061,22 @@ export class AdminBusinessService {
     if (!rules.length) return 'all matching card-type services'
     return rules.slice(0, 3).map(rule => `${rule.service.name}:${rule.consumeUnits}`).join(', ')
       + (rules.length > 3 ? ` +${rules.length - 3}` : '')
+  }
+
+  private unitsToLegacyTimes(card: { cardType: string, unitMinutes: number | null }, units: number) {
+    const normalizedUnits = Math.max(0, Math.abs(units))
+    if (card.cardType === MEMBER_CARD_TYPE.TIME && card.unitMinutes && card.unitMinutes > 0) {
+      return Math.ceil(normalizedUnits / card.unitMinutes)
+    }
+    return normalizedUnits
+  }
+
+  private nextUserMemberCardStatusAfterAdjust(status: string, expireAt: Date, remainingUnits: number, now = new Date()) {
+    if (status === USER_MEMBER_CARD_STATUS.DISABLED || status === USER_MEMBER_CARD_STATUS.REFUNDED) return status
+    if (expireAt <= now) return USER_MEMBER_CARD_STATUS.EXPIRED
+    if (remainingUnits <= 0) return USER_MEMBER_CARD_STATUS.USED_UP
+    if (status === USER_MEMBER_CARD_STATUS.USED_UP || status === USER_MEMBER_CARD_STATUS.EXPIRED) return USER_MEMBER_CARD_STATUS.ACTIVE
+    return status
   }
 
   private normalizeUserMemberCardStatus(value: string) {

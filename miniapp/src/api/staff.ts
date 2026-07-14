@@ -104,6 +104,7 @@ function toStaffTask(order: UserOrder | OrderDetail, group: StaffTaskGroup = 'di
   const address = detail.address
   const status = mapStaffStatus(order.status)
   const serviceCardType = order.serviceCardType || detail.service?.cardType
+  const memberCard = detail.memberCard
   const photos = detail.servicePhotos?.map((url, index) => ({
     id: `${order.id}-${index}`,
     url: detail.servicePhotoOssUrls?.[index] || url,
@@ -143,6 +144,9 @@ function toStaffTask(order: UserOrder | OrderDetail, group: StaffTaskGroup = 'di
     actualConsumeUnits: order.actualConsumeUnits,
     releasedUnits: order.releasedUnits,
     frozenUnits: order.frozenUnits,
+    memberCardRemainingUnits: memberCard?.remainingUnits,
+    memberCardFrozenUnits: memberCard?.frozenUnits,
+    memberCardUsableUnits: memberCard?.usableUnits ?? (memberCard ? Math.max(0, memberCard.remainingUnits - memberCard.frozenUnits) : undefined),
     memberCardTip: memberCardTip(order),
     actualMinutes: order.actualConsumeUnits && (order.memberCardUnitName === '分钟' || serviceCardType === 'time')
       ? order.actualConsumeUnits

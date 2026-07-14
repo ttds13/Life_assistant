@@ -92,7 +92,7 @@ export class UsersService {
         payableAmount: true,
       },
     })
-    if (!order || !order.paidAt || order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE) {
+    if (!order || !order.paidAt) {
       return null
     }
 
@@ -118,7 +118,7 @@ export class UsersService {
         points,
         amount,
         balanceAfter,
-        remark: `订单 ${order.orderNo} 消费积分`,
+        remark: this.earnRemark(order),
       },
     })
   }
@@ -128,8 +128,6 @@ export class UsersService {
     order: Pick<Order, 'id' | 'userId' | 'orderNo' | 'orderType' | 'status' | 'payableAmount'>,
     paidAmount: Prisma.Decimal,
   ) {
-    if (order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE) return null
-
     const existing = await tx.pointLedger.findFirst({
       where: { orderId: order.id, type: POINT_LEDGER_TYPE_EARN },
     })
@@ -152,7 +150,7 @@ export class UsersService {
         points,
         amount,
         balanceAfter,
-        remark: `订单 ${order.orderNo} 消费积分`,
+        remark: this.earnRemark(order),
       },
     })
   }
@@ -206,11 +204,11 @@ export class UsersService {
         userId: BigInt(userId),
         status: { in: POINTABLE_ORDER_STATUSES },
         paidAt: { not: null },
-        orderType: { not: ORDER_TYPE.MEMBER_CARD_PURCHASE },
       },
       select: {
         id: true,
         orderNo: true,
+        orderType: true,
         paidAmount: true,
         payableAmount: true,
         paidAt: true,
@@ -271,6 +269,12 @@ export class UsersService {
     const paid = new Prisma.Decimal(paidAmount || 0)
     if (paid.greaterThan(0)) return paid
     return new Prisma.Decimal(payableAmount || 0)
+  }
+
+  private earnRemark(order: Pick<Order, 'orderNo' | 'orderType'>) {
+    return order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE
+      ? `订单 ${order.orderNo} 会员卡购买积分`
+      : `订单 ${order.orderNo} 消费积分`
   }
 
   private amountToPoints(amount: Prisma.Decimal) {

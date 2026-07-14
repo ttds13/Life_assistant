@@ -61,6 +61,9 @@ export interface StaffTask {
   actualConsumeUnits?: number
   releasedUnits?: number
   frozenUnits?: number
+  memberCardRemainingUnits?: number
+  memberCardFrozenUnits?: number
+  memberCardUsableUnits?: number
   memberCardTip?: string
   actualMinutes?: number
   createdAt: string

@@ -124,6 +124,22 @@ const ticketStatusInfo = computed(() => {
   return map[ticket.status] || { title: ticket.status, desc: ticket.latestMessage || '售后状态已更新。', className: 'bg-[#F3F4F6] text-[#6B7280]' }
 })
 
+const showMemberCardUsage = computed(() =>
+  !!order.value
+  && Boolean(order.value.memberCardId || order.value.memberCardName || order.value.memberCard || order.value.memberCardRecords?.length),
+)
+const currentMemberCardUsableUnits = computed(() => {
+  const card = order.value?.memberCard
+  if (!card)
+    return 0
+  return card.usableUnits ?? Math.max(0, card.remainingUnits - card.frozenUnits)
+})
+
+function formatMemberCardUnits(value?: number | null) {
+  const unit = order.value?.memberCardUnitName || order.value?.memberCard?.unitName || '分钟'
+  return `${Number(value || 0)}${unit}`
+}
+
 async function loadOrder() {
   loading.value = true
   try {
@@ -415,6 +431,43 @@ watch(timeSlots, (slots) => {
             <text class="flex-1 text-[26rpx] text-gray-700">{{ order.paymentMethod || '待支付' }}</text>
           </view>
           <amount-detail :items="order.amountItems" :total="order.payableAmount" />
+        </form-section>
+
+        <form-section v-if="showMemberCardUsage" title="会员卡使用">
+          <view class="rounded-[16rpx] bg-[#F9FAFB] p-[20rpx]">
+            <view class="flex py-[8rpx]">
+              <text class="w-[150rpx] text-[26rpx] text-gray-400">会员卡</text>
+              <text class="flex-1 text-[26rpx] text-gray-700">{{ order.memberCardName || order.memberCard?.name || '会员卡' }}</text>
+            </view>
+            <view class="grid grid-cols-3 gap-[12rpx] mt-[8rpx]">
+              <view class="rounded-[14rpx] bg-[#FFF7ED] p-[16rpx]">
+                <text class="block text-[22rpx] text-[#B45309]">预计冻结</text>
+                <text class="block mt-[6rpx] text-[28rpx] text-[#92400E] font-700">{{ formatMemberCardUnits(order.plannedConsumeUnits || order.memberCardConsumeUnits || order.frozenUnits) }}</text>
+              </view>
+              <view class="rounded-[14rpx] bg-[#ECFDF5] p-[16rpx]">
+                <text class="block text-[22rpx] text-[#047857]">实际核销</text>
+                <text class="block mt-[6rpx] text-[28rpx] text-[#047857] font-700">{{ formatMemberCardUnits(order.actualConsumeUnits) }}</text>
+              </view>
+              <view class="rounded-[14rpx] bg-[#EAF3FF] p-[16rpx]">
+                <text class="block text-[22rpx] text-[#1677FF]">已释放</text>
+                <text class="block mt-[6rpx] text-[28rpx] text-[#1677FF] font-700">{{ formatMemberCardUnits(order.releasedUnits) }}</text>
+              </view>
+            </view>
+            <view v-if="order.memberCard" class="grid grid-cols-3 gap-[12rpx] mt-[12rpx]">
+              <view class="rounded-[14rpx] bg-white p-[16rpx]">
+                <text class="block text-[22rpx] text-gray-400">总剩余</text>
+                <text class="block mt-[6rpx] text-[28rpx] text-gray-700 font-700">{{ formatMemberCardUnits(order.memberCard.remainingUnits) }}</text>
+              </view>
+              <view class="rounded-[14rpx] bg-white p-[16rpx]">
+                <text class="block text-[22rpx] text-gray-400">已冻结</text>
+                <text class="block mt-[6rpx] text-[28rpx] text-gray-700 font-700">{{ formatMemberCardUnits(order.memberCard.frozenUnits) }}</text>
+              </view>
+              <view class="rounded-[14rpx] bg-white p-[16rpx]">
+                <text class="block text-[22rpx] text-gray-400">可用余额</text>
+                <text class="block mt-[6rpx] text-[28rpx] text-gray-700 font-700">{{ formatMemberCardUnits(currentMemberCardUsableUnits) }}</text>
+              </view>
+            </view>
+          </view>
         </form-section>
 
         <form-section v-if="latestRefund && refundStatusInfo" title="退款信息">

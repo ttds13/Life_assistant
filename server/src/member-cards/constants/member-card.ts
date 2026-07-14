@@ -20,4 +20,5 @@ export const MEMBER_CARD_RECORD_TYPE = {
   CONSUME: 'consume',
   RELEASE: 'release',
   REFUND_REVOKE: 'refund_revoke',
+  ADMIN_ADJUST: 'admin_adjust',
 } as const

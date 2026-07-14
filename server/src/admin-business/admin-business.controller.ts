@@ -44,6 +44,12 @@ export class AdminBusinessController {
     return this.service.getAdminUserPoints(this.parseId(idText))
   }
 
+  @Get('users/:id/coupons/usable')
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_DETAIL)
+  listUsableUserCoupons(@Param('id') idText: string, @Query() query: Record<string, unknown>) {
+    return this.service.listUsableUserCouponsForOrderEntry(this.parseId(idText), query)
+  }
+
   @Post('users/:id/points/adjust')
   @RequireAdminPermissions(ADMIN_PERMISSION.FINANCE_POINT_ADJUST)
   @HttpCode(200)
@@ -361,6 +367,13 @@ export class AdminBusinessController {
   @HttpCode(200)
   updateUserMemberCardStatus(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminStatusDto) {
     return this.service.updateUserMemberCardStatus(this.parseId(idText), dto, this.context(request))
+  }
+
+  @Post('user-member-cards/:id/adjust-time')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_UPDATE)
+  @HttpCode(200)
+  adjustUserMemberCardTime(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
+    return this.service.adjustUserMemberCardTime(this.parseId(idText), body, this.context(request))
   }
 
   @Get('member-card-records')

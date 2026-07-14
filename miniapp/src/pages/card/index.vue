@@ -19,15 +19,17 @@ const serviceCards = ref<UserMemberCard[]>([])
 const purchasableCards = ref<PurchasableMemberCard[]>([])
 
 function formatBalance(card: UserMemberCard) {
+  return formatUnits(card.usableUnits, card)
+}
+
+function formatUnits(value: number, card: UserMemberCard | PurchasableMemberCard) {
   if (card.cardType === 'time')
-    return `${card.usableUnits}分钟`
-  return `${card.usableUnits}${card.unitName || '次'}`
+    return `${value}分钟`
+  return `${value}${card.unitName || '次'}`
 }
 
 function formatTemplateBalance(card: PurchasableMemberCard) {
-  if (card.cardType === 'time')
-    return `${card.totalUnits}分钟`
-  return `${card.totalUnits}${card.unitName || '次'}`
+  return formatUnits(card.totalUnits, card)
 }
 
 async function loadCards() {
@@ -149,6 +151,10 @@ onShow(loadPage)
               <text class="remain-label">剩余</text>
               <text class="remain-value">{{ formatBalance(item) }}</text>
             </view>
+            <view class="balance-meta">
+              <text>总剩余 {{ formatUnits(item.remainingUnits, item) }}</text>
+              <text>已冻结 {{ formatUnits(item.frozenUnits, item) }}</text>
+            </view>
           </view>
 
           <view class="reserve-button" @tap="reserveWithCard(item)">
@@ -219,7 +225,7 @@ onShow(loadPage)
 
 .service-card {
   position: relative;
-  height: 188rpx;
+  min-height: 218rpx;
   overflow: hidden;
   border-radius: 18rpx;
   background: #1677ff;
@@ -260,7 +266,7 @@ onShow(loadPage)
   z-index: 1;
   height: 100%;
   box-sizing: border-box;
-  padding: 26rpx 188rpx 22rpx 28rpx;
+  padding: 24rpx 188rpx 22rpx 28rpx;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -306,6 +312,16 @@ onShow(loadPage)
   line-height: 48rpx;
   font-weight: 700;
   letter-spacing: 0;
+}
+
+.balance-meta {
+  margin-top: 8rpx;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx 18rpx;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 22rpx;
+  line-height: 30rpx;
 }
 
 .reserve-button {

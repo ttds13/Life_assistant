@@ -71,12 +71,14 @@ export class UsersRepository {
   }
 
   async updateUser(id: number, fields: {
+    phone?: string
     nickname?: string
     avatar?: string
     openid?: string
     unionid?: string
   }): Promise<UserProfileRecord | null> {
     const data: Record<string, string> = {}
+    if (fields.phone !== undefined) data.phone = fields.phone
     if (fields.nickname !== undefined) data.nickname = fields.nickname
     if (fields.avatar !== undefined) data.avatarUrl = fields.avatar
     if (fields.openid !== undefined) data.openid = fields.openid

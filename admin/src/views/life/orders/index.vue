@@ -90,6 +90,18 @@
           </template>
         </el-table-column>
         <el-table-column label="服务/商品" prop="serviceName" min-width="160" />
+        <el-table-column v-if="isMemberCardPurchasePage" label="用户卡ID" width="110">
+          <template #default="{ row }">{{ row.grantedUserMemberCardId || row.userMemberCardId || "-" }}</template>
+        </el-table-column>
+        <el-table-column v-if="isMemberCardPurchasePage" label="当前剩余" width="110">
+          <template #default="{ row }">{{ formatOrderCardUnits(row.memberCard?.remainingUnits, row.memberCard?.unitName) }}</template>
+        </el-table-column>
+        <el-table-column v-if="isMemberCardPurchasePage" label="已冻结" width="100">
+          <template #default="{ row }">{{ formatOrderCardUnits(row.memberCard?.frozenUnits, row.memberCard?.unitName) }}</template>
+        </el-table-column>
+        <el-table-column v-if="isMemberCardPurchasePage" label="可用余额" width="110">
+          <template #default="{ row }">{{ formatOrderCardUnits(row.memberCard?.usableUnits, row.memberCard?.unitName) }}</template>
+        </el-table-column>
         <el-table-column label="用户" min-width="150">
           <template #default="{ row }">
             <div>{{ row.userName }}</div>
@@ -118,7 +130,17 @@
             <el-button type="primary" link size="small" icon="view" @click="openDetail(row.id)">
               详情
             </el-button>
-            <el-button v-if="canUpdateOrders" type="primary" link size="small" icon="edit" @click="openEdit(row)">
+            <el-button
+              v-if="row.orderType === 'member_card_purchase'"
+              type="success"
+              link
+              size="small"
+              :disabled="!row.grantedUserMemberCardId"
+              @click="openGrantedMemberCard(row)"
+            >
+              管理卡
+            </el-button>
+            <el-button v-if="canUpdateOrders && row.orderType !== 'member_card_purchase'" type="primary" link size="small" icon="edit" @click="openEdit(row)">
               编辑
             </el-button>
             <el-button
@@ -377,6 +399,25 @@
               </el-form-item>
             </el-col>
           </el-row>
+          <el-form-item v-if="createForm.paymentMode !== 'member_card'" label="优惠券">
+            <el-select
+              v-model="createForm.couponId"
+              clearable
+              filterable
+              :loading="couponLoading"
+              placeholder="不使用优惠券"
+              style="width: 100%"
+              @visible-change="handleCouponVisible"
+            >
+              <el-option
+                v-for="item in couponOptions"
+                :key="item.userCouponId"
+                :label="couponOptionLabel(item)"
+                :value="Number(item.couponId)"
+              />
+            </el-select>
+            <div class="form-tip">只显示当前客户、当前服务、当前金额可用的优惠券；最终优惠金额由后端重新计算。</div>
+          </el-form-item>
           <el-form-item v-if="createForm.paymentMode === 'member_card'" label="会员卡" required>
             <el-select
               v-model="createForm.memberCardId"
@@ -415,6 +456,9 @@
             <span>预约：{{ createForm.appointmentStartTime || "-" }} 至 {{ createForm.appointmentEndTime || "-" }}</span>
             <span>支付：{{ paymentModeText(createForm.paymentMode) }}</span>
             <span>创建后状态：{{ expectedCreateStatus }}</span>
+            <span>优惠：￥{{ money(serviceCouponDiscount) }}</span>
+            <span>应收：￥{{ money(createForm.payableAmount) }}</span>
+            <span>预计积分：{{ serviceExpectedPoints }} 分</span>
           </div>
         </div>
       </el-form>
@@ -519,6 +563,26 @@
               </el-form-item>
             </el-col>
           </el-row>
+          <el-form-item label="优惠券">
+            <el-select
+              v-model="memberCardPurchaseForm.couponId"
+              clearable
+              filterable
+              :disabled="!memberCardPurchaseForm.userId || !memberCardPurchaseForm.cardId"
+              :loading="purchaseCouponLoading"
+              placeholder="不使用优惠券"
+              style="width: 100%"
+              @visible-change="handlePurchaseCouponVisible"
+            >
+              <el-option
+                v-for="item in purchaseCouponOptions"
+                :key="item.userCouponId"
+                :label="couponOptionLabel(item)"
+                :value="Number(item.couponId)"
+              />
+            </el-select>
+            <div class="form-tip">只显示当前客户可用于会员卡购买的优惠券；选择后应收金额自动按会员卡售价重新计算。</div>
+          </el-form-item>
           <el-row :gutter="12">
             <el-col :span="12">
               <el-form-item label="来源">
@@ -562,6 +626,10 @@
             <span>会员卡：{{ selectedPurchaseCard ? memberCardTemplateOptionLabel(selectedPurchaseCard) : "-" }}</span>
             <span>支付：{{ purchasePaymentModeText(memberCardPurchaseForm.paymentMode) }}</span>
             <span>创建后状态：{{ memberCardPurchaseStatusText }}</span>
+            <span>原价：￥{{ money(purchaseOriginalAmount) }}</span>
+            <span>优惠：￥{{ money(purchaseCouponDiscount) }}</span>
+            <span>应收：￥{{ money(memberCardPurchaseForm.payableAmount) }}</span>
+            <span>预计积分：{{ purchaseExpectedPoints }} 分</span>
           </div>
         </div>
       </el-form>
@@ -621,6 +689,7 @@ import type {
   AddressRecord,
   AdminCreateMemberCardPurchasePayload,
   AdminCreateOrderPayload,
+  AdminUsableCoupon,
   LifeResourceRecord,
   OrderListItem,
   StaffOption,
@@ -689,6 +758,7 @@ const createForm = reactive({
   payableAmount: 0,
   paymentMode: "offline_paid",
   memberCardId: undefined as number | undefined,
+  couponId: undefined as number | undefined,
   offlinePaymentRemark: "",
   remark: "",
   adminRemark: "",
@@ -699,15 +769,20 @@ const addressOptions = ref<AddressRecord[]>([]);
 const memberCardOptions = ref<LifeResourceRecord[]>([]);
 const purchaseCustomerOptions = ref<LifeResourceRecord[]>([]);
 const purchaseCardOptions = ref<LifeResourceRecord[]>([]);
+const couponOptions = ref<AdminUsableCoupon[]>([]);
+const purchaseCouponOptions = ref<AdminUsableCoupon[]>([]);
 const customerLoading = ref(false);
 const serviceLoading = ref(false);
 const addressLoading = ref(false);
 const memberCardLoading = ref(false);
 const purchaseCustomerLoading = ref(false);
 const purchaseCardLoading = ref(false);
+const couponLoading = ref(false);
+const purchaseCouponLoading = ref(false);
 const memberCardPurchaseForm = reactive({
   userId: undefined as number | undefined,
   cardId: undefined as number | undefined,
+  couponId: undefined as number | undefined,
   source: "offline",
   paymentMode: "offline_paid" as "offline_paid" | "unpaid",
   payableAmount: 0,
@@ -758,6 +833,14 @@ const selectedPurchaseCard = computed(() => {
   if (!memberCardPurchaseForm.cardId) return undefined;
   return purchaseCardOptions.value.find((item) => Number(item.id) === Number(memberCardPurchaseForm.cardId));
 });
+const selectedCoupon = computed(() => {
+  if (!createForm.couponId) return undefined;
+  return couponOptions.value.find((item) => Number(item.couponId) === Number(createForm.couponId));
+});
+const selectedPurchaseCoupon = computed(() => {
+  if (!memberCardPurchaseForm.couponId) return undefined;
+  return purchaseCouponOptions.value.find((item) => Number(item.couponId) === Number(memberCardPurchaseForm.couponId));
+});
 const selectedService = computed(() => {
   if (!createForm.serviceId) return undefined;
   return serviceOptions.value.find((item) => Number(item.id) === Number(createForm.serviceId));
@@ -777,6 +860,14 @@ const expectedCreateStatus = computed(() => createForm.paymentMode === "unpaid" 
 const memberCardPurchaseStatusText = computed(() =>
   memberCardPurchaseForm.paymentMode === "offline_paid" ? "已完成并发卡" : "待支付"
 );
+const serviceOriginalAmount = computed(() => numberField(selectedService.value, "basePrice"));
+const serviceCouponDiscount = computed(() => Number(selectedCoupon.value?.discountAmount || 0));
+const serviceExpectedPayable = computed(() => Math.max(0, serviceOriginalAmount.value - serviceCouponDiscount.value));
+const serviceExpectedPoints = computed(() => createForm.paymentMode === "member_card" ? 0 : pointsForAmount(createForm.payableAmount));
+const purchaseOriginalAmount = computed(() => numberField(selectedPurchaseCard.value, "price"));
+const purchaseCouponDiscount = computed(() => Number(selectedPurchaseCoupon.value?.discountAmount || 0));
+const purchaseExpectedPayable = computed(() => Math.max(0, purchaseOriginalAmount.value - purchaseCouponDiscount.value));
+const purchaseExpectedPoints = computed(() => pointsForAmount(memberCardPurchaseForm.payableAmount));
 const summaryCustomerText = computed(() => {
   if (selectedCustomer.value) {
     return `${textField(selectedCustomer.value, "nickname") || "未命名客户"} / ${textField(selectedCustomer.value, "phone") || "-"}`;
@@ -800,8 +891,10 @@ watch(
   (userId) => {
     createForm.addressId = undefined;
     createForm.memberCardId = undefined;
+    createForm.couponId = undefined;
     addressOptions.value = [];
     memberCardOptions.value = [];
+    couponOptions.value = [];
     if (!userId) {
       createForm.customerName = "";
       createForm.customerPhone = "";
@@ -816,6 +909,7 @@ watch(
     }
     loadAddressOptions(userId);
     loadMemberCardOptions();
+    loadCouponOptions();
   }
 );
 
@@ -823,8 +917,11 @@ watch(
   () => createForm.serviceId,
   () => {
     createForm.memberCardId = undefined;
+    createForm.couponId = undefined;
+    couponOptions.value = [];
     applyServiceDefaults();
     loadMemberCardOptions();
+    loadCouponOptions();
   }
 );
 
@@ -843,11 +940,42 @@ watch(
       if (mode === "offline_paid" && !createForm.offlinePaymentRemark.trim()) {
         createForm.offlinePaymentRemark = "线下录入已收款";
       }
+      loadCouponOptions();
       return;
     }
     createForm.payableAmount = 0;
+    createForm.couponId = undefined;
+    couponOptions.value = [];
     loadMemberCardOptions();
   }
+);
+
+watch(
+  () => createForm.couponId,
+  () => applySelectedCoupon()
+);
+
+watch(
+  () => memberCardPurchaseForm.userId,
+  () => {
+    memberCardPurchaseForm.couponId = undefined;
+    purchaseCouponOptions.value = [];
+    loadPurchaseCouponOptions();
+  }
+);
+
+watch(
+  () => memberCardPurchaseForm.cardId,
+  () => {
+    memberCardPurchaseForm.couponId = undefined;
+    purchaseCouponOptions.value = [];
+    loadPurchaseCouponOptions();
+  }
+);
+
+watch(
+  () => memberCardPurchaseForm.couponId,
+  () => applySelectedPurchaseCoupon()
 );
 
 watch(
@@ -983,6 +1111,14 @@ function handlePurchaseCardVisible(visible: boolean) {
   if (visible && purchaseCardOptions.value.length === 0) loadPurchaseCardOptions();
 }
 
+function handleCouponVisible(visible: boolean) {
+  if (visible) loadCouponOptions();
+}
+
+function handlePurchaseCouponVisible(visible: boolean) {
+  if (visible) loadPurchaseCouponOptions();
+}
+
 function handlePurchaseCardChange() {
   const card = selectedPurchaseCard.value;
   memberCardPurchaseForm.payableAmount = numberField(card, "price");
@@ -1072,6 +1208,71 @@ async function loadMemberCardOptions() {
   }
 }
 
+async function loadCouponOptions() {
+  const userId = createForm.userId;
+  const service = selectedService.value;
+  if (!userId || !service || createForm.paymentMode === "member_card") {
+    couponOptions.value = [];
+    createForm.couponId = undefined;
+    return;
+  }
+
+  couponLoading.value = true;
+  try {
+    couponOptions.value = await LifeAPI.getUsableUserCoupons(userId, {
+      serviceId: Number(service.id),
+      amount: serviceOriginalAmount.value,
+    });
+    if (createForm.couponId && !couponOptions.value.some((item) => Number(item.couponId) === Number(createForm.couponId))) {
+      createForm.couponId = undefined;
+    }
+  } finally {
+    couponLoading.value = false;
+  }
+}
+
+async function loadPurchaseCouponOptions() {
+  const userId = memberCardPurchaseForm.userId;
+  const card = selectedPurchaseCard.value;
+  if (!userId || !card) {
+    purchaseCouponOptions.value = [];
+    memberCardPurchaseForm.couponId = undefined;
+    return;
+  }
+
+  purchaseCouponLoading.value = true;
+  try {
+    purchaseCouponOptions.value = await LifeAPI.getUsableUserCoupons(userId, {
+      amount: purchaseOriginalAmount.value,
+      target: "member_card_purchase",
+    });
+    if (memberCardPurchaseForm.couponId && !purchaseCouponOptions.value.some((item) => Number(item.couponId) === Number(memberCardPurchaseForm.couponId))) {
+      memberCardPurchaseForm.couponId = undefined;
+    }
+  } finally {
+    purchaseCouponLoading.value = false;
+  }
+}
+
+function applySelectedCoupon() {
+  if (createForm.paymentMode === "member_card") return;
+  if (selectedCoupon.value) {
+    createForm.payableAmount = serviceExpectedPayable.value;
+    return;
+  }
+  const price = serviceOriginalAmount.value;
+  if (price > 0) createForm.payableAmount = price;
+}
+
+function applySelectedPurchaseCoupon() {
+  if (selectedPurchaseCoupon.value) {
+    memberCardPurchaseForm.payableAmount = purchaseExpectedPayable.value;
+    return;
+  }
+  const price = purchaseOriginalAmount.value;
+  if (price > 0) memberCardPurchaseForm.payableAmount = price;
+}
+
 function applyServiceDefaults() {
   const service = selectedService.value;
   const price = numberField(service, "basePrice");
@@ -1159,6 +1360,12 @@ function memberCardTemplateOptionLabel(item: LifeResourceRecord) {
   return `${name} / ${cardTypeText(textField(item, "cardType"))} / ￥${price} / ${totalUnits}${unitName} / ${validityDays}天`;
 }
 
+function couponOptionLabel(item: AdminUsableCoupon) {
+  const typeText = item.type === "discount" ? `${item.amount}折` : `￥${money(item.amount)}`;
+  const minText = item.minAmount > 0 ? `满￥${money(item.minAmount)}` : "无门槛";
+  return `${item.name} / ${typeText} / ${minText} / 本单抵￥${money(item.discountAmount)} / ${formatDateTime(item.expireAt)}到期`;
+}
+
 function serviceDurationText(item?: LifeResourceRecord) {
   const minutes = serviceDurationMinutes(item);
   return minutes > 0 ? `${minutes} 分钟` : "未设置时长";
@@ -1205,6 +1412,10 @@ function money(value?: number) {
   return Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function pointsForAmount(value?: number) {
+  return Math.floor(Math.max(0, Number(value || 0)) * 10);
+}
+
 function textField(record: LifeResourceRecord | undefined, key: string) {
   const value = record?.[key];
   return value === undefined || value === null ? "" : String(value);
@@ -1218,6 +1429,18 @@ function numberField(record: LifeResourceRecord | undefined, key: string) {
 
 function openDetail(id: string) {
   router.push(`/orders/detail/${id}`);
+}
+
+function openGrantedMemberCard(row: OrderListItem) {
+  const userMemberCardId = row.grantedUserMemberCardId || row.userMemberCardId || row.memberCard?.id;
+  if (!userMemberCardId) {
+    ElMessage.info("订单完成发卡后才能管理用户会员卡");
+    return;
+  }
+  router.push({
+    path: "/marketing/user-member-cards",
+    query: { userMemberCardId: String(userMemberCardId) },
+  });
 }
 
 function handleSelectionChange(selection: OrderListItem[]) {
@@ -1354,16 +1577,19 @@ function resetCreateForm() {
   createForm.payableAmount = 0;
   createForm.paymentMode = "offline_paid";
   createForm.memberCardId = undefined;
+  createForm.couponId = undefined;
   createForm.offlinePaymentRemark = "线下录入已收款";
   createForm.remark = "";
   createForm.adminRemark = "";
   addressOptions.value = [];
   memberCardOptions.value = [];
+  couponOptions.value = [];
 }
 
 function resetMemberCardPurchaseForm() {
   memberCardPurchaseForm.userId = undefined;
   memberCardPurchaseForm.cardId = undefined;
+  memberCardPurchaseForm.couponId = undefined;
   memberCardPurchaseForm.source = "offline";
   memberCardPurchaseForm.paymentMode = "offline_paid";
   memberCardPurchaseForm.payableAmount = 0;
@@ -1371,6 +1597,7 @@ function resetMemberCardPurchaseForm() {
   memberCardPurchaseForm.paymentRemark = "线下会员卡购买已收款";
   memberCardPurchaseForm.remark = "";
   memberCardPurchaseForm.adminRemark = "";
+  purchaseCouponOptions.value = [];
 }
 
 async function submitMemberCardPurchase() {
@@ -1406,21 +1633,26 @@ function buildMemberCardPurchasePayload(): AdminCreateMemberCardPurchasePayload 
     ElMessage.warning("请选择已发布会员卡模板");
     return null;
   }
-  if (payableAmount <= 0) {
-    ElMessage.warning("会员卡购买订单应收金额必须大于 0");
+  if (payableAmount <= 0 && memberCardPurchaseForm.paymentMode === "unpaid") {
+    ElMessage.warning("应收金额为 0 时不能选择待线下收款");
     return null;
   }
-  if (Math.abs(payableAmount - cardPrice) > 0.005 && !memberCardPurchaseForm.adminRemark.trim()) {
+  if (!memberCardPurchaseForm.couponId && Math.abs(payableAmount - cardPrice) > 0.005 && !memberCardPurchaseForm.adminRemark.trim()) {
     ElMessage.warning("应收金额与会员卡售价不一致，请在后台备注写明改价原因");
     return null;
   }
+  if (memberCardPurchaseForm.couponId) {
+    memberCardPurchaseForm.payableAmount = purchaseExpectedPayable.value;
+  }
+  const finalPayableAmount = Number(memberCardPurchaseForm.payableAmount || 0);
 
   return {
     userId: memberCardPurchaseForm.userId,
     cardId: memberCardPurchaseForm.cardId,
+    couponId: memberCardPurchaseForm.couponId,
     source: memberCardPurchaseForm.source,
     paymentMode: memberCardPurchaseForm.paymentMode,
-    payableAmount,
+    payableAmount: finalPayableAmount,
     offlinePaidAt: memberCardPurchaseForm.paymentMode === "offline_paid"
       ? trimOrUndefined(memberCardPurchaseForm.offlinePaidAt)
       : undefined,
@@ -1467,9 +1699,16 @@ function buildCreateOrderPayload(): AdminCreateOrderPayload | null {
     ElMessage.warning("会员卡抵扣必须先选择已有客户");
     return null;
   }
-  if (createForm.paymentMode !== "member_card" && servicePrice > 0 && Math.abs(Number(createForm.payableAmount || 0) - servicePrice) > 0.005 && !createForm.adminRemark.trim()) {
+  if (createForm.couponId && createForm.paymentMode === "member_card") {
+    ElMessage.warning("会员卡抵扣服务不能同时使用优惠券");
+    return null;
+  }
+  if (!createForm.couponId && createForm.paymentMode !== "member_card" && servicePrice > 0 && Math.abs(Number(createForm.payableAmount || 0) - servicePrice) > 0.005 && !createForm.adminRemark.trim()) {
     ElMessage.warning("应收金额与服务价格不一致，请在后台备注写明改价原因");
     return null;
+  }
+  if (createForm.couponId && createForm.paymentMode !== "member_card") {
+    createForm.payableAmount = serviceExpectedPayable.value;
   }
 
   const payload: AdminCreateOrderPayload = {
@@ -1479,6 +1718,7 @@ function buildCreateOrderPayload(): AdminCreateOrderPayload | null {
     source: createForm.source,
     paymentMode: createForm.paymentMode,
     memberCardId: createForm.paymentMode === "member_card" ? createForm.memberCardId : undefined,
+    couponId: createForm.paymentMode !== "member_card" ? createForm.couponId : undefined,
     offlinePaymentRemark: createForm.paymentMode === "offline_paid" ? trimOrUndefined(createForm.offlinePaymentRemark) : undefined,
     remark: trimOrUndefined(createForm.remark),
     adminRemark: trimOrUndefined(createForm.adminRemark),
@@ -1553,6 +1793,11 @@ function orderTypeMeta(orderType?: string): { label: string; type: "primary" | "
     member_card_purchase: { label: "会员卡购买", type: "success" },
   };
   return orderType ? map[orderType] || { label: orderType, type: "info" } : { label: "-", type: "info" };
+}
+
+function formatOrderCardUnits(value: unknown, unitName?: string) {
+  if (value === undefined || value === null || value === "") return "-";
+  return `${Number(value || 0)}${unitName || "分钟"}`;
 }
 
 function canAssign(row: OrderListItem) {
