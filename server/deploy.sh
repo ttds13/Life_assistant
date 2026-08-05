@@ -8,6 +8,12 @@ CANARY_PORT="${CANARY_PORT:-3101}"
 DOCKER_NETWORK="${DOCKER_NETWORK:-life_assistant_net}"
 IMAGE_TAR="${IMAGE_TAR:-life-assistant-server.tar}"
 IMAGE_TAG="${IMAGE_TAG:-}"
+ENV_FILE="${ENV_FILE:-.env.production}"
+CERTS_DIR="${CERTS_DIR:-certs}"
+BACKUP_DIR="${BACKUP_DIR:-/www/wwwroot/life-assistant/backups}"
+MYSQL_CONTAINER_NAME="${MYSQL_CONTAINER_NAME:-life_assistant_mysql}"
+MYSQL_DATABASE="${MYSQL_DATABASE:-life_assistant}"
+BACKUP_VERIFY_RESTORE="${BACKUP_VERIFY_RESTORE:-true}"
 NODE_IMAGE="${NODE_IMAGE:-node:22-bookworm-slim}"
 HEALTH_PATH="${HEALTH_PATH:-/api/health}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-24}"
@@ -25,19 +31,25 @@ fi
 IMAGE_REF="${IMAGE_NAME}:${IMAGE_TAG}"
 CANDIDATE_NAME="${CONTAINER_NAME}_candidate"
 
-if [ ! -f .env.production ]; then
-  echo "missing .env.production"
+if [ ! -f "${ENV_FILE}" ]; then
+  echo "missing ENV_FILE: ${ENV_FILE}"
   exit 1
 fi
 
-if [ ! -f certs/apiclient_key.pem ]; then
-  echo "missing certs/apiclient_key.pem"
+if [ ! -f "${CERTS_DIR}/apiclient_key.pem" ]; then
+  echo "missing ${CERTS_DIR}/apiclient_key.pem"
   exit 1
 fi
 
-if [ ! -f certs/wechatpay_public_key.pem ]; then
-  echo "missing certs/wechatpay_public_key.pem"
+if [ ! -f "${CERTS_DIR}/wechatpay_public_key.pem" ]; then
+  echo "missing ${CERTS_DIR}/wechatpay_public_key.pem"
   exit 1
+fi
+
+if [ "${CERTS_DIR#/}" = "${CERTS_DIR}" ]; then
+  CERTS_MOUNT="$(pwd)/${CERTS_DIR}"
+else
+  CERTS_MOUNT="${CERTS_DIR}"
 fi
 
 if [ "${PORT}" = "${CANARY_PORT}" ]; then
@@ -66,17 +78,23 @@ fi
 
 docker run --rm \
   --network "${DOCKER_NETWORK}" \
-  --env-file .env.production \
-  -v "$(pwd)/certs:/app/certs:ro" \
+  --env-file "${ENV_FILE}" \
+  -v "${CERTS_MOUNT}:/app/certs:ro" \
   --entrypoint node \
   "${IMAGE_REF}" scripts/release-preflight.cjs
 
 docker run --rm \
   --network "${DOCKER_NETWORK}" \
-  --env-file .env.production \
-  -v "$(pwd)/certs:/app/certs:ro" \
+  --env-file "${ENV_FILE}" \
+  -v "${CERTS_MOUNT}:/app/certs:ro" \
   --entrypoint npm \
   "${IMAGE_REF}" run prisma:migrate:deploy
+
+BACKUP_FILE="${BACKUP_DIR}/life_assistant_before_$(date -u +%Y%m%d%H%M%S).sql.gz"
+MYSQL_CONTAINER_NAME="${MYSQL_CONTAINER_NAME}" \
+MYSQL_DATABASE="${MYSQL_DATABASE}" \
+BACKUP_VERIFY_RESTORE="${BACKUP_VERIFY_RESTORE}" \
+  sh ./backup-before-migration.sh "${BACKUP_FILE}"
 
 run_app() {
   name="$1"
@@ -85,11 +103,11 @@ run_app() {
   docker run -d \
     --name "${name}" \
     --network "${DOCKER_NETWORK}" \
-    --env-file .env.production \
+    --env-file "${ENV_FILE}" \
     -e RUN_MIGRATIONS_ON_START=false \
     -e SEED_ON_START=false \
     -p "127.0.0.1:${host_port}:3100" \
-    -v "$(pwd)/certs:/app/certs:ro" \
+    -v "${CERTS_MOUNT}:/app/certs:ro" \
     -v "$(pwd)/uploads:/app/uploads" \
     -v "$(pwd)/logs:/app/logs" \
     --restart unless-stopped \

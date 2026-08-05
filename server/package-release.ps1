@@ -41,44 +41,24 @@ if ($ImageTag -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
 
 $imageRef = "${imageName}:$ImageTag"
 
-$requiredFiles = @(
-  '.env.production',
-  'certs\apiclient_key.pem',
-  'certs\wechatpay_public_key.pem'
-)
-
-foreach ($file in $requiredFiles) {
-  if (-not (Test-Path $file)) {
-    throw "missing $file"
-  }
-}
-
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $OutputDir 'certs') | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $OutputDir 'logs') | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $OutputDir 'uploads') | Out-Null
 
 docker build --build-arg "NODE_IMAGE=$NodeImage" -t $imageRef .
 docker save -o (Join-Path $OutputDir "$imageName.tar") $imageRef
 
-Copy-Item '.env.production' (Join-Path $OutputDir '.env.production') -Force
-Copy-Item 'certs\apiclient_key.pem' (Join-Path $OutputDir 'certs\apiclient_key.pem') -Force
-Copy-Item 'certs\wechatpay_public_key.pem' (Join-Path $OutputDir 'certs\wechatpay_public_key.pem') -Force
 Copy-Item 'deploy.sh' (Join-Path $OutputDir 'deploy.sh') -Force
+Copy-Item 'backup-before-migration.sh' (Join-Path $OutputDir 'backup-before-migration.sh') -Force
 Copy-Item 'docker-entrypoint.sh' (Join-Path $OutputDir 'docker-entrypoint.sh') -Force
 Copy-Item 'Dockerfile' (Join-Path $OutputDir 'Dockerfile') -Force
-
 Set-Content -Path (Join-Path $OutputDir '.image-tag') -Value $ImageTag -NoNewline -Encoding ascii
 $manifest = [ordered]@{
   image = $imageRef
   sourceCommit = (git -C $PSScriptRoot rev-parse HEAD).Trim()
+  secrets = 'Inject ENV_FILE and CERTS_DIR from the cloud secret store; they are intentionally excluded from this artifact.'
+  backup = 'deploy.sh creates and restore-verifies a MySQL backup before migration.'
   createdAtUtc = [DateTime]::UtcNow.ToString('o')
 }
 $manifest | ConvertTo-Json | Set-Content -Path (Join-Path $OutputDir 'release-manifest.json') -Encoding utf8
-
-if (Test-Path 'uploads') {
-  Copy-Item 'uploads\*' (Join-Path $OutputDir 'uploads') -Recurse -Force -ErrorAction SilentlyContinue
-}
 
 if ($Zip) {
   $zipPath = "$OutputDir.zip"

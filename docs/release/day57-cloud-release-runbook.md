@@ -20,11 +20,12 @@ Set these values in the production secret store or `.env.production` before pack
 ## Backend Release
 
 1. Review and commit the release source. Record the commit SHA in the release ticket.
-2. From a machine that can reach the Node base-image registry, run `server\package-release.ps1 -Zip`. The output contains a tagged image tarball, `.image-tag`, and a release manifest.
-3. Back up the production MySQL database and verify that the backup can be restored before changing the running service.
-4. Transfer the release archive to a new directory on the server, extract it, and run `sh deploy.sh` from that directory.
-5. `deploy.sh` validates production configuration, runs `prisma migrate deploy` before the switch, starts a candidate on port `3101`, waits for `/api/health`, then replaces the active container on port `3100`.
-6. Confirm `npx prisma migrate status` reports 28 migrations, then run the point/referral and Admin role smoke checks against production test accounts.
+2. From a machine that can reach the Node base-image registry, run `server\package-release.ps1 -Zip`. The output contains only the tagged image tarball, scripts, `.image-tag`, and a release manifest. It intentionally contains no `.env`, certificates, logs, or uploads.
+3. Provision `ENV_FILE` and `CERTS_DIR` from the cloud secret store or an existing protected server directory. They must not be copied into the release archive. On the current server, these can point to `/www/wwwroot/life-assistant/.env.production` and `/www/wwwroot/life-assistant/certs`.
+4. Transfer the release archive to a new directory on the server, extract it, and run `ENV_FILE=/www/wwwroot/life-assistant/.env.production CERTS_DIR=/www/wwwroot/life-assistant/certs sh deploy.sh` from that directory.
+5. `deploy.sh` validates production configuration, creates a compressed MySQL backup, imports it into a temporary verification database, drops the temporary database, and only then runs `prisma migrate deploy`.
+6. The script starts a candidate on port `3101`, waits for `/api/health`, then replaces the active container on port `3100`.
+7. Confirm `npx prisma migrate status` reports 28 migrations, then run the point/referral and Admin role smoke checks against production test accounts.
 
 The script retains the prior image ID during the switch and restores it if the new active container fails its health check. Database migrations are forward-only; image rollback does not revert data schema.
 
