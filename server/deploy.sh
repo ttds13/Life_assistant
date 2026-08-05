@@ -18,6 +18,7 @@ NODE_IMAGE="${NODE_IMAGE:-node:22-bookworm-slim}"
 HEALTH_PATH="${HEALTH_PATH:-/api/health}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-24}"
 HEALTH_SLEEP_SECONDS="${HEALTH_SLEEP_SECONDS:-2}"
+APP_DATA_DIR="${APP_DATA_DIR:-$(pwd)}"
 
 if [ -z "${IMAGE_TAG}" ] && [ -f .image-tag ]; then
   IMAGE_TAG="$(tr -d '\r\n' < .image-tag)"
@@ -52,6 +53,10 @@ else
   CERTS_MOUNT="${CERTS_DIR}"
 fi
 
+if [ "${APP_DATA_DIR#/}" = "${APP_DATA_DIR}" ]; then
+  APP_DATA_DIR="$(pwd)/${APP_DATA_DIR}"
+fi
+
 if [ "${PORT}" = "${CANARY_PORT}" ]; then
   echo "CANARY_PORT must differ from PORT"
   exit 1
@@ -62,8 +67,8 @@ if ! docker network inspect "${DOCKER_NETWORK}" >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p logs
-mkdir -p uploads
+mkdir -p "${APP_DATA_DIR}/logs"
+mkdir -p "${APP_DATA_DIR}/uploads"
 
 if [ -f "${IMAGE_TAR}" ]; then
   docker load -i "${IMAGE_TAR}"
@@ -108,8 +113,8 @@ run_app() {
     -e SEED_ON_START=false \
     -p "127.0.0.1:${host_port}:3100" \
     -v "${CERTS_MOUNT}:/app/certs:ro" \
-    -v "$(pwd)/uploads:/app/uploads" \
-    -v "$(pwd)/logs:/app/logs" \
+    -v "${APP_DATA_DIR}/uploads:/app/uploads" \
+    -v "${APP_DATA_DIR}/logs:/app/logs" \
     --restart unless-stopped \
     "${image}"
 }
