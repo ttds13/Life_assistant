@@ -18,9 +18,10 @@ const summary = ref<UserPointsSummary>({
   availablePoints: 0,
   totalAmount: 0,
   rule: {
-    unitAmount: 0.1,
-    pointsPerUnit: 1,
-    description: '每实际支付0.1元积1分，低于0.1元的部分不计入积分。',
+    unitAmount: 1,
+    pointsPerUnit: 10,
+    redemptionPointsPerYuan: 200,
+    description: '每实际消费 1 元积 10 分，200 分兑换 1 元。',
   },
   recentEarned: [],
   recentTotalAmount: 0,
@@ -31,7 +32,7 @@ const page = ref(1)
 const pageSize = 20
 const total = ref(0)
 
-const ruleText = computed(() => summary.value.rule.description || '每实际支付0.1元积1分，低于0.1元的部分不计入积分。')
+const ruleText = computed(() => summary.value.rule.description || '每实际消费 1 元积 10 分，200 分兑换 1 元。')
 const hasMore = computed(() => records.value.length < total.value)
 
 async function loadSummary() {
@@ -88,6 +89,10 @@ function formatTime(value?: string) {
 function typeText(type: string) {
   const map: Record<string, string> = {
     earn: '消费获得',
+    consumer_spend_earn: '消费获得',
+    referral_first_consumption_earn: '邀请奖励',
+    consumer_spend_refund_reverse: '退款冲正',
+    referral_first_consumption_refund_reverse: '邀请奖励冲正',
     adjust: '后台调整',
     consume: '积分抵扣',
   }
@@ -174,7 +179,7 @@ onReachBottom(() => {
                 <text class="block mt-1 text-[22rpx] text-[#9CA3AF]">{{ formatTime(item.createdAt || item.earnedAt) }}</text>
               </view>
               <view class="shrink-0 text-right">
-                <text class="block text-[34rpx] text-[#16A34A] font-800">+{{ item.points }}</text>
+                <text class="block text-[34rpx] font-800" :class="item.points >= 0 ? 'text-[#16A34A]' : 'text-[#DC2626]'">{{ item.points > 0 ? '+' : '' }}{{ item.points }}</text>
                 <text class="block mt-1 text-[22rpx] text-[#9CA3AF]">余额 {{ item.balanceAfter }}</text>
               </view>
             </view>
@@ -189,7 +194,7 @@ onReachBottom(() => {
             <text class="i-carbon-chart-line-data text-[82rpx] text-[#C4C8D0]" />
           </view>
           <text class="mt-5 text-[32rpx] text-[#6B7280]">暂无积分明细</text>
-          <text class="mt-2 text-[24rpx] text-[#9CA3AF]">完成支付后会自动累计积分</text>
+          <text class="mt-2 text-[24rpx] text-[#9CA3AF]">完成服务确认后会自动累计积分</text>
         </view>
       </loading-state>
     </view>

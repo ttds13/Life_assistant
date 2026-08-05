@@ -62,6 +62,12 @@ export class CreateOrderDto {
   memberCardId?: number
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Transform(({ value }) => toOptionalNumber(value))
+  memberCardConsumeMinutes?: number
+
+  @IsOptional()
   @IsString()
   @MaxLength(16)
   @Transform(({ value }) => trimOptional(value))

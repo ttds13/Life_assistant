@@ -22,7 +22,7 @@ const staffEntering = ref(false)
 
 type StatAction = 'card' | 'coupon' | 'points'
 type OrderAction = 'all' | 'pendingPayment' | 'pendingDispatch' | 'pendingConfirm' | 'pendingReview' | 'afterSales'
-type AppAction = 'address' | 'staffWorkbench' | 'applyStaff' | 'faq' | 'customerService' | 'feedback' | 'settings'
+type AppAction = 'address' | 'staffWorkbench' | 'applyStaff' | 'faq' | 'customerService' | 'feedback' | 'referral' | 'settings'
 
 interface StatEntry {
   label: string
@@ -78,7 +78,7 @@ const displayPhone = computed(() => {
 
 const statEntries = computed<StatEntry[]>(() => [
   {
-    label: '我的卡包',
+    label: '我的会员卡',
     action: 'card',
     value: tokenStore.hasLogin ? String(profileStats.value.cardCount) : '--',
   },
@@ -109,6 +109,7 @@ const appEntries: AppEntry[] = [
   { label: '常见问题', action: 'faq', icon: 'i-carbon-help', color: '#4D8DFF', auth: false },
   { label: '联系客服', action: 'customerService', icon: 'i-carbon-headset', color: '#F5A623', auth: false },
   { label: '问题反馈', action: 'feedback', icon: 'i-carbon-user-feedback', color: '#EC4899', auth: true },
+  { label: '邀请好友', action: 'referral', icon: 'i-carbon-user-multiple', color: '#16A34A', auth: true },
   { label: '设置', action: 'settings', icon: 'i-carbon-settings', color: '#8B5CF6', auth: true },
 ]
 
@@ -333,6 +334,7 @@ function onAppTap(item: AppEntry) {
     faq: '/pages/profile/faq',
     customerService: '/pages/profile/contact-service',
     feedback: '/pages/profile/feedback',
+    referral: '/pages/referral/index',
   }
   navigateToPage(routeMap[item.action])
 }

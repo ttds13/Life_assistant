@@ -46,47 +46,100 @@ function isoDate(date?: Date | null) {
   return date ? date.toISOString() : null
 }
 
-function addressText(snapshot: JsonRecord) {
-  const formattedAddress = stringValue(snapshot.formattedAddress)
-  if (formattedAddress) return formattedAddress
+type OrderAddressRecord = NonNullable<OrderDetailRecord['orderAddress']>
+
+function addressText(address?: OrderAddressRecord | null) {
+  if (!address) return ''
+  if (address.formattedAddress) return address.formattedAddress
   return [
-    stringValue(snapshot.cityName, stringValue(snapshot.city)),
-    stringValue(snapshot.districtName, stringValue(snapshot.district)),
-    stringValue(snapshot.detailAddress, stringValue(snapshot.address)),
-    stringValue(snapshot.houseNumber),
+    address.city,
+    address.district,
+    address.detailAddress,
+    address.houseNumber,
   ].filter(Boolean).join('')
 }
 
+function presentOrderAddress(address?: OrderAddressRecord | null) {
+  if (!address) return null
+  return {
+    id: Number(address.id),
+    orderId: Number(address.orderId),
+    sourceAddressId: address.sourceAddressId ? Number(address.sourceAddressId) : null,
+    sourceAddressVersion: address.sourceAddressVersion,
+    version: address.version,
+    contactName: address.contactName,
+    contactPhone: address.contactPhone,
+    country: address.country || '',
+    provinceName: address.province || '',
+    cityName: address.city || '',
+    districtName: address.district || '',
+    streetName: address.street || '',
+    addressTitle: address.addressTitle || '',
+    detailAddress: address.detailAddress,
+    houseNumber: address.houseNumber || '',
+    formattedAddress: address.formattedAddress,
+    latitude: address.latitude?.toNumber() ?? null,
+    longitude: address.longitude?.toNumber() ?? null,
+    coordinateType: address.coordinateType || '',
+    poiId: address.poiId || '',
+    mapProvider: address.mapProvider || '',
+    source: address.source,
+    mapAvailable: address.latitude !== null && address.longitude !== null,
+    createdAt: address.createdAt.toISOString(),
+    updatedAt: address.updatedAt.toISOString(),
+  }
+}
+
 export function presentPricePreview(amount: number, options?: {
+  pricingMode?: 'cash' | 'member_card' | 'consultation'
   consultationRequired?: boolean
   cardType?: string
   discountAmount?: number
+  memberCardDiscountAmount?: number
   payableAmount?: number
   couponId?: number | null
+  memberCardId?: number | null
+  memberCardConsumeMinutes?: number
+  memberCardName?: string
+  memberCardUsableMinutes?: number
 }) {
   const discountAmount = options?.discountAmount || 0
+  const memberCardDiscountAmount = options?.memberCardDiscountAmount || 0
   const payableAmount = options?.payableAmount ?? Math.max(0, amount - discountAmount)
+  const pricingMode = options?.pricingMode || 'cash'
+  const items = pricingMode === 'member_card'
+    ? [
+        { label: '服务原价', amount },
+        { label: '会员卡权益抵扣', amount: memberCardDiscountAmount, type: 'discount' as const },
+      ]
+    : [
+        { label: '服务金额', amount },
+        { label: pricingMode === 'consultation' ? '咨询服务减免' : '优惠金额', amount: discountAmount, type: 'discount' as const },
+      ]
   return {
+    pricingMode,
     serviceAmount: amount,
     discountAmount,
+    memberCardDiscountAmount,
     payableAmount,
     couponId: options?.couponId || null,
     consultationRequired: options?.consultationRequired || false,
     cardType: options?.cardType || '',
-    items: [
-      { label: 'Service amount', amount },
-      { label: 'Discount', amount: discountAmount, type: 'discount' as const },
-    ],
+    memberCardId: options?.memberCardId || null,
+    memberCardConsumeMinutes: options?.memberCardConsumeMinutes || 0,
+    memberCardName: options?.memberCardName || '',
+    memberCardUsableMinutes: options?.memberCardUsableMinutes || 0,
+    items,
   }
 }
 
 export function presentUserOrder(order: OrderDetailRecord) {
   const serviceSnapshot = jsonRecord(order.serviceSnapshot)
-  const addressSnapshot = jsonRecord(order.addressSnapshot)
   const totalAmount = decimalToNumber(order.originalAmount)
   const payableAmount = decimalToNumber(order.payableAmount)
   const memberCardUsage = presentMemberCardUsage(order)
   const fulfillment = presentFulfillment(order)
+  const purchase = order.memberCardPurchase
 
   return {
     id: Number(order.id),
@@ -94,12 +147,23 @@ export function presentUserOrder(order: OrderDetailRecord) {
     status: order.status,
     version: order.version,
     orderType: order.orderType,
+    isServiceTask: Boolean(order.serviceBooking),
     staffId: order.staffId ? Number(order.staffId) : null,
-    memberCardId: order.memberCardId ? Number(order.memberCardId) : null,
+    memberCardId: order.serviceBooking?.redemption
+      ? Number(order.serviceBooking.redemption.userMemberCardId)
+      : order.memberCardId
+        ? Number(order.memberCardId)
+        : null,
     userMemberCardId: memberCardUsage.userMemberCardId,
-    memberCardConsumeUnits: order.memberCardConsumeUnits,
-    purchaseCardId: order.purchaseCardId ? Number(order.purchaseCardId) : null,
-    grantedUserMemberCardId: order.grantedUserMemberCardId ? Number(order.grantedUserMemberCardId) : null,
+    memberCardConsumeUnits: purchase
+      ? numberValue(jsonRecord(purchase.planSnapshot).totalMinutes, order.memberCardConsumeUnits)
+      : order.memberCardConsumeUnits,
+    purchaseCardId: purchase ? Number(purchase.memberCardPlanId) : order.purchaseCardId ? Number(order.purchaseCardId) : null,
+    grantedUserMemberCardId: purchase?.grantedUserMemberCardId
+      ? Number(purchase.grantedUserMemberCardId)
+      : order.grantedUserMemberCardId
+        ? Number(order.grantedUserMemberCardId)
+        : null,
     serviceCode: stringValue(serviceSnapshot.code, order.service?.code || ''),
     serviceName: stringValue(serviceSnapshot.name, order.service?.name || ''),
     serviceCardType: stringValue(serviceSnapshot.cardType, order.service?.cardType || ''),
@@ -108,7 +172,8 @@ export function presentUserOrder(order: OrderDetailRecord) {
     appointmentStartTime: order.appointmentStartTime.toISOString(),
     appointmentEndTime: order.appointmentEndTime.toISOString(),
     appointmentTime: formatAppointment(order),
-    addressText: addressText(addressSnapshot),
+    addressText: addressText(order.orderAddress),
+    orderAddressVersion: order.orderAddress?.version ?? null,
     totalAmount,
     discountAmount: decimalToNumber(order.discountAmount),
     payableAmount,
@@ -122,12 +187,36 @@ export function presentUserOrder(order: OrderDetailRecord) {
     memberCardUnitName: memberCardUsage.memberCardUnitName,
     memberCardRuleSource: memberCardUsage.memberCardRuleSource,
     memberCardRuleSnapshot: memberCardUsage.memberCardRuleSnapshot,
+    memberCardConsumeMode: memberCardUsage.memberCardConsumeMode,
+    memberCardMinConsumeMinutes: memberCardUsage.memberCardMinConsumeMinutes,
+    memberCardAllowedMinutes: memberCardUsage.memberCardAllowedMinutes,
     memberCardRuleChanged: memberCardUsage.memberCardRuleChanged,
     plannedConsumeUnits: memberCardUsage.plannedConsumeUnits,
     actualConsumeUnits: memberCardUsage.actualConsumeUnits,
     releasedUnits: memberCardUsage.releasedUnits,
     frozenUnits: memberCardUsage.frozenUnits,
     memberCard: memberCardUsage.memberCard,
+    memberCardPurchase: purchase
+      ? {
+          memberCardPlanId: Number(purchase.memberCardPlanId),
+          memberCardPlanVersion: purchase.memberCardPlanVersion,
+          planSnapshot: purchase.planSnapshot,
+          grantedUserMemberCardId: purchase.grantedUserMemberCardId ? Number(purchase.grantedUserMemberCardId) : null,
+          grantedAt: isoDate(purchase.grantedAt),
+          userCard: purchase.grantedUserCard
+            ? {
+                id: Number(purchase.grantedUserCard.id),
+                status: purchase.grantedUserCard.status,
+                completedReason: purchase.grantedUserCard.completedReason || '',
+                remainingMinutes: purchase.grantedUserCard.remainingMinutes,
+                frozenMinutes: purchase.grantedUserCard.frozenMinutes,
+                activationDeadlineAt: isoDate(purchase.grantedUserCard.activationDeadlineAt),
+                activatedAt: isoDate(purchase.grantedUserCard.activatedAt),
+                expireAt: isoDate(purchase.grantedUserCard.expireAt),
+              }
+            : null,
+        }
+      : null,
     acceptedAt: fulfillment.acceptedAt,
     onTheWayAt: fulfillment.onTheWayAt,
     checkinAt: fulfillment.checkinAt,
@@ -234,6 +323,58 @@ function presentMemberCardRecord(record: OrderDetailRecord['memberCardRecords'][
 }
 
 function presentMemberCardUsage(order: OrderDetailRecord) {
+  const redemption = order.serviceBooking?.redemption
+  if (redemption) {
+    const userCard = redemption.userCard
+    const plannedMinutes = redemption.reservedMinutes
+    const actualMinutes = redemption.consumedMinutes
+    const releasedMinutes = redemption.releasedMinutes
+    const frozenMinutes = redemption.state === 'reserved' ? redemption.reservedMinutes : 0
+    const ruleSnapshot = jsonRecord(redemption.ruleSnapshot)
+    return {
+      userMemberCardId: Number(redemption.userMemberCardId),
+      memberCardTemplateId: Number(userCard.cardId),
+      memberCardName: userCard.card.name,
+      memberCardUnitName: '分钟',
+      frozenUnits: frozenMinutes,
+      plannedConsumeUnits: plannedMinutes,
+      actualConsumeUnits: actualMinutes,
+      releasedUnits: releasedMinutes,
+      frozenMinutes,
+      plannedConsumeMinutes: plannedMinutes,
+      actualConsumeMinutes: actualMinutes,
+      releasedMinutes,
+      redemptionState: redemption.state,
+      memberCardRuleSource: stringValue(ruleSnapshot.ruleSource),
+      memberCardRuleSnapshot: Object.keys(ruleSnapshot).length ? ruleSnapshot : null,
+      memberCardConsumeMode: stringValue(ruleSnapshot.consumeMode, 'fixed_minutes'),
+      memberCardMinConsumeMinutes: numberValue(ruleSnapshot.minConsumeMinutes, plannedMinutes),
+      memberCardAllowedMinutes: Array.isArray(ruleSnapshot.allowedMinutes)
+        ? ruleSnapshot.allowedMinutes.map(value => Number(value)).filter(value => Number.isInteger(value) && value > 0)
+        : [],
+      memberCardRuleChanged: false,
+      memberCard: {
+        id: Number(userCard.id),
+        cardId: Number(userCard.cardId),
+        userMemberCardId: Number(userCard.id),
+        memberCardTemplateId: Number(userCard.cardId),
+        name: userCard.card.name,
+        cardType: userCard.card.cardType,
+        unitName: '分钟',
+        unitMinutes: userCard.card.unitMinutes || 0,
+        remainingUnits: userCard.remainingMinutes,
+        frozenUnits: userCard.frozenMinutes,
+        usableUnits: Math.max(0, userCard.remainingMinutes - userCard.frozenMinutes),
+        remainingMinutes: userCard.remainingMinutes,
+        frozenMinutes: userCard.frozenMinutes,
+        usableMinutes: Math.max(0, userCard.remainingMinutes - userCard.frozenMinutes),
+        status: userCard.status,
+        completedReason: userCard.completedReason || '',
+      },
+      memberCardRecords: order.memberCardRecords.map(presentMemberCardRecord),
+    }
+  }
+
   const record = firstMemberCardRecord(order)
   const unitName = memberCardUnitName(order)
   const ruleSnapshot = memberCardRuleSnapshot(order)
@@ -264,6 +405,11 @@ function presentMemberCardUsage(order: OrderDetailRecord) {
     releasedUnits,
     memberCardRuleSource: stringValue(ruleSnapshot.ruleSource),
     memberCardRuleSnapshot: Object.keys(ruleSnapshot).length ? ruleSnapshot : null,
+    memberCardConsumeMode: stringValue(ruleSnapshot.consumeMode, 'fixed_minutes'),
+    memberCardMinConsumeMinutes: numberValue(ruleSnapshot.minConsumeMinutes, plannedConsumeUnits),
+    memberCardAllowedMinutes: Array.isArray(ruleSnapshot.allowedMinutes)
+      ? ruleSnapshot.allowedMinutes.map(value => Number(value)).filter(value => Number.isInteger(value) && value > 0)
+      : [],
     memberCardRuleChanged: Boolean(
       snapshotConsumeUnits
       && (
@@ -327,7 +473,6 @@ function presentTicket(ticket: OrderDetailRecord['tickets'][number]) {
 export function presentOrderDetail(order: OrderDetailRecord) {
   const base = presentUserOrder(order)
   const serviceSnapshot = jsonRecord(order.serviceSnapshot)
-  const addressSnapshot = jsonRecord(order.addressSnapshot)
   const discountAmount = decimalToNumber(order.discountAmount)
   const payment = order.payments[0]
   const refunds = order.refunds.map(presentRefund)
@@ -354,26 +499,7 @@ export function presentOrderDetail(order: OrderDetailRecord) {
       status: numberValue(serviceSnapshot.status, order.service?.status || 1),
       sortOrder: numberValue(serviceSnapshot.sortOrder, order.service?.sortOrder || 0),
     },
-    address: {
-      id: numberValue(addressSnapshot.addressId, numberValue(addressSnapshot.id)),
-      contactName: stringValue(addressSnapshot.contactName),
-      contactPhone: stringValue(addressSnapshot.contactPhone),
-      addressType: stringValue(addressSnapshot.addressType, 'service'),
-      provinceName: stringValue(addressSnapshot.provinceName, stringValue(addressSnapshot.province)),
-      cityName: stringValue(addressSnapshot.cityName, stringValue(addressSnapshot.city)),
-      districtName: stringValue(addressSnapshot.districtName, stringValue(addressSnapshot.district)),
-      streetName: stringValue(addressSnapshot.streetName),
-      addressTitle: stringValue(addressSnapshot.addressTitle),
-      detailAddress: stringValue(addressSnapshot.detailAddress, stringValue(addressSnapshot.address)),
-      houseNumber: stringValue(addressSnapshot.houseNumber),
-      formattedAddress: stringValue(addressSnapshot.formattedAddress, addressText(addressSnapshot)),
-      isDefault: false,
-      latitude: addressSnapshot.latitude ?? null,
-      longitude: addressSnapshot.longitude ?? null,
-      coordinateType: stringValue(addressSnapshot.coordinateType),
-      poiId: stringValue(addressSnapshot.poiId),
-      mapProvider: stringValue(addressSnapshot.mapProvider),
-    },
+    orderAddress: presentOrderAddress(order.orderAddress),
     paymentMethod: payment ? payment.channel : undefined,
     statusLogs: order.statusLogs.length
       ? order.statusLogs.map(log => ({
@@ -408,8 +534,8 @@ export function presentAdminOrderListItem(order: OrderDetailRecord) {
     ...base,
     id: String(order.id),
     userId: Number(order.userId),
-    userName: order.user?.nickname || order.addressSnapshot && stringValue(jsonRecord(order.addressSnapshot).contactName) || '用户',
-    userPhone: order.user?.phone || stringValue(jsonRecord(order.addressSnapshot).contactPhone),
+    userName: order.user?.nickname || order.orderAddress?.contactName || '用户',
+    userPhone: order.user?.phone || order.orderAddress?.contactPhone || '',
     staffId: order.staffId ? Number(order.staffId) : null,
     paidAmount: decimalToNumber(order.paidAmount),
     originalAmount: decimalToNumber(order.originalAmount),
@@ -422,6 +548,129 @@ export function presentAdminOrderListItem(order: OrderDetailRecord) {
     cancelledAt: order.cancelledAt?.toISOString() || null,
     cancelReason: order.cancelReason || '',
     updatedAt: order.updatedAt.toISOString(),
+    allowedActions: adminOrderAllowedActions(order),
+  }
+}
+
+function adminOrderAllowedActions(order: OrderDetailRecord) {
+  const isBooking = Boolean(order.serviceBooking)
+  const editableStatuses = ['pending_payment', 'pending_dispatch', 'dispatched', 'accepted']
+  const canCancel = isBooking && ['pending_payment', 'pending_dispatch'].includes(order.status)
+  const hasDraftFacts = Boolean(
+    order.paidAt
+      || order.paidAmount.gt(0)
+      || order.payments.length
+      || order.refunds.length
+      || order.assignments.length
+      || order.checkins.length
+      || order.photos.length
+      || order.tickets.length
+      || order.incomeRecords.length
+      || order.memberCardRecords.length
+      || order.serviceBooking?.redemption
+      || order.grantedUserMemberCardId
+      || order.memberCardPurchase?.grantedUserMemberCardId,
+  )
+  const canDeleteDraft = order.status === 'pending_payment' && !hasDraftFacts
+
+  return {
+    update: editableStatuses.includes(order.status),
+    cancel: canCancel,
+    deleteDraft: canDeleteDraft,
+    reschedule: isBooking && editableStatuses.includes(order.status),
+    assign: isBooking && order.status === 'pending_dispatch',
+    addressUpdate: isBooking && editableStatuses.includes(order.status),
+    reasons: {
+      deleteDraft: canDeleteDraft ? '' : '仅无支付、退款、履约、积分或权益事实的待支付草稿可删除',
+      cancel: canCancel ? '' : '当前状态不能取消',
+    },
+  }
+}
+
+export function presentAdminUserProductOrder(order: OrderDetailRecord) {
+  const base = presentAdminOrderListItem(order)
+  const purchase = order.memberCardPurchase
+  const planSnapshot = jsonRecord(purchase?.planSnapshot)
+  const productType = purchase ? 'member_card_product' : 'service_product'
+  const productName = purchase
+    ? stringValue(planSnapshot.name, purchase.plan.name)
+    : base.serviceName
+  const latestRefund = order.refunds[0]
+
+  return {
+    ...base,
+    productType,
+    productName,
+    transactionStatus: order.status,
+    refundedAt: latestRefund?.refundedAt?.toISOString() || null,
+    refundStatus: latestRefund?.status || '',
+    serviceProductSummary: purchase
+      ? null
+      : {
+          serviceId: Number(order.serviceBooking?.serviceId || order.serviceId),
+          serviceName: base.serviceName,
+          bookingOrderId: Number(order.id),
+          appointmentStartAt: order.serviceBooking?.appointmentStartAt.toISOString() || null,
+          appointmentEndAt: order.serviceBooking?.appointmentEndAt.toISOString() || null,
+          fulfillmentStatus: order.status,
+        },
+    memberCardProductSummary: purchase
+      ? {
+          memberCardPlanId: Number(purchase.memberCardPlanId),
+          memberCardPlanVersion: purchase.memberCardPlanVersion,
+          grantedUserMemberCardId: purchase.grantedUserMemberCardId
+            ? Number(purchase.grantedUserMemberCardId)
+            : null,
+          grantedAt: purchase.grantedAt?.toISOString() || null,
+          userMemberCardStatus: purchase.grantedUserCard?.status || '',
+          userMemberCardCompletedReason: purchase.grantedUserCard?.completedReason || '',
+        }
+      : null,
+  }
+}
+
+export function presentAdminUserServiceBooking(order: OrderDetailRecord) {
+  const base = presentAdminOrderListItem(order)
+  const redemption = order.serviceBooking?.redemption
+  const incomeAmount = order.incomeRecords.reduce((sum, item) => sum + decimalToNumber(item.amount), 0)
+  const latestIncome = order.incomeRecords[0]
+
+  return {
+    ...base,
+    entitlementType: redemption ? 'member_card_entitlement' : 'service_entitlement',
+    fulfillmentStatus: order.status,
+    serviceId: Number(order.serviceBooking?.serviceId || order.serviceId),
+    appointmentStartAt: order.serviceBooking?.appointmentStartAt.toISOString() || order.appointmentStartTime.toISOString(),
+    appointmentEndAt: order.serviceBooking?.appointmentEndAt.toISOString() || order.appointmentEndTime.toISOString(),
+    orderAddressSummary: order.orderAddress
+      ? {
+          version: order.orderAddress.version,
+          formattedAddress: order.orderAddress.formattedAddress,
+          cityName: order.orderAddress.city || '',
+          districtName: order.orderAddress.district || '',
+          mapAvailable: order.orderAddress.latitude !== null && order.orderAddress.longitude !== null,
+        }
+      : null,
+    redemption: redemption
+      ? {
+          id: Number(redemption.id),
+          userMemberCardId: Number(redemption.userMemberCardId),
+          memberCardName: redemption.userCard.card.name,
+          state: redemption.state,
+          reservedMinutes: redemption.reservedMinutes,
+          consumedMinutes: redemption.consumedMinutes,
+          releasedMinutes: redemption.releasedMinutes,
+          actualServiceMinutes: redemption.actualServiceMinutes,
+          activatedCard: redemption.activatedCard,
+          settledAt: redemption.settledAt?.toISOString() || null,
+        }
+      : null,
+    staffIncomeSummary: {
+      amount: incomeAmount,
+      status: latestIncome?.status || '',
+      settlementStatus: latestIncome?.settlementStatus || '',
+      withdrawStatus: latestIncome?.withdrawStatus || '',
+    },
   }
 }
 

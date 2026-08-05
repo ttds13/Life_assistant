@@ -3,9 +3,15 @@ import type {
   AuditItem,
   AuditType,
   AddressRecord,
+  AppointmentTimeLock,
+  AppointmentTimeLockList,
   AfterSalesTicket,
   AdminCreateMemberCardPurchasePayload,
+  AdminPermissionDescriptor,
+  AdminRoleAssignment,
+  AdminRoleRecord,
   AdminCreateOrderPayload,
+  AdminOrderActionPayload,
   AdminNotificationItem,
   AdminStaffNotificationItem,
   AdminUsableCoupon,
@@ -14,6 +20,7 @@ import type {
   AdminWithdrawRequest,
   DashboardData,
   DispatchCheckResult,
+  CreateAppointmentTimeLockPayload,
   FinanceSummaryData,
   LifeFormItem,
   LifeModuleKey,
@@ -23,13 +30,26 @@ import type {
   LifeResourcePage,
   LifeSelectOption,
   LifeStatusOption,
+  MemberCardProduct,
+  MemberCardProductPayload,
+  MemberCardProductVersion,
+  MemberCardProductVersionList,
   OrderDetail,
   OrderAccountingResult,
+  OrderAddressRevision,
   OrderListItem,
+  UserCommerceOverview,
+  UserProductOrderItem,
+  UserServiceBookingItem,
   StaffProfileChangeRequestItem,
   StaffProfileHistory,
   StaffOption,
   UpdateOrderPayload,
+  UpdateOrderAddressPayload,
+  UpdateAppointmentTimeLockPayload,
+  PointRewardEvent,
+  PointRewardRule,
+  ReferralBinding,
 } from "./types";
 
 const ADMIN_BASE_URL = "/api/admin";
@@ -205,6 +225,7 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
     editable: true,
     deletable: true,
     rowActions: [
+      { key: "user_commerce", label: "业务透视", type: "primary" },
       { key: "addresses", label: "地址", type: "success" },
       { key: "points", label: "积分", type: "primary" },
     ],
@@ -661,51 +682,40 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
   },
   memberCards: {
     module: "memberCards",
-    title: "会员卡",
-    description: "维护次卡、套餐卡和有效期。",
-    searchPlaceholder: "会员卡名称",
-    primaryAction: "新增会员卡",
-    editable: true,
+    title: "会员卡商品（兼容查询）",
+    description: "仅供订单等旧选择器查询。商品内容、权益规则和版本统一在“服务与商品 / 会员卡商品”维护。",
+    searchPlaceholder: "会员卡商品名称",
+    editable: false,
+    deletable: false,
     statusOptions: statusOptions.publish,
     columns: [
       { prop: "name", label: "会员卡名称", minWidth: 160 },
       { prop: "cardType", label: "卡类型", width: 100, type: "tag" },
       { prop: "unitName", label: "单位", width: 90 },
-      { prop: "totalUnits", label: "总额度", width: 100 },
+      { prop: "totalUnits", label: "总分钟数", width: 110 },
       { prop: "totalTimes", label: "总次数", width: 100 },
       { prop: "price", label: "售价", width: 120, type: "money" },
-      { prop: "validityDays", label: "有效天数", width: 110 },
+      { prop: "activationDeadlineDays", label: "激活期限", width: 110 },
+      { prop: "validityDays", label: "激活后有效期", width: 130 },
+      { prop: "currentVersion", label: "版本", width: 80 },
       { prop: "serviceRuleCount", label: "规则数", width: 90 },
       { prop: "effectiveRuleSummary", label: "生效规则", minWidth: 220 },
       { prop: "soldCount", label: "已售", width: 90 },
       { prop: "status", label: "状态", width: 90, type: "tag" },
     ],
-    formItems: [
-      { prop: "name", label: "会员卡名称", type: "text", required: true },
-      { prop: "cardType", label: "卡类型", type: "select", required: true, options: memberCardTypeOptions },
-      { prop: "unitName", label: "单位名称", type: "text", placeholder: "分钟 / 次" },
-      { prop: "unitMinutes", label: "单位分钟数", type: "number" },
-      { prop: "totalUnits", label: "总额度", type: "number", required: true },
-      { prop: "totalTimes", label: "兼容总次数", type: "number" },
-      { prop: "allowHalfDeduct", label: "允许半次核销", type: "switch" },
-      { prop: "minConsumeUnits", label: "最小扣减额度", type: "number" },
-      { prop: "applicableServices", label: "适用服务", type: "textarea", placeholder: "服务ID、code 或名称，多个用逗号分隔；留空表示通用" },
-      { prop: "serviceRules", label: "服务扣减规则", type: "textarea", placeholder: "{\"serviceCode\":{\"consumeUnits\":120}}" },
-      { prop: "serviceRuleList", label: "结构化服务规则", type: "textarea", placeholder: "[{\"serviceId\":1,\"consumeUnits\":120}]" },
-      { prop: "price", label: "售价", type: "number", required: true },
-      { prop: "validityDays", label: "有效天数", type: "number", required: true },
-      { prop: "status", label: "状态", type: "select", options: publishStatusOptions },
-    ],
   },
   userMemberCards: {
     module: "userMemberCards",
-    title: "用户会员卡",
-    description: "查看用户已购买或后台发放的会员卡余额、冻结额度和有效期。",
+    title: "用户权益卡",
+    description: "查看卡三态、激活截止、分钟余额、冻结核销和来源订单。",
     searchPlaceholder: "用户昵称 / 手机号 / 会员卡名称",
     statusOptions: userMemberCardStatusOptions,
     rowActions: [
       { key: "adjust_member_card_time", label: "调整时长", type: "primary" },
-      { key: "manual_consume_member_card", label: "手动核销", type: "danger" },
+      { key: "extend_member_card", label: "延期", type: "primary" },
+      { key: "toggle_member_card_suspend", label: "暂停/恢复", type: "warning" },
+      { key: "revoke_member_card", label: "撤销", type: "danger" },
+      { key: "delete_member_card_draft", label: "删除草稿", type: "danger" },
       { key: "view_member_card_records", label: "查看流水", type: "success" },
       { key: "view_purchase_order", label: "来源订单", type: "info" },
     ],
@@ -715,20 +725,22 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "cardName", label: "会员卡", minWidth: 160 },
       { prop: "cardType", label: "卡类型", width: 100, type: "tag" },
       { prop: "source", label: "来源", width: 100, type: "tag" },
-      { prop: "remainingUnits", label: "总剩余", width: 100 },
-      { prop: "frozenUnits", label: "已冻结", width: 100 },
-      { prop: "usableUnits", label: "可用余额", width: 100 },
+      { prop: "remainingMinutes", label: "剩余分钟", width: 100 },
+      { prop: "frozenMinutes", label: "已冻结分钟", width: 110 },
+      { prop: "usableMinutes", label: "可用分钟", width: 100 },
       { prop: "remainingTimes", label: "兼容次数", width: 100 },
       { prop: "purchaseOrderNo", label: "购买订单", minWidth: 150 },
-      { prop: "expireAt", label: "有效期", width: 170, type: "datetime" },
+      { prop: "activationDeadlineAt", label: "激活截止", width: 170, type: "datetime" },
+      { prop: "expireAt", label: "到期时间", width: 170, type: "datetime" },
+      { prop: "completedReason", label: "完成原因", width: 100, type: "tag" },
       { prop: "status", label: "状态", width: 90, type: "tag" },
       { prop: "createdAt", label: "创建时间", width: 170, type: "datetime" },
     ],
   },
   memberCardRecords: {
     module: "memberCardRecords",
-    title: "会员卡流水",
-    description: "查看会员卡发放、预约冻结、取消释放和服务核销记录。",
+    title: "权益核销记录",
+    description: "查看权益发放、激活、分钟冻结、核销、释放和后台调整记录。",
     searchPlaceholder: "用户 / 手机号 / 会员卡 / 订单号",
     statusOptions: memberCardRecordTypeOptions,
     columns: [
@@ -737,9 +749,9 @@ const resourceConfigs: Record<LifeModuleKey, LifeResourceConfig> = {
       { prop: "cardName", label: "会员卡", minWidth: 160 },
       { prop: "orderNo", label: "订单号", minWidth: 150 },
       { prop: "recordType", label: "流水类型", width: 100, type: "tag" },
-      { prop: "units", label: "变动额度", width: 100 },
-      { prop: "beforeUnits", label: "变动前", width: 100 },
-      { prop: "afterUnits", label: "变动后", width: 100 },
+      { prop: "units", label: "变动分钟", width: 100 },
+      { prop: "beforeRemainingMinutes", label: "变动前分钟", width: 110 },
+      { prop: "afterRemainingMinutes", label: "变动后分钟", width: 110 },
       { prop: "operatorType", label: "操作方", width: 90 },
       { prop: "operatorId", label: "操作人ID", width: 100 },
       { prop: "remark", label: "备注", minWidth: 220 },
@@ -785,6 +797,8 @@ function toAdminQuery(queryParams: LifeQueryParams) {
     keyword: queryParams.keywords,
     status: queryParams.status || undefined,
     orderType: queryParams.orderType || undefined,
+    productType: queryParams.productType || undefined,
+    entitlementType: queryParams.entitlementType || undefined,
     type: queryParams.type || (queryParams.module === "memberCardRecords" ? queryParams.status : undefined),
     recordType: queryParams.recordType || undefined,
     cardType: queryParams.cardType || undefined,
@@ -792,11 +806,14 @@ function toAdminQuery(queryParams: LifeQueryParams) {
     channel: queryParams.channel || undefined,
     startDate: queryParams.startDate || undefined,
     endDate: queryParams.endDate || undefined,
+    dateStart: queryParams.startDate || undefined,
+    dateEnd: queryParams.endDate || undefined,
     userId: queryParams.userId || undefined,
     userMemberCardId: queryParams.userMemberCardId || undefined,
     couponId: queryParams.couponId || undefined,
     targetType: queryParams.targetType || undefined,
     staffId: queryParams.staffId || undefined,
+    serviceId: queryParams.serviceId || undefined,
     orderId: queryParams.orderId || undefined,
     orderNo: queryParams.orderNo || undefined,
     sendStatus: queryParams.sendStatus || undefined,
@@ -822,11 +839,141 @@ function assertDeletable(module: LifeModuleKey) {
 }
 
 const LifeAPI = {
+  getAppointmentTimeLocks(params?: { dateStart?: string; dateEnd?: string; status?: string }) {
+    return request<unknown, AppointmentTimeLockList>({
+      url: `${ADMIN_BASE_URL}/appointment-time-locks`,
+      method: "get",
+      params,
+    });
+  },
+
+  createAppointmentTimeLocks(data: CreateAppointmentTimeLockPayload) {
+    return request<unknown, AppointmentTimeLockList>({
+      url: `${ADMIN_BASE_URL}/appointment-time-locks`,
+      method: "post",
+      data,
+    });
+  },
+
+  updateAppointmentTimeLock(id: string | number, data: UpdateAppointmentTimeLockPayload) {
+    return request<unknown, AppointmentTimeLock>({
+      url: `${ADMIN_BASE_URL}/appointment-time-locks/${id}`,
+      method: "put",
+      data,
+    });
+  },
+
+  deleteAppointmentTimeLock(id: string | number) {
+    return request({
+      url: `${ADMIN_BASE_URL}/appointment-time-locks/${id}`,
+      method: "delete",
+    });
+  },
+
+  getMemberCardProducts(params: { page?: number; pageSize?: number; keyword?: string; status?: string }) {
+    return request<unknown, ServerPageResult<MemberCardProduct>>({
+      url: `${ADMIN_BASE_URL}/member-card-products`,
+      method: "get",
+      params,
+    });
+  },
+
+  getMemberCardProduct(id: string | number) {
+    return request<unknown, MemberCardProduct>({
+      url: `${ADMIN_BASE_URL}/member-card-products/${id}`,
+      method: "get",
+    });
+  },
+
+  createMemberCardProduct(data: MemberCardProductPayload) {
+    return request<unknown, MemberCardProduct>({
+      url: `${ADMIN_BASE_URL}/member-card-products`,
+      method: "post",
+      data,
+    });
+  },
+
+  updateMemberCardProduct(id: string | number, data: MemberCardProductPayload) {
+    return request<unknown, MemberCardProduct>({
+      url: `${ADMIN_BASE_URL}/member-card-products/${id}`,
+      method: "put",
+      data,
+    });
+  },
+
+  deleteMemberCardProduct(id: string | number) {
+    return request({
+      url: `${ADMIN_BASE_URL}/member-card-products/${id}`,
+      method: "delete",
+    });
+  },
+
+  updateMemberCardProductStatus(id: string | number, status: "active" | "disabled") {
+    return request({
+      url: `${ADMIN_BASE_URL}/member-card-products/${id}/status`,
+      method: "put",
+      data: { status },
+    });
+  },
+
+  publishMemberCardProduct(id: string | number, onSale = true) {
+    return request<unknown, MemberCardProduct>({
+      url: `${ADMIN_BASE_URL}/member-card-products/${id}/publish`,
+      method: "post",
+      data: { onSale },
+    });
+  },
+
+  getMemberCardProductVersions(id: string | number) {
+    return request<unknown, MemberCardProductVersionList>({
+      url: `${ADMIN_BASE_URL}/member-card-products/${id}/versions`,
+      method: "get",
+    });
+  },
+
+  getMemberCardProductVersion(id: string | number, versionId: string | number) {
+    return request<unknown, MemberCardProductVersion>({
+      url: `${ADMIN_BASE_URL}/member-card-products/${id}/versions/${versionId}`,
+      method: "get",
+    });
+  },
+
+  copyMemberCardProductVersionToDraft(id: string | number, versionId: string | number) {
+    return request<unknown, MemberCardProduct>({
+      url: `${ADMIN_BASE_URL}/member-card-products/${id}/versions/${versionId}/copy-to-draft`,
+      method: "post",
+    });
+  },
+
   getDashboard() {
     return request<unknown, DashboardData>({
       url: `${ADMIN_BASE_URL}/dashboard`,
       method: "get",
     });
+  },
+
+  getAdminPermissionCatalog() {
+    return request<unknown, AdminPermissionDescriptor[]>({ url: `${ADMIN_BASE_URL}/permission-catalog`, method: "get" });
+  },
+
+  getAdminRoles() {
+    return request<unknown, AdminRoleRecord[]>({ url: `${ADMIN_BASE_URL}/roles`, method: "get" });
+  },
+
+  createAdminRole(data: { name: string; displayName: string; permissions: string[] }) {
+    return request<unknown, { id: string; name: string; version: number }>({ url: `${ADMIN_BASE_URL}/roles`, method: "post", data });
+  },
+
+  updateAdminRole(id: string, data: { displayName?: string; permissions: string[]; status: "active" | "inactive"; expectedVersion: number }) {
+    return request<unknown, AdminRoleRecord[]>({ url: `${ADMIN_BASE_URL}/roles/${id}`, method: "put", data });
+  },
+
+  getAdminRoleAssignments() {
+    return request<unknown, AdminRoleAssignment[]>({ url: `${ADMIN_BASE_URL}/admin-users/role-assignments`, method: "get" });
+  },
+
+  assignAdminRole(id: string, data: { roleId: string; expectedVersion: number }) {
+    return request<unknown, AdminRoleAssignment[]>({ url: `${ADMIN_BASE_URL}/admin-users/${id}/role`, method: "put", data });
   },
 
   getFinanceSummary(params?: { startDate?: string; endDate?: string; source?: string; channel?: string }) {
@@ -844,7 +991,7 @@ const LifeAPI = {
     });
   },
 
-  adjustUserPoints(id: string | number, data: { points: number; amount?: number; remark?: string }) {
+  adjustUserPoints(id: string | number, data: { points: number; amount?: number; remark?: string; idempotencyKey: string }) {
     return request({
       url: `${ADMIN_BASE_URL}/users/${id}/points/adjust`,
       method: "post",
@@ -852,11 +999,51 @@ const LifeAPI = {
     });
   },
 
-  adjustUserMemberCardTime(id: string | number, data: { mode: string; deltaUnits?: number; targetRemainingUnits?: number; reason: string }) {
+  adjustUserMemberCardTime(id: string | number, data: { mode: string; deltaMinutes?: number; targetRemainingMinutes?: number; reason: string; expectedVersion: number; idempotencyKey: string }) {
     return request<unknown, LifeResourceRecord>({
       url: `${ADMIN_BASE_URL}/user-member-cards/${id}/adjust-time`,
       method: "post",
       data,
+    });
+  },
+
+  extendUserMemberCard(id: string | number, data: { days: number; reason: string; expectedVersion: number; idempotencyKey: string }) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/user-member-cards/${id}/extend`,
+      method: "post",
+      data,
+    });
+  },
+
+  suspendUserMemberCard(id: string | number, reason: string, expectedVersion: number, idempotencyKey: string) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/user-member-cards/${id}/suspend`,
+      method: "post",
+      data: { reason, expectedVersion, idempotencyKey },
+    });
+  },
+
+  resumeUserMemberCard(id: string | number, reason: string, expectedVersion: number, idempotencyKey: string) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/user-member-cards/${id}/resume`,
+      method: "post",
+      data: { reason, expectedVersion, idempotencyKey },
+    });
+  },
+
+  revokeUserMemberCard(id: string | number, reason: string, expectedVersion: number, idempotencyKey: string) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/user-member-cards/${id}/revoke`,
+      method: "post",
+      data: { reason, expectedVersion, idempotencyKey },
+    });
+  },
+
+  deleteUserMemberCardDraft(id: string | number, reason: string, expectedVersion: number, idempotencyKey: string) {
+    return request<unknown, { id: string; deleted: boolean }>({
+      url: `${ADMIN_BASE_URL}/user-member-cards/${id}/draft`,
+      method: "delete",
+      data: { reason, expectedVersion, idempotencyKey },
     });
   },
 
@@ -889,11 +1076,11 @@ const LifeAPI = {
     } satisfies LifeResourcePage;
   },
 
-  updateResourceStatus(module: LifeModuleKey, id: string, status: string) {
+  updateResourceStatus(module: LifeModuleKey, id: string, status: string, reason?: string) {
     return request({
       url: `${endpoint(module)}/${id}/status`,
       method: "put",
-      data: { status },
+      data: { status, reason },
     });
   },
 
@@ -963,6 +1150,13 @@ const LifeAPI = {
     });
   },
 
+  getMemberCardPlanVersions(id: string) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/member-cards/${id}/versions`,
+      method: "get",
+    });
+  },
+
   updateMemberCardServiceRules(id: string, serviceRuleList: unknown[]) {
     return request<unknown, LifeResourceRecord>({
       url: `${ADMIN_BASE_URL}/member-cards/${id}/service-rules`,
@@ -1022,9 +1216,57 @@ const LifeAPI = {
     return toPageResult(data);
   },
 
+  async getUserProductOrders(queryParams: LifeQueryParams) {
+    const data = await request<unknown, ServerPageResult<UserProductOrderItem>>({
+      url: `${ADMIN_BASE_URL}/user-orders`,
+      method: "get",
+      params: toAdminQuery(queryParams),
+    });
+    return toPageResult(data);
+  },
+
+  async getUserServiceBookings(queryParams: LifeQueryParams) {
+    const data = await request<unknown, ServerPageResult<UserServiceBookingItem>>({
+      url: `${ADMIN_BASE_URL}/user-service-bookings`,
+      method: "get",
+      params: toAdminQuery(queryParams),
+    });
+    return toPageResult(data);
+  },
+
+  getUserCommerceOverview(id: string | number, recentLimit = 5) {
+    return request<unknown, UserCommerceOverview>({
+      url: `${ADMIN_BASE_URL}/users/${id}/commerce-overview`,
+      method: "get",
+      params: { recentLimit },
+    });
+  },
+
+  getAdminUser(id: string | number) {
+    return request<unknown, LifeResourceRecord>({
+      url: `${ADMIN_BASE_URL}/users/${id}`,
+      method: "get",
+    });
+  },
+
   getOrderDetail(id: string) {
     return request<unknown, OrderDetail>({
       url: `${ADMIN_BASE_URL}/orders/${id}`,
+      method: "get",
+    });
+  },
+
+  updateOrderAddress(id: string, data: UpdateOrderAddressPayload) {
+    return request<unknown, OrderDetail>({
+      url: `${ADMIN_BASE_URL}/orders/${id}/address`,
+      method: "put",
+      data,
+    });
+  },
+
+  getOrderAddressRevisions(id: string) {
+    return request<unknown, { orderId: number; orderAddressId: number | null; currentVersion: number | null; items: OrderAddressRevision[] }>({
+      url: `${ADMIN_BASE_URL}/orders/${id}/address-revisions`,
       method: "get",
     });
   },
@@ -1152,10 +1394,43 @@ const LifeAPI = {
     });
   },
 
-  deleteOrder(id: string) {
+  rescheduleBooking(id: string, data: UpdateOrderPayload) {
+    return request<unknown, OrderDetail>({
+      url: `${ADMIN_BASE_URL}/user-service-bookings/${id}/reschedule`,
+      method: "post",
+      data,
+    });
+  },
+
+  cancelOrder(id: string, data: AdminOrderActionPayload) {
+    return request<unknown, OrderDetail>({
+      url: `${ADMIN_BASE_URL}/orders/${id}/cancel`,
+      method: "post",
+      data,
+    });
+  },
+
+  cancelBooking(id: string, data: AdminOrderActionPayload) {
+    return request<unknown, OrderDetail>({
+      url: `${ADMIN_BASE_URL}/user-service-bookings/${id}/cancel`,
+      method: "post",
+      data,
+    });
+  },
+
+  deleteOrder(id: string, data: AdminOrderActionPayload) {
     return request<unknown, { id: string; orderNo: string; deleted: boolean }>({
       url: `${ADMIN_BASE_URL}/orders/${id}`,
       method: "delete",
+      data,
+    });
+  },
+
+  deleteBookingDraft(id: string, data: AdminOrderActionPayload) {
+    return request<unknown, { id: string; orderNo: string; deleted: boolean }>({
+      url: `${ADMIN_BASE_URL}/user-service-bookings/${id}/draft`,
+      method: "delete",
+      data,
     });
   },
 
@@ -1313,6 +1588,55 @@ const LifeAPI = {
     return request<unknown, AfterSalesTicket>({
       url: `${ADMIN_BASE_URL}/after-sales/tickets/${id}/close`,
       method: "post",
+      data,
+    });
+  },
+
+  getPointRewardRules() {
+    return request<unknown, PointRewardRule[]>({
+      url: `${ADMIN_BASE_URL}/point-reward-rules`,
+      method: "get",
+    });
+  },
+
+  publishPointRewardRule(code: PointRewardRule["code"], data: Partial<PointRewardRule>) {
+    return request<unknown, PointRewardRule>({
+      url: `${ADMIN_BASE_URL}/point-reward-rules/${code}`,
+      method: "put",
+      data,
+    });
+  },
+
+  updatePointRewardRuleStatus(code: PointRewardRule["code"], status: "active" | "inactive") {
+    return request<unknown, { code: string; status: string }>({
+      url: `${ADMIN_BASE_URL}/point-reward-rules/${code}/status`,
+      method: "put",
+      data: { status },
+    });
+  },
+
+  async getPointRewardEvents(params: { page?: number; pageSize?: number; keyword?: string }) {
+    const data = await request<unknown, ServerPageResult<PointRewardEvent>>({
+      url: `${ADMIN_BASE_URL}/point-reward-events`,
+      method: "get",
+      params,
+    });
+    return toPageResult(data);
+  },
+
+  async getReferralBindings(params: { page?: number; pageSize?: number; keyword?: string; status?: string }) {
+    const data = await request<unknown, ServerPageResult<ReferralBinding>>({
+      url: `${ADMIN_BASE_URL}/referrals/bindings`,
+      method: "get",
+      params,
+    });
+    return toPageResult(data);
+  },
+
+  reviewReferralBinding(id: number, data: { status: ReferralBinding["status"]; riskLevel?: string; riskReason?: string }) {
+    return request<unknown, ReferralBinding>({
+      url: `${ADMIN_BASE_URL}/referrals/bindings/${id}/review`,
+      method: "put",
       data,
     });
   },

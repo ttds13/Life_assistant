@@ -1,9 +1,12 @@
 <script lang="ts" setup>
 import type { HomeBanner } from '@/api/types/home'
-import type { Service, ServiceCategory } from '@/api/types/services'
+import type { PurchasableMemberCard } from '@/api/types/memberCards'
+import type { Service } from '@/api/types/services'
 import { getUserAddresses } from '@/api/address'
 import { getHomeBanners } from '@/api/home'
-import { getServiceCategories, getServices } from '@/api/services'
+import { getPurchasableMemberCards } from '@/api/memberCards'
+import { getServices } from '@/api/services'
+import HomeProductCard from '@/components/home-product-card/home-product-card.vue'
 import { useTokenStore } from '@/store/token'
 import { clearSelectedAddress, formatAddress, getSelectedAddress } from '@/utils/addressSelection'
 
@@ -21,15 +24,20 @@ const cartCount = ref(0)
 const tokenStore = useTokenStore()
 
 const recommendedServices = ref<Service[]>([])
-const serviceCategories = ref<ServiceCategory[]>([])
+const purchasableCards = ref<PurchasableMemberCard[]>([])
 const homeBanners = ref<HomeBanner[]>([])
 const loading = ref(true)
 const isError = ref(false)
+const memberCardsExpanded = ref(false)
 
 const hotServices = computed(() => recommendedServices.value.filter(item => item.status !== 0))
 const directServices = computed(() => hotServices.value.slice(0, 6))
-const serviceListEntries = computed(() => serviceCategories.value.filter(item => item.status !== 0))
-const isEmpty = computed(() => !loading.value && !isError.value && hotServices.value.length === 0 && serviceListEntries.value.length === 0)
+const availableMemberCards = computed(() => purchasableCards.value.filter(item => item.status !== 0))
+const visibleMemberCards = computed(() => memberCardsExpanded.value
+  ? availableMemberCards.value
+  : availableMemberCards.value.slice(0, 6))
+const hasMoreMemberCards = computed(() => availableMemberCards.value.length > 6)
+const isEmpty = computed(() => !loading.value && !isError.value && hotServices.value.length === 0 && visibleMemberCards.value.length === 0)
 
 function normalizeServiceList(data: any): Service[] {
   if (Array.isArray(data))
@@ -38,33 +46,31 @@ function normalizeServiceList(data: any): Service[] {
   return data?.items || data?.list || data?.records || []
 }
 
-function formatPrice(price?: number) {
-  if (price === undefined || price === null)
-    return '50'
-  return price % 1 === 0 ? price.toString() : price.toFixed(2)
+async function loadHomeSection<T>(label: string, loader: () => Promise<T>, fallback: T) {
+  try {
+    return { ok: true, data: await loader() }
+  }
+  catch (err) {
+    console.warn(`home ${label} load failed`, err)
+    return { ok: false, data: fallback }
+  }
 }
 
 async function loadData() {
   loading.value = true
   isError.value = false
 
-  try {
-    const [serviceRes, categoryRes, bannerRes] = await Promise.all([
-      getServices({ page: 1, pageSize: 6 }),
-      getServiceCategories(),
-      getHomeBanners().catch(() => []),
-    ])
-    recommendedServices.value = normalizeServiceList(serviceRes)
-    serviceCategories.value = categoryRes
-    homeBanners.value = bannerRes.filter(item => item.status !== 0 && Boolean(item.imageUrl || item.imageDisplayUrl))
-  }
-  catch (err) {
-    console.error('首页数据加载失败:', err)
-    isError.value = true
-  }
-  finally {
-    loading.value = false
-  }
+  const [serviceRes, cardRes, bannerRes] = await Promise.all([
+    loadHomeSection('services', () => getServices({ page: 1, pageSize: 6 }, { hideErrorToast: true }), { items: [], page: 1, pageSize: 6, total: 0 }),
+    loadHomeSection('member cards', () => getPurchasableMemberCards({ hideErrorToast: true }), []),
+    loadHomeSection('banners', () => getHomeBanners(), []),
+  ])
+
+  recommendedServices.value = normalizeServiceList(serviceRes.data)
+  purchasableCards.value = cardRes.data
+  homeBanners.value = bannerRes.data.filter(item => item.status !== 0 && Boolean(item.imageUrl || item.imageDisplayUrl))
+  isError.value = !serviceRes.ok && !cardRes.ok && !bannerRes.ok
+  loading.value = false
 }
 
 function onAddressTap() {
@@ -133,16 +139,41 @@ function onServiceTap(service: Service) {
   uni.navigateTo({ url: serviceDetailUrl(service) })
 }
 
-function serviceListUrl(category: ServiceCategory) {
-  const params = [
-    `categoryId=${encodeURIComponent(String(category.id))}`,
-    `categoryName=${encodeURIComponent(category.name)}`,
-  ].filter(Boolean).join('&')
-  return `/pages/service/list?${params}`
+function memberCardDescription(card: PurchasableMemberCard) {
+  if (card.description)
+    return card.description
+  const names = (card.serviceRuleList || [])
+    .filter(rule => rule.status !== 0 && rule.serviceStatus !== 0)
+    .map(rule => rule.serviceName)
+    .filter(Boolean)
+  const serviceText = names.length
+    ? (names.length > 1 ? `${names[0]}等 ${names.length} 项服务` : names[0])
+    : (card.serviceSummary || '适用服务以商品详情为准')
+  return `${card.totalUnits}分钟 · ${serviceText}`
 }
 
-function onServiceListTap(category: ServiceCategory) {
-  uni.navigateTo({ url: serviceListUrl(category) })
+function memberCardCover(card: PurchasableMemberCard) {
+  if (card.coverImageDisplayUrl || card.coverImage)
+    return card.coverImageDisplayUrl || card.coverImage || ''
+  const rule = (card.serviceRuleList || []).find(item =>
+    item.status !== 0
+    && item.serviceStatus !== 0
+    && Boolean(item.serviceCoverImageDisplayUrl || item.serviceCoverImage),
+  )
+  return rule?.serviceCoverImageDisplayUrl || rule?.serviceCoverImage || ''
+}
+
+function onMemberCardTap(card: PurchasableMemberCard) {
+  const detailUrl = `/pages/member-card/detail?id=${card.id}&source=home_member_card`
+  if (!tokenStore.hasLogin) {
+    uni.navigateTo({ url: `/pages/login/index?redirect=${encodeURIComponent(detailUrl)}` })
+    return
+  }
+  uni.navigateTo({ url: detailUrl })
+}
+
+function toggleMemberCards() {
+  memberCardsExpanded.value = !memberCardsExpanded.value
 }
 
 onLoad(() => {
@@ -278,72 +309,52 @@ onShow(() => {
           </view>
 
           <view class="grid grid-cols-2 gap-3 mt-3">
-            <view
+            <HomeProductCard
               v-for="item in directServices"
               :key="item.code || item.id"
-              class="bg-white rounded-[16rpx] overflow-hidden"
+              :cover-image="item.coverImageDisplayUrl || item.coverImage"
+              :title="item.name"
+              :description="item.description || '专业师傅上门服务'"
+              :price="item.basePrice"
+              :unit="item.priceUnit || '次'"
+              fallback-icon="i-carbon-clean"
               @tap="onServiceTap(item)"
-            >
-              <view class="w-full h-[168rpx] bg-[#EAF3FF] flex items-center justify-center">
-                <image
-                  v-if="item.coverImage"
-                  :src="item.coverImageDisplayUrl || item.coverImage"
-                  class="w-full h-full"
-                  mode="aspectFill"
-                />
-                <text v-else class="i-carbon-clean text-[64rpx] text-[#FF373D]" />
-              </view>
-              <view class="p-3">
-                <text class="block text-[28rpx] leading-[38rpx] font-600 text-gray-800 truncate">
-                  {{ item.name }}
-                </text>
-                <text class="block mt-1 text-[24rpx] leading-[32rpx] text-gray-400 truncate">
-                  {{ item.description || '专业师傅上门服务' }}
-                </text>
-                <view class="mt-3 flex items-center justify-between">
-                  <text class="text-[30rpx] text-[#FF373D] font-700">
-                    ￥{{ formatPrice(item.basePrice) }}
-                  </text>
-                  <text class="text-[22rpx] text-gray-400 flex-1 ml-1 truncate">
-                    / {{ item.priceUnit || '次' }}
-                  </text>
-                  <text class="i-carbon-chevron-right text-[24rpx] text-[#FF373D] ml-1" />
-                </view>
-              </view>
-            </view>
+            />
           </view>
         </view>
 
-        <view v-if="serviceListEntries.length" class="mt-5 px-4">
+        <view class="mt-5 px-4">
           <view class="flex items-center justify-between">
             <text class="text-[34rpx] leading-[46rpx] font-600 text-gray-900">
-              更多服务
+              会员卡
             </text>
-            <text class="text-[24rpx] text-gray-400">
-              进入列表选购
-            </text>
+            <view v-if="hasMoreMemberCards" class="flex items-center" @tap="toggleMemberCards">
+              <text class="text-[24rpx] text-gray-500">{{ memberCardsExpanded ? '收起' : '展开更多' }}</text>
+              <text
+                :class="memberCardsExpanded ? 'i-carbon-chevron-up' : 'i-carbon-chevron-down'"
+                class="ml-1 text-[24rpx] text-gray-400"
+              />
+            </view>
           </view>
 
-          <view class="grid grid-cols-2 gap-3 mt-3">
-            <view
-              v-for="item in serviceListEntries"
-              :key="`list-${item.id}`"
-              class="bg-white rounded-[16rpx] overflow-hidden"
-              @tap="onServiceListTap(item)"
-            >
-              <view class="w-full h-[150rpx] bg-[#EAF3FF] flex items-center justify-center">
-                <text :class="item.icon || 'i-carbon-list'" class="text-[60rpx] text-[#FF373D]" />
-              </view>
-              <view class="p-3">
-                <text class="block text-[28rpx] leading-[38rpx] font-600 text-gray-800 truncate">
-                  {{ item.name }}
-                </text>
-              </view>
-            </view>
+          <view v-if="visibleMemberCards.length" class="grid grid-cols-2 gap-3 mt-3">
+            <HomeProductCard
+              v-for="item in visibleMemberCards"
+              :key="`member-card-${item.id}`"
+              :cover-image="memberCardCover(item)"
+              :title="item.name"
+              :description="memberCardDescription(item)"
+              :price="item.price"
+              unit="张"
+              fallback-icon="i-carbon-wallet"
+              @tap="onMemberCardTap(item)"
+            />
+          </view>
+          <view v-else class="mt-3 h-[120rpx] bg-white rounded-[16rpx] flex items-center justify-center">
+            <text class="text-[25rpx] text-gray-400">暂无可售会员卡</text>
           </view>
         </view>
       </view>
     </loading-state>
   </view>
 </template>
-

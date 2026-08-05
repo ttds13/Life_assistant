@@ -166,6 +166,7 @@ const bizTypeOptions = [
   "home_banner",
   "service_cover",
   "service_image",
+  "member_card_cover",
   "admin_avatar",
   "rich_text_image",
   "review_image",

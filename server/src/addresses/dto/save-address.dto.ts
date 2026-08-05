@@ -21,6 +21,12 @@ function toOptionalNumber(value: unknown): number | null | undefined {
 }
 
 export class SaveAddressDto {
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Transform(({ value }) => toOptionalNumber(value))
+  expectedVersion?: number
+
   @IsString()
   @Length(1, 64)
   @Transform(({ value }) => trim(value))
@@ -114,6 +120,12 @@ export class SaveAddressDto {
   @IsIn(['tencent', 'amap'])
   @Transform(({ value }) => trim(value))
   mapProvider?: string
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['gps', 'map', 'manual'])
+  @Transform(({ value }) => trim(value))
+  source?: string
 
   @IsOptional()
   @IsString()

@@ -211,7 +211,7 @@ async function main() {
       payableAmount: 120,
       offlinePaymentRemark: `${runId} offline paid`,
       adminRemark: `${runId} offline paid order`,
-    }, requestId(runId, 'offline-paid-order'), '127.0.0.1') as { id: number, status: string }
+    }, requestId(runId, 'offline-paid-order'), '127.0.0.1') as unknown as { id: number, status: string }
     assertClosed(offlinePaidOrder.status === ORDER_STATUS.PENDING_DISPATCH, 'offline paid order should be pending dispatch')
 
     const offlinePayment = await prisma.payment.findFirst({
@@ -230,7 +230,7 @@ async function main() {
       paymentMode: 'unpaid',
       payableAmount: 120,
       adminRemark: `${runId} unpaid order`,
-    }, requestId(runId, 'unpaid-order'), '127.0.0.1') as { id: number, status: string }
+    }, requestId(runId, 'unpaid-order'), '127.0.0.1') as unknown as { id: number, status: string }
     assertClosed(unpaidOrder.status === ORDER_STATUS.PENDING_PAYMENT, 'unpaid admin order should be pending payment')
     await orders.confirmOfflinePayment(1, unpaidOrder.id, {
       amount: 120,
@@ -278,7 +278,7 @@ async function main() {
       paymentMode: 'member_card',
       memberCardId: Number(grantedCard.id),
       adminRemark: `${runId} member card order`,
-    }, requestId(runId, 'member-card-order'), '127.0.0.1') as { id: number, status: string, memberCardRuleSnapshot?: unknown }
+    }, requestId(runId, 'member-card-order'), '127.0.0.1') as unknown as { id: number, status: string, memberCardRuleSnapshot?: unknown }
     assertClosed(memberCardOrder.status === ORDER_STATUS.PENDING_DISPATCH, 'member card admin order should be pending dispatch')
 
     const freezeRecord = await prisma.memberCardRecord.findFirst({

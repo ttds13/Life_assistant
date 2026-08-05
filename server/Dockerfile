@@ -33,10 +33,15 @@ RUN apt-get update -y \
 COPY package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY nest-cli.json tsconfig*.json ./
 COPY prisma ./prisma
 COPY scripts ./scripts
+COPY src ./src
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 
 EXPOSE 3100
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:3100/api/health').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 ENTRYPOINT ["sh", "./docker-entrypoint.sh"]

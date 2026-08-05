@@ -101,7 +101,7 @@ function memberCardTip(order: UserOrder | OrderDetail) {
 
 function toStaffTask(order: UserOrder | OrderDetail, group: StaffTaskGroup = 'dispatch'): StaffTask {
   const detail = order as OrderDetail
-  const address = detail.address
+  const address = detail.orderAddress
   const status = mapStaffStatus(order.status)
   const serviceCardType = order.serviceCardType || detail.service?.cardType
   const memberCard = detail.memberCard
@@ -132,13 +132,19 @@ function toStaffTask(order: UserOrder | OrderDetail, group: StaffTaskGroup = 'di
     customerName: address?.contactName || '',
     customerPhone: address?.contactPhone || '',
     addressText: order.addressText,
+    addressTitle: address?.addressTitle || '',
+    addressVersion: address?.version,
+    addressMapAvailable: Boolean(address?.mapAvailable),
     latitude: numericCoordinate(address?.latitude),
     longitude: numericCoordinate(address?.longitude),
     distanceText: '已分配任务',
     remark: order.remark,
-    incomeAmount: order.payableAmount,
+    incomeAmount: order.staffIncomeAmount ?? order.payableAmount,
     memberCardName: order.memberCardName,
     memberCardUnitName: order.memberCardUnitName,
+    memberCardConsumeMode: order.memberCardConsumeMode,
+    memberCardMinConsumeMinutes: order.memberCardMinConsumeMinutes,
+    memberCardAllowedMinutes: order.memberCardAllowedMinutes,
     memberCardConsumeUnits: order.memberCardConsumeUnits,
     plannedConsumeUnits: order.plannedConsumeUnits,
     actualConsumeUnits: order.actualConsumeUnits,

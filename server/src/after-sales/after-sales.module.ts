@@ -4,12 +4,13 @@ import { AuditLogModule } from '../audit-log/audit-log.module'
 import { AuthModule } from '../auth/auth.module'
 import { OrdersModule } from '../orders/orders.module'
 import { PrismaModule } from '../prisma/prisma.module'
+import { PointsModule } from '../points/points.module'
 import { StorageModule } from '../storage/storage.module'
 import { AfterSalesController } from './after-sales.controller'
 import { AfterSalesService } from './after-sales.service'
 
 @Module({
-  imports: [PrismaModule, AuthModule, AdminAuthModule, AuditLogModule, OrdersModule, StorageModule],
+  imports: [PrismaModule, AuthModule, AdminAuthModule, AuditLogModule, OrdersModule, PointsModule, StorageModule],
   controllers: [AfterSalesController],
   providers: [AfterSalesService],
   exports: [AfterSalesService],

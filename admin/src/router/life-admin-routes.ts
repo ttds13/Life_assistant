@@ -6,7 +6,7 @@ export const lifeAdminRoutes: RouteItem[] = [
     component: "Layout",
     redirect: "/users/list",
     name: "LifeUsers",
-    meta: { title: "用户管理", icon: "user", alwaysShow: true, hidden: false, params: {} },
+    meta: { title: "用户中心", icon: "user", alwaysShow: true, hidden: false, params: {} },
     children: [
       {
         path: "list",
@@ -16,10 +16,38 @@ export const lifeAdminRoutes: RouteItem[] = [
         children: [],
       },
       {
+        path: "orders",
+        component: "life/users/commerce-list",
+        name: "LifeUserOrders",
+        meta: { title: "用户订单", icon: "table", keepAlive: true, params: { view: "orders" } },
+        children: [],
+      },
+      {
+        path: "service-bookings",
+        component: "life/users/commerce-list",
+        name: "LifeUserServiceBookings",
+        meta: { title: "用户服务预约", icon: "document", keepAlive: true, params: { view: "bookings" } },
+        children: [],
+      },
+      {
+        path: "member-cards",
+        component: "life/resource/index",
+        name: "LifeUserMemberCards",
+        meta: { title: "用户权益卡", icon: "file", keepAlive: true, params: { module: "userMemberCards" } },
+        children: [],
+      },
+      {
         path: "addresses",
         component: "life/resource/index",
         name: "LifeAddressList",
-        meta: { title: "地址管理", icon: "menu", keepAlive: true, params: { module: "addresses" } },
+        meta: { title: "用户地址", icon: "menu", keepAlive: true, params: { module: "addresses" } },
+        children: [],
+      },
+      {
+        path: "detail/:id/commerce",
+        component: "life/users/overview",
+        name: "LifeUserCommerceOverview",
+        meta: { title: "用户业务详情", icon: "document", hidden: true, params: {} },
         children: [],
       },
     ],
@@ -29,7 +57,7 @@ export const lifeAdminRoutes: RouteItem[] = [
     component: "Layout",
     redirect: "/services/categories",
     name: "LifeServices",
-    meta: { title: "服务管理", icon: "project", alwaysShow: true, hidden: false, params: {} },
+    meta: { title: "服务与商品", icon: "project", alwaysShow: true, hidden: false, params: {} },
     children: [
       {
         path: "categories",
@@ -45,6 +73,13 @@ export const lifeAdminRoutes: RouteItem[] = [
         meta: { title: "服务项目", icon: "project", keepAlive: true, params: { module: "services" } },
         children: [],
       },
+      {
+        path: "member-card-products",
+        component: "life/member-card-products/index",
+        name: "LifeMemberCardProducts",
+        meta: { title: "会员卡商品", icon: "file", keepAlive: true, params: {} },
+        children: [],
+      },
     ],
   },
   {
@@ -52,7 +87,7 @@ export const lifeAdminRoutes: RouteItem[] = [
     component: "Layout",
     redirect: "/orders/list",
     name: "LifeOrders",
-    meta: { title: "订单管理", icon: "table", alwaysShow: true, hidden: false, params: {} },
+    meta: { title: "服务履约", icon: "table", alwaysShow: true, hidden: false, params: {} },
     children: [
       {
         path: "list",
@@ -62,17 +97,17 @@ export const lifeAdminRoutes: RouteItem[] = [
         children: [],
       },
       {
-        path: "member-card-orders",
-        component: "life/orders/index",
-        name: "LifeMemberCardPurchaseOrders",
-        meta: { title: "会员卡购买订单", icon: "table", keepAlive: true, params: { orderType: "member_card_purchase" } },
-        children: [],
-      },
-      {
         path: "dispatch",
         component: "life/orders/index",
         name: "LifeOrderDispatch",
         meta: { title: "待派单", icon: "todo", keepAlive: true, params: { status: "pending_dispatch", orderType: "bookings" } },
+        children: [],
+      },
+      {
+        path: "appointment-time-locks",
+        component: "life/appointment-time-locks/index",
+        name: "LifeAppointmentTimeLocks",
+        meta: { title: "不可预约时段", icon: "todo", keepAlive: true, params: {} },
         children: [],
       },
       {
@@ -96,7 +131,7 @@ export const lifeAdminRoutes: RouteItem[] = [
     component: "Layout",
     redirect: "/staff/list",
     name: "LifeStaff",
-    meta: { title: "师傅管理", icon: "client", alwaysShow: true, hidden: false, params: {} },
+    meta: { title: "师傅运营", icon: "client", alwaysShow: true, hidden: false, params: {} },
     children: [
       {
         path: "list",
@@ -117,6 +152,13 @@ export const lifeAdminRoutes: RouteItem[] = [
         component: "life/resource/index",
         name: "LifeStaffStatus",
         meta: { title: "工作状态", icon: "monitor", keepAlive: true, params: { module: "staffStatus" } },
+        children: [],
+      },
+      {
+        path: "task-orders",
+        component: "life/orders/index",
+        name: "LifeStaffTaskOrders",
+        meta: { title: "师傅任务订单", icon: "table", keepAlive: true, params: { orderType: "bookings", staffTask: true } },
         children: [],
       },
       {
@@ -161,6 +203,13 @@ export const lifeAdminRoutes: RouteItem[] = [
         component: "life/resource/index",
         name: "LifePointLedgers",
         meta: { title: "积分流水", icon: "document", keepAlive: true, params: { module: "pointLedgers" } },
+        children: [],
+      },
+      {
+        path: "point-rules",
+        component: "life/points-rules/index",
+        name: "LifePointRewardRules",
+        meta: { title: "积分规则", icon: "setting", keepAlive: true, params: {} },
         children: [],
       },
       {
@@ -251,7 +300,7 @@ export const lifeAdminRoutes: RouteItem[] = [
     component: "Layout",
     redirect: "/marketing/coupons",
     name: "LifeMarketing",
-    meta: { title: "营销管理", icon: "bell", alwaysShow: true, hidden: false, params: {} },
+    meta: { title: "会员权益", icon: "bell", alwaysShow: true, hidden: false, params: {} },
     children: [
       {
         path: "coupons",
@@ -275,24 +324,25 @@ export const lifeAdminRoutes: RouteItem[] = [
         children: [],
       },
       {
-        path: "member-cards",
-        component: "life/resource/index",
-        name: "LifeMemberCards",
-        meta: { title: "会员卡模板", icon: "file", keepAlive: true, params: { module: "memberCards" } },
+        path: "referrals",
+        component: "life/referrals/index",
+        name: "LifeReferrals",
+        meta: { title: "邀请拉新", icon: "user", keepAlive: true, params: {} },
         children: [],
       },
       {
-        path: "user-member-cards",
-        component: "life/resource/index",
-        name: "LifeUserMemberCards",
-        meta: { title: "用户会员卡", icon: "file", keepAlive: true, params: { module: "userMemberCards" } },
+        path: "member-cards",
+        redirect: "/services/member-card-products",
+        component: "life/member-card-products/index",
+        name: "LifeMemberCardsLegacy",
+        meta: { title: "会员卡商品", icon: "file", hidden: true, keepAlive: false, params: {} },
         children: [],
       },
       {
         path: "member-card-records",
         component: "life/resource/index",
         name: "LifeMemberCardRecords",
-        meta: { title: "会员卡流水", icon: "document", keepAlive: true, params: { module: "memberCardRecords" } },
+        meta: { title: "权益核销记录", icon: "document", keepAlive: true, params: { module: "memberCardRecords" } },
         children: [],
       },
     ],
@@ -329,7 +379,7 @@ export const lifeAdminRoutes: RouteItem[] = [
       },
       {
         path: "role",
-        component: "system/role/index",
+        component: "life/admin-roles/index",
         name: "Role",
         meta: { title: "角色管理", icon: "role", keepAlive: true, params: {} },
         children: [],

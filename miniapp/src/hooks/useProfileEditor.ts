@@ -3,7 +3,6 @@ import type { UserProfile } from '@/api/types/auth'
 import { useTokenStore } from '@/store/token'
 import type { UserInfo } from '@/store/user'
 import { DEFAULT_AVATAR_URL, useUserStore } from '@/store/user'
-import { avatarDebugLog } from '@/utils/avatarDebugLog'
 import { uploadImage } from '@/utils/uploadImage'
 
 export interface SaveUserProfileInput {
@@ -89,12 +88,10 @@ export function useProfileEditor() {
     }
 
     if (input.avatarFilePath) {
-      avatarDebugLog('before upload avatarFilePath', input.avatarFilePath)
       const uploaded = await uploadImage({
         filePath: input.avatarFilePath,
         bizType: 'user_avatar',
       })
-      avatarDebugLog('upload result', uploaded)
       payload.avatar = uploaded.url
       avatarDisplayUrl = uploaded.displayUrl || uploaded.signedUrl || uploaded.url
     }
@@ -108,7 +105,6 @@ export function useProfileEditor() {
 
     const token = await resolveAccessToken()
     const profile = await updateProfile(payload, token ? { Authorization: `Bearer ${token}` } : undefined)
-    avatarDebugLog('profile update result', profile)
     userStore.setFromProfile(profile)
 
     if (avatarDisplayUrl) {

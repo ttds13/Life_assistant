@@ -48,10 +48,10 @@
     <el-card class="page-content" shadow="never">
       <div class="page-toolbar">
         <div class="page-toolbar__left">
-          <el-button v-if="isMemberCardPurchasePage" type="primary" icon="plus" @click="handleCreateMemberCardPurchase">
+          <el-button v-if="isMemberCardPurchasePage && canCreateOrders" type="primary" icon="plus" @click="handleCreateMemberCardPurchase">
             录入会员卡购买
           </el-button>
-          <el-button v-else type="primary" icon="plus" @click="handleCreateOrder">
+          <el-button v-else-if="canCreateBookings" type="primary" icon="plus" @click="handleCreateOrder">
             录入订单
           </el-button>
           <el-button
@@ -77,7 +77,7 @@
       </div>
 
       <el-table v-loading="loading || batchDeleting" :data="orders" border @selection-change="handleSelectionChange">
-        <el-table-column v-if="canDeleteOrders" type="selection" width="55" align="center" fixed="left" />
+        <el-table-column v-if="canDeleteOrders" type="selection" width="55" align="center" fixed="left" :selectable="isDraftDeletable" />
         <el-table-column label="订单类型" width="120">
           <template #default="{ row }">
             <el-tag :type="orderTypeMeta(row.orderType).type">{{ orderTypeMeta(row.orderType).label }}</el-tag>
@@ -140,8 +140,17 @@
             >
               管理卡
             </el-button>
-            <el-button v-if="canUpdateOrders && row.orderType !== 'member_card_purchase'" type="primary" link size="small" icon="edit" @click="openEdit(row)">
+            <el-button v-if="canUpdateOrders && row.allowedActions?.update && row.orderType !== 'member_card_purchase'" type="primary" link size="small" icon="edit" @click="openEdit(row)">
               编辑
+            </el-button>
+            <el-button
+              v-if="canCancelOrders && row.allowedActions?.cancel"
+              type="warning"
+              link
+              size="small"
+              @click="cancelOrder(row)"
+            >
+              取消
             </el-button>
             <el-button
               v-if="canAssignOrders && canAssign(row)"
@@ -153,8 +162,8 @@
             >
               派单
             </el-button>
-            <el-button v-if="canDeleteOrders" type="danger" link size="small" icon="delete" @click="deleteOrder(row)">
-              删除
+            <el-button v-if="canDeleteOrders && row.allowedActions?.deleteDraft" type="danger" link size="small" icon="delete" @click="deleteOrder(row)">
+              删除草稿
             </el-button>
           </template>
         </el-table-column>
@@ -436,6 +445,18 @@
             </el-select>
             <div class="form-tip">只加载当前客户名下的可用会员卡；最终是否适用当前服务由后端再次校验。</div>
           </el-form-item>
+          <el-form-item
+            v-if="createForm.paymentMode === 'member_card' && memberCardConsumeOptions.length > 1"
+            label="本次核销"
+            required
+          >
+            <el-radio-group v-model="createForm.memberCardConsumeMinutes">
+              <el-radio-button v-for="minutes in memberCardConsumeOptions" :key="minutes" :value="minutes">
+                {{ minutes }} 分钟
+              </el-radio-button>
+            </el-radio-group>
+            <div class="form-tip">档位来自该用户购卡时固化的模板版本，不读取后来修改的模板规则。</div>
+          </el-form-item>
           <el-form-item v-if="createForm.paymentMode === 'offline_paid'" label="收款备注">
             <el-input v-model="createForm.offlinePaymentRemark" maxlength="256" placeholder="默认：线下录入已收款" />
           </el-form-item>
@@ -663,8 +684,8 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="下单时间">
-          <el-date-picker v-model="editForm.createdAt" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width: 100%" />
+        <el-form-item label="修改原因" required>
+          <el-input v-model="editForm.reason" type="textarea" :rows="2" maxlength="256" show-word-limit />
         </el-form-item>
         <el-form-item label="用户备注">
           <el-input v-model="editForm.remark" type="textarea" :rows="2" maxlength="512" show-word-limit />
@@ -706,9 +727,12 @@ const initialOrderType = computed(() =>
 );
 const isFixedOrderType = computed(() => initialOrderType.value !== "all");
 const isMemberCardPurchasePage = computed(() => initialOrderType.value === "member_card_purchase");
-const canUpdateOrders = computed(() => hasPerm("order:update"));
-const canAssignOrders = computed(() => hasPerm("order:assign"));
-const canDeleteOrders = computed(() => hasPerm("order:delete"));
+const canCreateOrders = computed(() => hasPerm("user-order:create"));
+const canCreateBookings = computed(() => hasPerm("user-booking:create"));
+const canUpdateOrders = computed(() => hasPerm(["user-order:update", "user-booking:reschedule"]));
+const canAssignOrders = computed(() => hasPerm("user-booking:assign"));
+const canCancelOrders = computed(() => hasPerm(["user-order:cancel", "user-booking:cancel"]));
+const canDeleteOrders = computed(() => hasPerm(["user-order:delete-draft", "user-booking:delete-draft"]));
 
 const loading = ref(false);
 const batchDeleting = ref(false);
@@ -758,6 +782,7 @@ const createForm = reactive({
   payableAmount: 0,
   paymentMode: "offline_paid",
   memberCardId: undefined as number | undefined,
+  memberCardConsumeMinutes: undefined as number | undefined,
   couponId: undefined as number | undefined,
   offlinePaymentRemark: "",
   remark: "",
@@ -794,7 +819,7 @@ const memberCardPurchaseForm = reactive({
 const editForm = reactive({
   appointmentStartTime: "",
   appointmentEndTime: "",
-  createdAt: "",
+  reason: "",
   remark: "",
   adminRemark: "",
 });
@@ -825,6 +850,10 @@ const selectedCustomer = computed(() => {
   if (!createForm.userId) return undefined;
   return customerOptions.value.find((item) => Number(item.id) === Number(createForm.userId));
 });
+const selectedMemberCard = computed(() => {
+  if (!createForm.memberCardId) return undefined;
+  return memberCardOptions.value.find((item) => Number(item.id) === Number(createForm.memberCardId));
+});
 const selectedPurchaseCustomer = computed(() => {
   if (!memberCardPurchaseForm.userId) return undefined;
   return purchaseCustomerOptions.value.find((item) => Number(item.id) === Number(memberCardPurchaseForm.userId));
@@ -848,6 +877,25 @@ const selectedService = computed(() => {
 const selectedAddress = computed(() => {
   if (!createForm.addressId) return undefined;
   return addressOptions.value.find((item) => Number(item.id) === Number(createForm.addressId));
+});
+const selectedMemberCardRule = computed(() => {
+  const snapshot = jsonRecord(selectedMemberCard.value?.planSnapshot);
+  const rules = Array.isArray(snapshot?.redemptionRules) ? snapshot.redemptionRules : [];
+  const serviceId = Number(createForm.serviceId || 0);
+  return rules
+    .map((item) => jsonRecord(item))
+    .find((item) => Number(item?.serviceId) === serviceId);
+});
+const memberCardConsumeOptions = computed(() => {
+  const rule = selectedMemberCardRule.value;
+  if (!rule) return [];
+  const configured = String(rule.consumeMode || "fixed_minutes") === "custom_minutes" && Array.isArray(rule.allowedMinutes)
+    ? rule.allowedMinutes.map((item) => Number(item))
+    : [Number(rule.consumeMinutes)];
+  const usableMinutes = numberField(selectedMemberCard.value, "usableMinutes") || numberField(selectedMemberCard.value, "usableUnits");
+  return [...new Set(configured)]
+    .filter((minutes) => Number.isInteger(minutes) && minutes > 0 && minutes <= usableMinutes)
+    .sort((left, right) => left - right);
 });
 const defaultContactName = computed(() =>
   textField(selectedCustomer.value, "nickname")
@@ -891,6 +939,7 @@ watch(
   (userId) => {
     createForm.addressId = undefined;
     createForm.memberCardId = undefined;
+    createForm.memberCardConsumeMinutes = undefined;
     createForm.couponId = undefined;
     addressOptions.value = [];
     memberCardOptions.value = [];
@@ -917,6 +966,7 @@ watch(
   () => createForm.serviceId,
   () => {
     createForm.memberCardId = undefined;
+    createForm.memberCardConsumeMinutes = undefined;
     createForm.couponId = undefined;
     couponOptions.value = [];
     applyServiceDefaults();
@@ -935,6 +985,7 @@ watch(
   (mode) => {
     if (mode !== "member_card") {
       createForm.memberCardId = undefined;
+      createForm.memberCardConsumeMinutes = undefined;
       const price = numberField(selectedService.value, "basePrice");
       if (price > 0 && createForm.payableAmount === 0) createForm.payableAmount = price;
       if (mode === "offline_paid" && !createForm.offlinePaymentRemark.trim()) {
@@ -947,6 +998,15 @@ watch(
     createForm.couponId = undefined;
     couponOptions.value = [];
     loadMemberCardOptions();
+  }
+);
+
+watch(
+  () => createForm.memberCardId,
+  () => {
+    const options = memberCardConsumeOptions.value;
+    const preferred = Number(selectedMemberCardRule.value?.consumeMinutes || 0);
+    createForm.memberCardConsumeMinutes = options.includes(preferred) ? preferred : options[0];
   }
 );
 
@@ -1020,6 +1080,13 @@ watch(
   { immediate: true }
 );
 
+onMounted(() => {
+  const userId = Number(route.query.userId);
+  if (route.query.create === "1" && Number.isInteger(userId) && userId > 0 && canCreateBookings.value) {
+    void openCreateOrderForUser(userId);
+  }
+});
+
 async function fetchOrders() {
   loading.value = true;
   try {
@@ -1046,6 +1113,20 @@ function handleCreateOrder() {
   createVisible.value = true;
   loadCustomerOptions();
   loadServiceOptions();
+}
+
+async function openCreateOrderForUser(userId: number) {
+  resetCreateForm();
+  createVisible.value = true;
+  const [user] = await Promise.all([
+    LifeAPI.getAdminUser(userId),
+    loadServiceOptions(),
+  ]);
+  customerOptions.value = [user];
+  createForm.userId = userId;
+  const query = { ...route.query };
+  delete query.create;
+  await router.replace({ path: route.path, query });
 }
 
 function handleCreateMemberCardPurchase() {
@@ -1193,7 +1274,7 @@ async function loadMemberCardOptions() {
     const data = await LifeAPI.getResourcePage("userMemberCards", {
       pageNum: 1,
       pageSize: 50,
-      status: "active",
+      status: "usable",
       userId: String(userId),
       cardType,
     });
@@ -1427,6 +1508,12 @@ function numberField(record: LifeResourceRecord | undefined, key: string) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 function openDetail(id: string) {
   router.push(`/orders/detail/${id}`);
 }
@@ -1438,7 +1525,7 @@ function openGrantedMemberCard(row: OrderListItem) {
     return;
   }
   router.push({
-    path: "/marketing/user-member-cards",
+    path: "/users/member-cards",
     query: { userMemberCardId: String(userMemberCardId) },
   });
 }
@@ -1488,7 +1575,7 @@ function openEdit(row: OrderListItem) {
   currentOrder.value = row;
   editForm.appointmentStartTime = toPickerDate(row.appointmentStartTime);
   editForm.appointmentEndTime = toPickerDate(row.appointmentEndTime);
-  editForm.createdAt = toPickerDate(row.createdAt);
+  editForm.reason = "";
   editForm.remark = row.remark || "";
   editForm.adminRemark = row.adminRemark || "";
   editVisible.value = true;
@@ -1496,14 +1583,23 @@ function openEdit(row: OrderListItem) {
 
 async function submitEdit() {
   if (!currentOrder.value) return;
+  if (!editForm.reason.trim()) {
+    ElMessage.warning("请填写修改原因");
+    return;
+  }
   const payload: UpdateOrderPayload = {
+    expectedVersion: currentOrder.value.version,
+    reason: editForm.reason.trim(),
     appointmentStartTime: editForm.appointmentStartTime,
     appointmentEndTime: editForm.appointmentEndTime,
-    createdAt: editForm.createdAt,
     remark: editForm.remark || null,
     adminRemark: editForm.adminRemark || null,
   };
-  await LifeAPI.updateOrder(currentOrder.value.id, payload);
+  if (isMemberCardPurchasePage.value) {
+    await LifeAPI.updateOrder(currentOrder.value.id, payload);
+  } else {
+    await LifeAPI.rescheduleBooking(currentOrder.value.id, payload);
+  }
   ElMessage.success("订单已更新");
   editVisible.value = false;
   fetchOrders();
@@ -1511,14 +1607,38 @@ async function submitEdit() {
 
 async function deleteOrder(row: OrderListItem) {
   if (!canDeleteOrders.value) return;
-  await ElMessageBox.confirm(
-    `确认删除订单「${row.orderNo}」吗？该操作会直接删除订单和相关支付、派单、履约记录。`,
-    "删除订单确认",
-    { type: "warning" }
+  const { value } = await ElMessageBox.prompt(
+    `仅会删除无支付、退款、履约、积分和权益事实的待支付草稿「${row.orderNo}」。请输入原因。`,
+    "删除草稿",
+    { type: "warning", inputPattern: /\S{2,}/, inputErrorMessage: "原因至少 2 个字符" }
   );
-  await LifeAPI.deleteOrder(row.id);
-  ElMessage.success("订单已删除");
+  if (isMemberCardPurchasePage.value) {
+    await LifeAPI.deleteOrder(row.id, { version: row.version, reason: value.trim() });
+  } else {
+    await LifeAPI.deleteBookingDraft(row.id, { version: row.version, reason: value.trim() });
+  }
+  ElMessage.success("订单草稿已删除");
   fetchOrders();
+}
+
+async function cancelOrder(row: OrderListItem) {
+  if (!canCancelOrders.value) return;
+  const { value } = await ElMessageBox.prompt(
+    `确认取消订单「${row.orderNo}」吗？已支付订单会进入退款审核。请输入原因。`,
+    "取消订单",
+    { type: "warning", inputPattern: /\S{2,}/, inputErrorMessage: "原因至少 2 个字符" }
+  );
+  if (isMemberCardPurchasePage.value) {
+    await LifeAPI.cancelOrder(row.id, { version: row.version, reason: value.trim() });
+  } else {
+    await LifeAPI.cancelBooking(row.id, { version: row.version, reason: value.trim() });
+  }
+  ElMessage.success(row.paidAt || row.paidAmount > 0 ? "订单已进入退款处理" : "订单已取消");
+  fetchOrders();
+}
+
+function isDraftDeletable(row: OrderListItem) {
+  return Boolean(row.allowedActions?.deleteDraft);
 }
 
 async function batchDeleteOrders() {
@@ -1526,16 +1646,18 @@ async function batchDeleteOrders() {
   const rows = selectedOrders.value;
   if (rows.length === 0) return;
 
-  await ElMessageBox.confirm(
-    `确认批量删除已选的 ${rows.length} 个订单吗？该操作会直接删除订单和相关支付、派单、履约记录。`,
-    "批量删除订单确认",
-    { type: "warning" }
+  const { value } = await ElMessageBox.prompt(
+    `确认删除已选的 ${rows.length} 个待支付草稿吗？请输入统一删除原因。`,
+    "批量删除草稿",
+    { type: "warning", inputPattern: /\S{2,}/, inputErrorMessage: "原因至少 2 个字符" }
   );
 
   batchDeleting.value = true;
   try {
-    await Promise.all(rows.map((row) => LifeAPI.deleteOrder(row.id)));
-    ElMessage.success(`已删除 ${rows.length} 个订单`);
+    await Promise.all(rows.map((row) => isMemberCardPurchasePage.value
+      ? LifeAPI.deleteOrder(row.id, { version: row.version, reason: value.trim() })
+      : LifeAPI.deleteBookingDraft(row.id, { version: row.version, reason: value.trim() })));
+    ElMessage.success(`已删除 ${rows.length} 个订单草稿`);
     selectedOrders.value = [];
     fetchOrders();
   } finally {
@@ -1577,6 +1699,7 @@ function resetCreateForm() {
   createForm.payableAmount = 0;
   createForm.paymentMode = "offline_paid";
   createForm.memberCardId = undefined;
+  createForm.memberCardConsumeMinutes = undefined;
   createForm.couponId = undefined;
   createForm.offlinePaymentRemark = "线下录入已收款";
   createForm.remark = "";
@@ -1718,6 +1841,7 @@ function buildCreateOrderPayload(): AdminCreateOrderPayload | null {
     source: createForm.source,
     paymentMode: createForm.paymentMode,
     memberCardId: createForm.paymentMode === "member_card" ? createForm.memberCardId : undefined,
+    memberCardConsumeMinutes: createForm.paymentMode === "member_card" ? createForm.memberCardConsumeMinutes : undefined,
     couponId: createForm.paymentMode !== "member_card" ? createForm.couponId : undefined,
     offlinePaymentRemark: createForm.paymentMode === "offline_paid" ? trimOrUndefined(createForm.offlinePaymentRemark) : undefined,
     remark: trimOrUndefined(createForm.remark),

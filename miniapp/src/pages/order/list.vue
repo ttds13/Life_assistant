@@ -13,7 +13,9 @@ definePage({
 })
 
 type StatusFilter = 'all' | 'pending_payment' | 'pending_dispatch' | 'in_service' | 'pending_confirm' | 'completed' | 'after_sales'
+type OrderView = 'bookings' | 'member_card_purchase'
 
+const currentView = ref<OrderView>('bookings')
 const currentStatus = ref<StatusFilter>('all')
 const loading = ref(false)
 const orders = ref<UserOrder[]>([])
@@ -28,6 +30,10 @@ const tabs: { label: string, value: StatusFilter }[] = [
   { label: '已完成', value: 'completed' },
   { label: '售后', value: 'after_sales' },
 ]
+const visibleTabs = computed(() => currentView.value === 'member_card_purchase'
+  ? tabs.filter(tab => ['all', 'pending_payment', 'completed', 'after_sales'].includes(tab.value))
+  : tabs,
+)
 
 function normalizeStatusFilter(value: string): StatusFilter | null {
   if (tabs.some(tab => tab.value === value))
@@ -72,7 +78,7 @@ async function loadOrders() {
 
   loading.value = true
   try {
-    const result = await getOrders({ page: 1, pageSize: 100 })
+    const result = await getOrders({ orderType: currentView.value, page: 1, pageSize: 100 })
     orders.value = result.items
   }
   finally {
@@ -98,6 +104,10 @@ function onPrimary(order: UserOrder) {
 
 function onSecondary(order: UserOrder) {
   if (order.status === 'completed') {
+    if (order.orderType === 'member_card_purchase') {
+      uni.navigateTo({ url: `/pages/order/detail?id=${order.id}` })
+      return
+    }
     uni.navigateTo({ url: `/pages/order/after-sales-create?orderId=${order.id}` })
     return
   }
@@ -126,6 +136,14 @@ onLoad((query) => {
   applyStatusFilter(String(query?.status || 'all'))
 })
 
+function switchOrderView(view: OrderView) {
+  if (currentView.value === view)
+    return
+  currentView.value = view
+  currentStatus.value = 'all'
+  void loadOrders()
+}
+
 onShow(() => {
   applyStatusFilter(consumeOrderListFilter())
   loadOrders()
@@ -134,10 +152,28 @@ onShow(() => {
 
 <template>
   <view class="min-h-screen bg-[#F5F7FA] pb-[120rpx]">
+    <view class="bg-white px-4 pt-3">
+      <view class="grid grid-cols-2 h-[72rpx] rounded-[8rpx] bg-[#F3F4F6] p-[4rpx]">
+        <view
+          class="flex items-center justify-center rounded-[6rpx]"
+          :class="currentView === 'bookings' ? 'bg-white text-[#1677FF]' : 'text-gray-500'"
+          @tap="switchOrderView('bookings')"
+        >
+          <text class="text-[27rpx]">服务预约</text>
+        </view>
+        <view
+          class="flex items-center justify-center rounded-[6rpx]"
+          :class="currentView === 'member_card_purchase' ? 'bg-white text-[#1677FF]' : 'text-gray-500'"
+          @tap="switchOrderView('member_card_purchase')"
+        >
+          <text class="text-[27rpx]">会员卡订单</text>
+        </view>
+      </view>
+    </view>
     <view class="bg-white sticky top-0 z-10">
       <scroll-view scroll-x class="whitespace-nowrap px-4 py-3">
         <view
-          v-for="tab in tabs"
+          v-for="tab in visibleTabs"
           :key="tab.value"
           class="inline-flex h-[64rpx] px-4 rounded-full items-center justify-center mr-2"
           :class="currentStatus === tab.value ? 'bg-[#EAF3FF]' : 'bg-[#F3F4F6]'"

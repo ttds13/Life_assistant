@@ -2,9 +2,8 @@ import { Inject, Injectable } from '@nestjs/common'
 import { Order, Prisma } from '@prisma/client'
 import { PrismaService } from '../prisma/prisma.service'
 import { ORDER_TYPE } from '../orders/constants/order-type'
+import { PointsService } from '../points/points.service'
 
-const POINTS_PER_YUAN = 10
-const POINTS_UNIT_YUAN = 0.1
 const POINT_LEDGER_TYPE_EARN = 'earn'
 
 const POINTABLE_ORDER_STATUSES = [
@@ -21,12 +20,16 @@ type PointClient = PrismaService | Prisma.TransactionClient
 
 @Injectable()
 export class UsersService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(PointsService) private readonly points: PointsService,
+  ) {}
 
   async getUserPoints(userId: number) {
+    const rule = await this.points.getConsumerRule()
     const ledgerCount = await this.prisma.pointLedger.count({ where: { userId: BigInt(userId) } })
     if (ledgerCount === 0) {
-      return this.getLegacyUserPoints(userId)
+      return this.getLegacyUserPoints(userId, rule)
     }
 
     const [summary, recentLedgers] = await Promise.all([
@@ -48,7 +51,7 @@ export class UsersService {
       totalPoints,
       totalAmount: totalAmount.toNumber(),
       availablePoints: totalPoints,
-      rule: this.pointRule(),
+      rule: this.pointRule(rule),
       recentEarned: recentLedgers.map(item => this.presentLedger(item)),
       recentTotalAmount: recentLedgers.reduce((sum, item) => sum.add(item.amount || 0), new Prisma.Decimal(0)).toNumber(),
       recentTotalPoints: recentLedgers.reduce((sum, item) => sum + item.points, 0),
@@ -198,7 +201,7 @@ export class UsersService {
     })
   }
 
-  private async getLegacyUserPoints(userId: number) {
+  private async getLegacyUserPoints(userId: number, rule: { earnPointsPerYuan: number, redemptionPointsPerYuan: number, description?: string }) {
     const orders = await this.prisma.order.findMany({
       where: {
         userId: BigInt(userId),
@@ -222,7 +225,7 @@ export class UsersService {
     let totalPoints = 0
     const recentEarned = orders.map((order) => {
       const amount = this.pointableAmount(order.paidAmount, order.payableAmount)
-      const points = this.amountToPoints(amount)
+      const points = this.amountToPoints(amount, rule.earnPointsPerYuan)
       totalAmount = totalAmount.add(amount)
       totalPoints += points
       return {
@@ -251,14 +254,14 @@ export class UsersService {
     for (const order of aggregate) {
       const amount = this.pointableAmount(order.paidAmount, order.payableAmount)
       allAmount = allAmount.add(amount)
-      allPoints += this.amountToPoints(amount)
+      allPoints += this.amountToPoints(amount, rule.earnPointsPerYuan)
     }
 
     return {
       totalPoints: allPoints,
       totalAmount: allAmount.toNumber(),
       availablePoints: allPoints,
-      rule: this.pointRule(),
+      rule: this.pointRule(rule),
       recentEarned,
       recentTotalAmount: totalAmount.toNumber(),
       recentTotalPoints: totalPoints,
@@ -277,8 +280,8 @@ export class UsersService {
       : `订单 ${order.orderNo} 消费积分`
   }
 
-  private amountToPoints(amount: Prisma.Decimal) {
-    return Math.floor(amount.mul(POINTS_PER_YUAN).toNumber())
+  private amountToPoints(amount: Prisma.Decimal, pointsPerYuan = 10) {
+    return Math.floor(amount.mul(pointsPerYuan).toNumber())
   }
 
   private presentLedger(ledger: {
@@ -287,6 +290,7 @@ export class UsersService {
     type: string
     points: number
     amount: Prisma.Decimal | null
+    rewardValue?: Prisma.Decimal | null
     balanceAfter: number
     remark: string | null
     createdAt: Date
@@ -299,6 +303,7 @@ export class UsersService {
       type: ledger.type,
       points: ledger.points,
       amount: ledger.amount?.toNumber() || 0,
+      rewardValue: ledger.rewardValue?.toNumber() || 0,
       balanceAfter: ledger.balanceAfter,
       remark: ledger.remark || '',
       earnedAt: ledger.createdAt.toISOString(),
@@ -306,11 +311,12 @@ export class UsersService {
     }
   }
 
-  private pointRule() {
+  private pointRule(rule: { earnPointsPerYuan: number, redemptionPointsPerYuan: number, description?: string }) {
     return {
-      unitAmount: POINTS_UNIT_YUAN,
-      pointsPerUnit: 1,
-      description: '每实际支付0.1元积1分，低于0.1元的部分不计入积分。',
+      unitAmount: 1,
+      pointsPerUnit: rule.earnPointsPerYuan,
+      redemptionPointsPerYuan: rule.redemptionPointsPerYuan,
+      description: rule.description || `每实际消费 1 元积 ${rule.earnPointsPerYuan} 分，${rule.redemptionPointsPerYuan} 分兑换 1 元。`,
     }
   }
 

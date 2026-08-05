@@ -1,6 +1,8 @@
 <script lang="ts" setup>
-import { cancelOrder, confirmOrder, getOrderDetail, payOrder, rescheduleOrder } from '@/api/orders'
+import { getUserAddresses } from '@/api/address'
+import { cancelOrder, confirmOrder, createRefundRequest, getOrderDetail, payOrder, rescheduleOrder, updateOrderAddress } from '@/api/orders'
 import type { OrderDetail } from '@/api/types/orders'
+import { formatAddress } from '@/utils/addressSelection'
 import { availableAppointmentSlots, buildAppointmentDateOptions, formatAppointmentDate, formatAppointmentTimeSlot } from '@/utils/appointmentSlots'
 import { ensureChineseStatusLabel, getOrderStatusText } from '@/utils/orderStatus'
 import { getWechatPaymentParams, requestWechatPayment } from '@/utils/wechatPayment'
@@ -18,11 +20,16 @@ const actionLoading = ref(false)
 const payLoading = ref(false)
 const rescheduleVisible = ref(false)
 const rescheduleLoading = ref(false)
+const addressChanging = ref(false)
 const selectedDate = ref('')
 const selectedTimeSlot = ref('')
+const isMemberCardPurchase = computed(() => order.value?.orderType === 'member_card_purchase')
 
 const statusInfo = computed(() => {
   const status = order.value?.status
+  if (isMemberCardPurchase.value && status === 'completed') {
+    return { title: '购卡成功', desc: '会员权益已发放到我的会员卡', next: '可查看状态、余额和有效期' }
+  }
   switch (status) {
     case 'pending_payment':
       return { title: '等待支付', desc: '请在订单保留时间内完成支付', next: '下一步：去支付' }
@@ -54,6 +61,11 @@ const statusInfo = computed(() => {
 
 const actionConfig = computed(() => {
   const status = order.value?.status
+  if (isMemberCardPurchase.value) {
+    if (status === 'pending_payment') return { primary: '去支付', secondary: '' }
+    if (status === 'completed') return { primary: '查看我的会员卡', secondary: latestRefund.value ? '' : '申请退款' }
+    return { primary: '查看我的会员卡', secondary: '' }
+  }
   switch (status) {
     case 'pending_payment':
       return { primary: '去支付', secondary: '取消订单' }
@@ -85,6 +97,11 @@ const isPaidCashBooking = computed(() =>
   && !order.value.memberCardId
   && (Boolean(order.value.paidAt) || order.value.paidAmount > 0 || order.value.payableAmount > 0),
 )
+const canChangeAddress = computed(() =>
+  !!order.value?.orderAddress
+  && ['pending_payment', 'pending_dispatch'].includes(order.value.status)
+  && order.value.orderType !== 'member_card_purchase',
+)
 const latestRefund = computed(() => order.value?.latestRefund || order.value?.refunds?.[0] || null)
 const latestTicket = computed(() => order.value?.latestTicket || order.value?.tickets?.[0] || null)
 const activeTicket = computed(() => {
@@ -93,6 +110,7 @@ const activeTicket = computed(() => {
 })
 const canAfterSales = computed(() =>
   !!order.value
+  && !isMemberCardPurchase.value
   && ['accepted', 'on_the_way', 'in_service', 'pending_confirm', 'completed', 'after_sales'].includes(order.value.status),
 )
 const refundStatusInfo = computed(() => {
@@ -257,6 +275,10 @@ function onPrimary() {
     return
   }
   if (order.value.status === 'completed') {
+    if (isMemberCardPurchase.value) {
+      uni.redirectTo({ url: '/pages/card/index' })
+      return
+    }
     uni.showToast({ icon: 'none', title: '当前暂无评价入口' })
     return
   }
@@ -286,9 +308,74 @@ function openAfterSales(mode: 'auto' | 'create' | 'detail' = 'auto') {
   uni.navigateTo({ url: `/pages/order/after-sales-create?orderId=${order.value.id}` })
 }
 
+async function changeOrderAddress() {
+  if (!order.value || !order.value.orderAddress || addressChanging.value)
+    return
+  const addresses = await getUserAddresses()
+  if (!addresses.length) {
+    uni.showToast({ icon: 'none', title: '请先新增服务地址' })
+    return
+  }
+  uni.showActionSheet({
+    itemList: addresses.map(item => formatAddress(item) || `地址 #${item.id}`),
+    success: (selection) => {
+      const address = addresses[selection.tapIndex]
+      if (!address)
+        return
+      if (address.id === order.value?.orderAddress?.sourceAddressId) {
+        uni.showToast({ icon: 'none', title: '当前订单已使用该地址' })
+        return
+      }
+      uni.showModal({
+        title: '修改本单服务地址',
+        content: formatAddress(address),
+        confirmText: '确认修改',
+        success: async (res) => {
+          if (!res.confirm || !order.value?.orderAddress)
+            return
+          addressChanging.value = true
+          try {
+            order.value = await updateOrderAddress(order.value.id, {
+              sourceAddressId: address.id,
+              expectedOrderVersion: order.value.version,
+              expectedOrderAddressVersion: order.value.orderAddress.version,
+              expectedSourceAddressVersion: address.version,
+              reason: '用户修改本单服务地址',
+            })
+            uni.showToast({ icon: 'success', title: '服务地址已修改' })
+          }
+          finally {
+            addressChanging.value = false
+          }
+        },
+      })
+    },
+  })
+}
+
 function onSecondary() {
   if (!order.value)
     return
+  if (isMemberCardPurchase.value && order.value.status === 'completed' && !latestRefund.value) {
+    uni.showModal({
+      title: '申请会员卡退款',
+      content: '仅未激活、未冻结且未核销的会员卡可以退款。确认提交退款审核吗？',
+      success: async (res) => {
+        if (!res.confirm || !order.value)
+          return
+        actionLoading.value = true
+        try {
+          await createRefundRequest(order.value.id, { reason: '用户申请未使用会员卡退款', source: 'miniapp' })
+          await loadOrder()
+          uni.showToast({ icon: 'success', title: '退款申请已提交' })
+        }
+        finally {
+          actionLoading.value = false
+        }
+      },
+    })
+    return
+  }
   if (!['pending_payment', 'pending_dispatch'].includes(order.value.status) && canAfterSales.value) {
     openAfterSales()
     return
@@ -382,7 +469,7 @@ watch(timeSlots, (slots) => {
           </view>
         </form-section>
 
-        <form-section title="预约信息">
+        <form-section v-if="!isMemberCardPurchase" title="预约信息">
           <view class="flex py-2">
             <text class="w-[140rpx] text-[26rpx] text-gray-400">预约时间</text>
             <text class="flex-1 text-[26rpx] text-gray-700">{{ order.appointmentTime }}</text>
@@ -398,7 +485,18 @@ watch(timeSlots, (slots) => {
           </view>
           <view class="flex py-2">
             <text class="w-[140rpx] text-[26rpx] text-gray-400">服务地址</text>
-            <text class="flex-1 text-[26rpx] text-gray-700 leading-[38rpx]">{{ order.addressText }}</text>
+            <view class="flex-1">
+              <text class="block text-[26rpx] text-gray-700 leading-[38rpx]">{{ order.addressText }}</text>
+              <button
+                v-if="canChangeAddress"
+                class="mt-2 h-[60rpx] px-4 rounded-full bg-[#EAF3FF] text-[#1677FF] text-[24rpx] inline-flex items-center justify-center"
+                :loading="addressChanging"
+                :disabled="addressChanging"
+                @tap="changeOrderAddress"
+              >
+                修改本单地址
+              </button>
+            </view>
           </view>
           <view class="flex py-2">
             <text class="w-[140rpx] text-[26rpx] text-gray-400">用户备注</text>
@@ -406,7 +504,7 @@ watch(timeSlots, (slots) => {
           </view>
         </form-section>
 
-        <form-section title="师傅信息">
+        <form-section v-if="!isMemberCardPurchase" title="师傅信息">
           <view v-if="order.staffName" class="flex items-center justify-between">
             <view>
               <text class="text-[30rpx] font-600 text-gray-800 block">{{ order.staffName }}</text>
@@ -470,6 +568,35 @@ watch(timeSlots, (slots) => {
           </view>
         </form-section>
 
+        <form-section v-if="isMemberCardPurchase && order.memberCardPurchase" title="发卡信息">
+          <view class="flex py-2">
+            <text class="w-[180rpx] text-[26rpx] text-gray-400">模板版本</text>
+            <text class="flex-1 text-[26rpx] text-gray-700">v{{ order.memberCardPurchase.memberCardPlanVersion }}</text>
+          </view>
+          <view class="flex py-2">
+            <text class="w-[180rpx] text-[26rpx] text-gray-400">用户卡 ID</text>
+            <text class="flex-1 text-[26rpx] text-gray-700">{{ order.memberCardPurchase.grantedUserMemberCardId || '支付后发放' }}</text>
+          </view>
+          <template v-if="order.memberCardPurchase.userCard">
+            <view class="flex py-2">
+              <text class="w-[180rpx] text-[26rpx] text-gray-400">权益状态</text>
+              <text class="flex-1 text-[26rpx] text-gray-700">{{ order.memberCardPurchase.userCard.status }}</text>
+            </view>
+            <view class="flex py-2">
+              <text class="w-[180rpx] text-[26rpx] text-gray-400">剩余 / 冻结</text>
+              <text class="flex-1 text-[26rpx] text-gray-700">{{ order.memberCardPurchase.userCard.remainingMinutes }} / {{ order.memberCardPurchase.userCard.frozenMinutes }} 分钟</text>
+            </view>
+            <view class="flex py-2">
+              <text class="w-[180rpx] text-[26rpx] text-gray-400">激活截止</text>
+              <text class="flex-1 text-[26rpx] text-gray-700">{{ order.memberCardPurchase.userCard.activationDeadlineAt || '-' }}</text>
+            </view>
+            <view class="flex py-2">
+              <text class="w-[180rpx] text-[26rpx] text-gray-400">权益到期</text>
+              <text class="flex-1 text-[26rpx] text-gray-700">{{ order.memberCardPurchase.userCard.expireAt || '激活后计算' }}</text>
+            </view>
+          </template>
+        </form-section>
+
         <form-section v-if="latestRefund && refundStatusInfo" title="退款信息">
           <view class="rounded-[12rpx] p-3" :class="refundStatusInfo.className">
             <view class="flex items-center justify-between">
@@ -518,7 +645,7 @@ watch(timeSlots, (slots) => {
           </view>
         </form-section>
 
-        <form-section title="服务凭证">
+        <form-section v-if="!isMemberCardPurchase" title="服务凭证">
           <view v-if="order.servicePhotos && order.servicePhotos.length" class="flex flex-wrap gap-2">
             <image v-for="photo in order.servicePhotos" :key="photo" :src="photo" class="w-[160rpx] h-[160rpx] rounded-[12rpx] bg-[#F3F4F6]" mode="aspectFill" />
           </view>

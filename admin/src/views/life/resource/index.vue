@@ -44,8 +44,19 @@
           <el-tag v-if="queryParams.userMemberCardId" type="success" effect="plain" closable @close="clearUserMemberCardFilter">
             用户会员卡 #{{ queryParams.userMemberCardId }}
           </el-tag>
+          <el-tag v-if="queryParams.userId" type="primary" effect="plain" closable @close="clearUserFilter">
+            用户 #{{ queryParams.userId }}
+          </el-tag>
         </div>
         <div class="page-toolbar__right">
+          <el-button
+            v-if="moduleKey === 'userMemberCards' && canGrantUserMemberCard"
+            type="primary"
+            icon="plus"
+            @click="openGrantCardFromContext"
+          >
+            发放权益卡
+          </el-button>
           <el-button icon="refresh" @click="fetchPage">刷新</el-button>
         </div>
       </div>
@@ -81,21 +92,22 @@
             <span v-else>{{ formatValue(row[column.prop], column.type) }}</span>
           </template>
         </el-table-column>
-        <el-table-column fixed="right" label="操作" width="430">
+        <el-table-column fixed="right" label="操作" width="520">
           <template #default="{ row }">
             <el-button type="primary" link size="small" icon="view" @click="handleView(row)">
               查看
             </el-button>
-            <el-button
-              v-for="action in pageConfig?.rowActions || []"
-              :key="action.key"
-              :type="action.type || 'primary'"
-              link
-              size="small"
-              @click="handleRowAction(action.key, row)"
-            >
-              {{ action.label }}
-            </el-button>
+            <template v-for="action in pageConfig?.rowActions || []" :key="action.key">
+              <el-button
+                v-if="canRunRowAction(action.key, row)"
+                :type="action.type || 'primary'"
+                link
+                size="small"
+                @click="handleRowAction(action.key, row)"
+              >
+                {{ action.label }}
+              </el-button>
+            </template>
             <el-button
               v-if="moduleKey === 'users'"
               :type="isStaffRole(row) ? 'warning' : 'success'"
@@ -468,8 +480,23 @@
         <el-form-item label="用户">
           <el-text>{{ grantCardUser?.nickname || grantCardUser?.phone || grantCardUser?.id }}</el-text>
         </el-form-item>
-        <el-form-item label="会员卡模板ID" required>
-          <el-input-number v-model="grantCardForm.cardId" :min="1" :step="1" style="width: 100%" />
+        <el-form-item label="权益卡模板" required>
+          <el-select
+            v-model="grantCardForm.cardId"
+            filterable
+            remote
+            :remote-method="loadGrantCardOptions"
+            :loading="grantCardOptionsLoading"
+            placeholder="搜索并选择已发布模板"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="item in grantCardOptions"
+              :key="item.id"
+              :label="`${item.name} / ${item.code}`"
+              :value="Number(item.id)"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="发放额度">
           <el-input-number v-model="grantCardForm.totalUnits" :min="0" :step="1" style="width: 100%" />
@@ -707,7 +734,9 @@ import type {
   LifeResourceRecord,
   LifeSelectOption,
   LifeStatusOption,
+  MemberCardProduct,
 } from "@/api/life";
+import { hasPerm } from "@/utils/auth";
 
 const route = useRoute();
 const router = useRouter();
@@ -717,6 +746,18 @@ const moduleKey = computed(() => {
     route.query.module ||
     "users") as LifeModuleKey;
 });
+const canGrantUserMemberCard = computed(() => hasPerm("user-member-card:grant"));
+
+function newIdempotencyKey(prefix: string) {
+  const uuid = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${uuid}`;
+}
+
+const ACTIVE_DEFAULT_MODULES = new Set<LifeModuleKey>(["serviceCategories", "services"]);
+
+function defaultStatusForModule(module: LifeModuleKey) {
+  return ACTIVE_DEFAULT_MODULES.has(module) ? "active" : "";
+}
 
 const loading = ref(false);
 const saving = ref(false);
@@ -738,6 +779,8 @@ const existingCustomer = ref<LifeResourceRecord>();
 const grantCardVisible = ref(false);
 const grantCardSaving = ref(false);
 const grantCardUser = ref<LifeResourceRecord>();
+const grantCardOptions = ref<MemberCardProduct[]>([]);
+const grantCardOptionsLoading = ref(false);
 const pointsDialogVisible = ref(false);
 const pointsLoading = ref(false);
 const pointsSaving = ref(false);
@@ -822,6 +865,7 @@ const queryParams = reactive({
   pageSize: 10,
   keywords: "",
   status: "",
+  userId: "",
   userMemberCardId: "",
   orderId: "",
   orderNo: "",
@@ -894,6 +938,16 @@ watch(
   }
 );
 
+onMounted(() => {
+  if (moduleKey.value === "userMemberCards" && route.query.grant === "1" && canGrantUserMemberCard.value) {
+    void openGrantCardFromContext().then(() => {
+      const query = { ...route.query };
+      delete query.grant;
+      void router.replace({ path: route.path, query });
+    });
+  }
+});
+
 watch(
   () => customerForm.nickname,
   (nickname, oldNickname) => {
@@ -922,6 +976,7 @@ watch(
     moduleKey.value,
     route.query.keywords,
     route.query.status,
+    route.query.userId,
     route.query.userMemberCardId,
     route.query.orderId,
     route.query.orderNo,
@@ -940,7 +995,10 @@ function routeQueryText(value: unknown) {
 
 function applyRouteFilters() {
   queryParams.keywords = routeQueryText(route.query.keywords);
-  queryParams.status = routeQueryText(route.query.status);
+  queryParams.status = route.query.status === undefined
+    ? defaultStatusForModule(moduleKey.value)
+    : routeQueryText(route.query.status);
+  queryParams.userId = routeQueryText(route.query.userId);
   queryParams.userMemberCardId = routeQueryText(route.query.userMemberCardId);
   queryParams.orderId = routeQueryText(route.query.orderId);
   queryParams.orderNo = routeQueryText(route.query.orderNo);
@@ -964,7 +1022,8 @@ async function fetchPage() {
 function handleReset() {
   queryParams.pageNum = 1;
   queryParams.keywords = "";
-  queryParams.status = "";
+  queryParams.status = defaultStatusForModule(moduleKey.value);
+  queryParams.userId = routeQueryText(route.query.userId);
   queryParams.userMemberCardId = "";
   queryParams.orderId = "";
   queryParams.orderNo = "";
@@ -977,6 +1036,14 @@ function clearUserMemberCardFilter() {
   queryParams.orderNo = "";
   queryParams.pageNum = 1;
   fetchPage();
+}
+
+function clearUserFilter() {
+  queryParams.userId = "";
+  queryParams.pageNum = 1;
+  const query = { ...route.query };
+  delete query.userId;
+  void router.replace({ path: route.path, query });
 }
 
 function handleCreate() {
@@ -1058,7 +1125,27 @@ function handleEdit(row: LifeResourceRecord) {
   formVisible.value = true;
 }
 
+function canRunRowAction(action: string, row: LifeResourceRecord) {
+  if (moduleKey.value !== "userMemberCards") return true;
+  const allowed = (row.allowedActions || {}) as Record<string, unknown>;
+  const rules: Record<string, { permission: string; capability?: string }> = {
+    adjust_member_card_time: { permission: "user-member-card:adjust", capability: "adjust" },
+    manual_consume_member_card: { permission: "user-member-card:adjust", capability: "adjust" },
+    extend_member_card: { permission: "user-member-card:update", capability: "extend" },
+    toggle_member_card_suspend: { permission: "user-member-card:suspend", capability: "suspend" },
+    complete_member_card: { permission: "user-member-card:update", capability: "update" },
+    revoke_member_card: { permission: "user-member-card:revoke", capability: "revoke" },
+    delete_member_card_draft: { permission: "user-member-card:delete-draft", capability: "deleteDraft" },
+  };
+  const rule = rules[action];
+  if (!rule) return true;
+  return hasPerm(rule.permission) && (!rule.capability || allowed[rule.capability] === true);
+}
+
 function handleRowAction(action: string, row: LifeResourceRecord) {
+  if (action === "user_commerce") {
+    router.push(`/users/detail/${row.id}/commerce`);
+  }
   if (action === "addresses") {
     openOwnerAddresses(row);
   }
@@ -1074,8 +1161,23 @@ function handleRowAction(action: string, row: LifeResourceRecord) {
   if (action === "adjust_member_card_time") {
     openMemberCardAdjust(row);
   }
+  if (action === "extend_member_card") {
+    void extendMemberCard(row);
+  }
   if (action === "manual_consume_member_card") {
     openMemberCardManualConsume(row);
+  }
+  if (action === "toggle_member_card_suspend") {
+    void toggleMemberCardSuspend(row);
+  }
+  if (action === "complete_member_card") {
+    void completeMemberCard(row);
+  }
+  if (action === "revoke_member_card") {
+    void revokeMemberCard(row);
+  }
+  if (action === "delete_member_card_draft") {
+    void deleteMemberCardDraft(row);
   }
   if (action === "view_member_card_records") {
     openMemberCardRecords(row);
@@ -1125,6 +1227,35 @@ function openGrantCard(row: LifeResourceRecord) {
   grantCardForm.paymentRemark = "";
   grantCardForm.remark = "";
   grantCardVisible.value = true;
+  void loadGrantCardOptions();
+}
+
+async function openGrantCardFromContext() {
+  let userId = Number(queryParams.userId || route.query.userId);
+  if (!Number.isInteger(userId) || userId < 1) {
+    const { value } = await ElMessageBox.prompt("请输入要发放权益卡的用户 ID", "选择用户", {
+      inputPattern: /^[1-9]\d*$/,
+      inputErrorMessage: "请输入有效用户 ID",
+    });
+    userId = Number(value);
+  }
+  const user = await LifeAPI.getAdminUser(userId);
+  openGrantCard(user);
+}
+
+async function loadGrantCardOptions(keyword = "") {
+  grantCardOptionsLoading.value = true;
+  try {
+    const data = await LifeAPI.getMemberCardProducts({
+      page: 1,
+      pageSize: 30,
+      keyword: keyword.trim() || undefined,
+      status: "active",
+    });
+    grantCardOptions.value = data.items || [];
+  } finally {
+    grantCardOptionsLoading.value = false;
+  }
 }
 
 async function submitGrantCard() {
@@ -1148,6 +1279,7 @@ async function submitGrantCard() {
     });
     ElMessage.success("会员卡已发放");
     grantCardVisible.value = false;
+    await fetchPage();
   } finally {
     grantCardSaving.value = false;
   }
@@ -1180,6 +1312,7 @@ async function submitPointAdjust() {
       points: pointAdjustForm.points,
       amount: pointAdjustForm.amount || undefined,
       remark: pointAdjustForm.remark.trim() || undefined,
+      idempotencyKey: newIdempotencyKey("points-adjust"),
     });
     ElMessage.success("积分已调整");
     pointAdjustForm.points = 0;
@@ -1209,6 +1342,104 @@ function openMemberCardAdjust(row: LifeResourceRecord) {
 
 function openMemberCardManualConsume(row: LifeResourceRecord) {
   resetMemberCardAdjustForm(row, "deduct", true);
+}
+
+function validateActionReason(value: string) {
+  const length = value.trim().length;
+  return (length >= 2 && length <= 200) || "原因需填写 2-200 个字符";
+}
+
+async function extendMemberCard(row: LifeResourceRecord) {
+  const { value: daysText } = await ElMessageBox.prompt("请输入延期天数（1-3650）", "延期权益卡", {
+    inputValue: "30",
+    inputValidator: (value) => {
+      const days = Number(value);
+      return (Number.isInteger(days) && days >= 1 && days <= 3650) || "请输入 1-3650 的整数";
+    },
+    confirmButtonText: "下一步",
+    cancelButtonText: "取消",
+  });
+  const { value: reason } = await ElMessageBox.prompt("请填写延期原因", "确认延期", {
+    inputValidator: validateActionReason,
+    confirmButtonText: "确认延期",
+    cancelButtonText: "取消",
+  });
+  await LifeAPI.extendUserMemberCard(String(row.id), {
+    days: Number(daysText),
+    reason: reason.trim(),
+    expectedVersion: Number(row.version || 0),
+    idempotencyKey: newIdempotencyKey("card-extend"),
+  });
+  ElMessage.success("权益卡已延期");
+  await fetchPage();
+}
+
+async function toggleMemberCardSuspend(row: LifeResourceRecord) {
+  const suspended = row.availabilityState === "suspended";
+  if (suspended) {
+    const { value } = await ElMessageBox.prompt("请填写恢复原因", "恢复权益卡", {
+      inputValidator: validateActionReason,
+      confirmButtonText: "确认恢复",
+      cancelButtonText: "取消",
+    });
+    await LifeAPI.resumeUserMemberCard(String(row.id), value.trim(), Number(row.version || 0), newIdempotencyKey("card-resume"));
+    ElMessage.success("权益卡已恢复");
+  } else {
+    const { value } = await ElMessageBox.prompt("请填写暂停原因", "暂停权益卡", {
+      inputValidator: validateActionReason,
+      confirmButtonText: "暂停",
+      cancelButtonText: "取消",
+    });
+    await LifeAPI.suspendUserMemberCard(String(row.id), value.trim(), Number(row.version || 0), newIdempotencyKey("card-suspend"));
+    ElMessage.success("权益卡已暂停");
+  }
+  await fetchPage();
+}
+
+async function completeMemberCard(row: LifeResourceRecord) {
+  const { value } = await ElMessageBox.prompt("请填写完成/停用原因", "完成权益卡", {
+    inputPattern: /\S+/,
+    inputErrorMessage: "原因不能为空",
+    confirmButtonText: "完成",
+    cancelButtonText: "取消",
+  });
+  await LifeAPI.updateResourceStatus("userMemberCards", String(row.id), "completed", value.trim());
+  ElMessage.success("权益卡已完成");
+  await fetchPage();
+}
+
+async function revokeMemberCard(row: LifeResourceRecord) {
+  const cardName = recordText(row, "cardName") || `#${row.id}`;
+  const { value } = await ElMessageBox.prompt(
+    `仅可撤销未使用、无冻结且由后台免费发放的权益卡。请输入撤销 ${cardName} 的原因`,
+    "撤销权益卡",
+    {
+      type: "warning",
+      inputValidator: validateActionReason,
+      confirmButtonText: "确认撤销",
+      cancelButtonText: "取消",
+    },
+  );
+  await LifeAPI.revokeUserMemberCard(String(row.id), value.trim(), Number(row.version || 0), newIdempotencyKey("card-revoke"));
+  ElMessage.success("权益卡已撤销");
+  await fetchPage();
+}
+
+async function deleteMemberCardDraft(row: LifeResourceRecord) {
+  const cardName = recordText(row, "cardName") || `#${row.id}`;
+  const { value } = await ElMessageBox.prompt(
+    `将永久删除待激活草稿 ${cardName}。仅无购买、冻结、核销和调整事实的后台赠送卡可删除，请填写原因`,
+    "删除权益卡草稿",
+    {
+      type: "error",
+      inputValidator: validateActionReason,
+      confirmButtonText: "确认删除",
+      cancelButtonText: "取消",
+    },
+  );
+  await LifeAPI.deleteUserMemberCardDraft(String(row.id), value.trim(), Number(row.version || 0), newIdempotencyKey("card-delete"));
+  ElMessage.success("权益卡草稿已删除");
+  await fetchPage();
 }
 
 function openMemberCardRecords(row: LifeResourceRecord) {
@@ -1251,7 +1482,7 @@ async function submitMemberCardAdjust() {
   memberCardAdjustSaving.value = true;
   try {
     const mode = memberCardAdjustForm.operation === "target" ? "target" : "delta";
-    const deltaUnits = memberCardAdjustForm.operation === "target"
+    const deltaMinutes = memberCardAdjustForm.operation === "target"
       ? undefined
       : memberCardAdjustForm.operation === "deduct"
         ? -Math.abs(memberCardAdjustForm.units)
@@ -1260,9 +1491,11 @@ async function submitMemberCardAdjust() {
     const reason = remark ? `${rawReason}；备注：${remark}` : rawReason;
     await LifeAPI.adjustUserMemberCardTime(String(row.id), {
       mode,
-      deltaUnits,
-      targetRemainingUnits: memberCardAdjustForm.operation === "target" ? memberCardAdjustForm.targetRemainingUnits : undefined,
+      deltaMinutes,
+      targetRemainingMinutes: memberCardAdjustForm.operation === "target" ? memberCardAdjustForm.targetRemainingUnits : undefined,
       reason,
+      expectedVersion: Number(row.version || 0),
+      idempotencyKey: newIdempotencyKey("card-adjust"),
     });
     ElMessage.success(memberCardManualConsume.value ? "会员卡已手动核销" : "会员卡时长已调整");
     memberCardAdjustVisible.value = false;
@@ -1644,6 +1877,7 @@ function buildAddressPayload() {
     detailAddress: addressFormModel.detailAddress.trim(),
     houseNumber: addressFormModel.houseNumber.trim() || undefined,
     isDefault: addressFormModel.isDefault,
+    expectedVersion: editingAddress.value?.version,
   };
 }
 

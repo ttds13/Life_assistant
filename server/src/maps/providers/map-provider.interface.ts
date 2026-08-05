@@ -16,6 +16,8 @@ export interface MapReverseGeocodeResult {
   province: string
   city: string
   district: string
+  street: string
+  streetNumber: string
   address: string
   formattedAddress: string
   pois: MapPlaceSuggestion[]

@@ -2,7 +2,6 @@ import { getEnvBaseUrl } from '@/utils'
 import { useTokenStore } from '@/store/token'
 import { useUserStore } from '@/store/user'
 import { refreshLogin } from '@/api/auth'
-import { avatarDebugLog } from './avatarDebugLog'
 
 export interface UploadedImage {
   id?: number | string
@@ -60,12 +59,10 @@ async function resolveUploadToken() {
 
 export async function uploadImage(options: UploadImageOptions): Promise<UploadedImage> {
   const token = await resolveUploadToken()
-  avatarDebugLog('upload token resolved', { hasToken: !!token, tokenLength: token.length })
   try {
     return await uploadImageByFile(options, token)
   }
   catch (error) {
-    avatarDebugLog('upload_image_file_failed_try_base64', error, 'error')
     return uploadImageByBase64(options, token, error)
   }
 }
@@ -82,10 +79,6 @@ async function uploadImageByFile(options: UploadImageOptions, token: string): Pr
         ...(options.bizId !== undefined ? { bizId: String(options.bizId) } : {}),
       },
       success: (uploadRes) => {
-        avatarDebugLog('upload image file response', {
-          statusCode: uploadRes.statusCode,
-          data: uploadRes.data,
-        })
         try {
           const rawData = typeof uploadRes.data === 'string' ? uploadRes.data : String(uploadRes.data)
           const parsed = rawData ? JSON.parse(rawData) : {}
@@ -112,7 +105,6 @@ async function uploadImageByFile(options: UploadImageOptions, token: string): Pr
         }
       },
       fail: (error) => {
-        avatarDebugLog('upload image file failed', error, 'error')
         reject(error)
       },
     })
@@ -150,10 +142,6 @@ async function uploadImageByBase64(options: UploadImageOptions, token: string, c
         ...(options.bizId !== undefined ? { bizId: String(options.bizId) } : {}),
       },
       success: (res) => {
-        avatarDebugLog('upload image base64 response', {
-          statusCode: res.statusCode,
-          data: res.data,
-        })
         try {
           const parsed: any = res.data || {}
           if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -179,7 +167,6 @@ async function uploadImageByBase64(options: UploadImageOptions, token: string, c
         }
       },
       fail: (error) => {
-        avatarDebugLog('upload image base64 failed', error, 'error')
         const original = parseUploadError(cause)
         const fallback = parseUploadError(error)
         reject(new Error(`${fallback}; original: ${original}`))

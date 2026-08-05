@@ -7,6 +7,11 @@ import { ErrorCode } from '../common/errors/error-code'
 import { getRequestId, RequestWithContext } from '../common/utils/request-context'
 import { AdminBusinessService } from './admin-business.service'
 import { AdminAuditReviewDto, AdminPageQueryDto, AdminStatusDto, AdminTicketMessageDto, AdminUserRoleDto } from './dto/admin-business.dto'
+import {
+  AdminUserMemberCardActionDto,
+  AdminUserMemberCardAdjustDto,
+  AdminUserMemberCardExtendDto,
+} from './dto/admin-user-member-card-action.dto'
 
 @Controller('admin')
 @UseGuards(AdminAuthGuard)
@@ -17,6 +22,45 @@ export class AdminBusinessController {
   @RequireAdminPermissions(ADMIN_PERMISSION.DASHBOARD_VIEW)
   getDashboard() {
     return this.service.getDashboard()
+  }
+
+  @Get('permission-catalog')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADMIN_ROLE_LIST)
+  getAdminPermissionCatalog() {
+    return this.service.getAdminPermissionCatalog()
+  }
+
+  @Get('roles')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADMIN_ROLE_LIST)
+  listAdminRoles() {
+    return this.service.listAdminRoles()
+  }
+
+  @Post('roles')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADMIN_ROLE_UPDATE)
+  @HttpCode(200)
+  createAdminRole(@Req() request: RequestWithContext, @Body() body: Record<string, unknown>) {
+    return this.service.createAdminRole(body, this.context(request))
+  }
+
+  @Put('roles/:id')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADMIN_ROLE_UPDATE)
+  @HttpCode(200)
+  updateAdminRole(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
+    return this.service.updateAdminRole(this.parseId(idText), body, this.context(request))
+  }
+
+  @Get('admin-users/role-assignments')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADMIN_ROLE_ASSIGN)
+  listAdminUsersForRoleAssignment() {
+    return this.service.listAdminUsersForRoleAssignment()
+  }
+
+  @Put('admin-users/:id/role')
+  @RequireAdminPermissions(ADMIN_PERMISSION.ADMIN_ROLE_ASSIGN)
+  @HttpCode(200)
+  assignAdminRole(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
+    return this.service.assignAdminRole(this.parseId(idText), body, this.context(request))
   }
 
   @Get('users')
@@ -151,6 +195,76 @@ export class AdminBusinessController {
   @HttpCode(200)
   deleteService(@Req() request: RequestWithContext, @Param('id') idText: string) {
     return this.service.deleteService(this.parseId(idText), this.context(request))
+  }
+
+  @Get('member-card-products')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_LIST)
+  listMemberCardProducts(@Query() query: AdminPageQueryDto) {
+    return this.service.listMemberCardProducts(query)
+  }
+
+  @Post('member-card-products')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_CREATE)
+  @HttpCode(200)
+  createMemberCardProduct(@Req() request: RequestWithContext, @Body() body: Record<string, unknown>) {
+    return this.service.createMemberCardProduct(body, this.context(request))
+  }
+
+  @Get('member-card-products/:id')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_LIST)
+  getMemberCardProduct(@Param('id') idText: string) {
+    return this.service.getMemberCardProduct(this.parseId(idText))
+  }
+
+  @Put('member-card-products/:id')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_UPDATE)
+  @HttpCode(200)
+  updateMemberCardProduct(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
+    return this.service.updateMemberCardProduct(this.parseId(idText), body, this.context(request))
+  }
+
+  @Delete('member-card-products/:id')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_UPDATE)
+  @HttpCode(200)
+  deleteMemberCardProduct(@Req() request: RequestWithContext, @Param('id') idText: string) {
+    return this.service.deleteMemberCardProduct(this.parseId(idText), this.context(request))
+  }
+
+  @Put('member-card-products/:id/status')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_UPDATE)
+  @HttpCode(200)
+  updateMemberCardProductStatus(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminStatusDto) {
+    return this.service.updateMemberCardProductStatus(this.parseId(idText), dto, this.context(request))
+  }
+
+  @Post('member-card-products/:id/publish')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_UPDATE)
+  @HttpCode(200)
+  publishMemberCardProduct(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
+    return this.service.publishMemberCardProduct(this.parseId(idText), body, this.context(request))
+  }
+
+  @Get('member-card-products/:id/versions')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_LIST)
+  listMemberCardProductVersions(@Param('id') idText: string) {
+    return this.service.listMemberCardPlanVersions(this.parseId(idText))
+  }
+
+  @Get('member-card-products/:id/versions/:versionId')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_LIST)
+  getMemberCardProductVersion(@Param('id') idText: string, @Param('versionId') versionIdText: string) {
+    return this.service.getMemberCardPlanVersion(this.parseId(idText), this.parseId(versionIdText))
+  }
+
+  @Post('member-card-products/:id/versions/:versionId/copy-to-draft')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_UPDATE)
+  @HttpCode(200)
+  copyMemberCardProductVersionToDraft(
+    @Req() request: RequestWithContext,
+    @Param('id') idText: string,
+    @Param('versionId') versionIdText: string,
+  ) {
+    return this.service.copyMemberCardPlanVersionToDraft(this.parseId(idText), this.parseId(versionIdText), this.context(request))
   }
 
   @Get('home-banners')
@@ -322,6 +436,12 @@ export class AdminBusinessController {
     return this.service.getMemberCardServiceRules(this.parseId(idText))
   }
 
+  @Get('member-cards/:id/versions')
+  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_LIST)
+  listMemberCardPlanVersions(@Param('id') idText: string) {
+    return this.service.listMemberCardPlanVersions(this.parseId(idText))
+  }
+
   @Put('member-cards/:id/service-rules')
   @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_UPDATE)
   @HttpCode(200)
@@ -351,29 +471,72 @@ export class AdminBusinessController {
   }
 
   @Get('user-member-cards')
-  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_LIST)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_COMMERCE_LIST)
   listUserMemberCards(@Query() query: AdminPageQueryDto) {
     return this.service.listUserMemberCards(query)
   }
 
   @Get('user-member-cards/:id')
-  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_LIST)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_COMMERCE_DETAIL)
   getUserMemberCard(@Param('id') idText: string) {
     return this.service.getUserMemberCard(this.parseId(idText))
   }
 
   @Put('user-member-cards/:id/status')
-  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_UPDATE)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_MEMBER_CARD_UPDATE)
   @HttpCode(200)
   updateUserMemberCardStatus(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminStatusDto) {
     return this.service.updateUserMemberCardStatus(this.parseId(idText), dto, this.context(request))
   }
 
   @Post('user-member-cards/:id/adjust-time')
-  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_UPDATE)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_MEMBER_CARD_ADJUST)
   @HttpCode(200)
-  adjustUserMemberCardTime(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: Record<string, unknown>) {
+  adjustUserMemberCardTime(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() body: AdminUserMemberCardAdjustDto) {
     return this.service.adjustUserMemberCardTime(this.parseId(idText), body, this.context(request))
+  }
+
+  @Post('user-member-cards/:id/extend')
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_MEMBER_CARD_UPDATE)
+  @HttpCode(200)
+  extendUserMemberCard(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminUserMemberCardExtendDto) {
+    return this.service.extendUserMemberCard(this.parseId(idText), dto, this.context(request))
+  }
+
+  @Post('user-member-cards/:id/suspend')
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_MEMBER_CARD_SUSPEND)
+  @HttpCode(200)
+  suspendUserMemberCard(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminUserMemberCardActionDto) {
+    return this.service.updateUserMemberCardStatus(
+      this.parseId(idText),
+      { status: 'suspended', reason: dto.reason, expectedVersion: dto.expectedVersion, idempotencyKey: dto.idempotencyKey },
+      this.context(request),
+    )
+  }
+
+  @Post('user-member-cards/:id/resume')
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_MEMBER_CARD_SUSPEND)
+  @HttpCode(200)
+  resumeUserMemberCard(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminUserMemberCardActionDto) {
+    return this.service.updateUserMemberCardStatus(
+      this.parseId(idText),
+      { status: 'available', reason: dto.reason, expectedVersion: dto.expectedVersion, idempotencyKey: dto.idempotencyKey },
+      this.context(request),
+    )
+  }
+
+  @Post('user-member-cards/:id/revoke')
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_MEMBER_CARD_REVOKE)
+  @HttpCode(200)
+  revokeUserMemberCard(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminUserMemberCardActionDto) {
+    return this.service.revokeUserMemberCard(this.parseId(idText), dto, this.context(request))
+  }
+
+  @Delete('user-member-cards/:id/draft')
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_MEMBER_CARD_DELETE_DRAFT)
+  @HttpCode(200)
+  deleteUserMemberCardDraft(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminUserMemberCardActionDto) {
+    return this.service.deleteUserMemberCardDraft(this.parseId(idText), dto, this.context(request))
   }
 
   @Get('member-card-records')

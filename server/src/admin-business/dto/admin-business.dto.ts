@@ -132,6 +132,22 @@ export class AdminStatusDto {
   @IsString()
   @Transform(({ value }) => String(value || '').trim())
   status: string
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Transform(({ value }) => toOptionalNumber(value))
+  expectedVersion?: number
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  idempotencyKey?: string
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => trimOptional(value))
+  reason?: string
 }
 
 export class AdminUserRoleDto {

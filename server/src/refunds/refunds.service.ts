@@ -6,6 +6,7 @@ import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { CouponsService } from '../coupons/coupons.service'
 import { MemberCardsService } from '../member-cards/member-cards.service'
+import { MEMBER_CARD_RECORD_TYPE } from '../member-cards/constants/member-card'
 import { ORDER_ACTION } from '../orders/constants/order-action'
 import { ORDER_STATUS } from '../orders/constants/order-status'
 import { ORDER_TYPE } from '../orders/constants/order-type'
@@ -13,6 +14,7 @@ import { PAYMENT_CHANNEL, PaymentChannel } from '../payments/constants/payment-c
 import { PAYMENT_STATUS } from '../payments/constants/payment-status'
 import { WechatPayClient } from '../payments/wechat-pay.client'
 import { PrismaService } from '../prisma/prisma.service'
+import { PointsService } from '../points/points.service'
 import { UsersService } from '../users/users.service'
 import { CreateRefundRequestDto } from './dto/create-refund-request.dto'
 import { RejectRefundDto, ReviewRefundDto } from './dto/review-refund.dto'
@@ -49,6 +51,7 @@ export class RefundsService {
     @Inject(MemberCardsService) private readonly memberCards: MemberCardsService,
     @Inject(CouponsService) private readonly coupons: CouponsService,
     @Inject(UsersService) private readonly users: UsersService,
+    @Inject(PointsService) private readonly points: PointsService,
   ) {}
 
   async createUserRefundRequest(userId: number, orderId: number, dto: CreateRefundRequestDto, requestId?: string) {
@@ -65,10 +68,18 @@ export class RefundsService {
       if (order.status === ORDER_STATUS.REFUND_PENDING || order.status === ORDER_STATUS.REFUNDED) {
         return this.findActiveRefundForOrder(tx, order.id)
       }
-      if (order.status !== ORDER_STATUS.PENDING_DISPATCH) {
-        throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order cannot request refund here', 409)
+      if (order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE) {
+        if (order.status !== ORDER_STATUS.COMPLETED) {
+          throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'member card purchase cannot request refund here', 409)
+        }
+        await this.assertMemberCardPurchaseRefundable(tx, order)
       }
-      this.assertRefundablePaidBooking(order)
+      else {
+        if (order.status !== ORDER_STATUS.PENDING_DISPATCH) {
+          throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order cannot request refund here', 409)
+        }
+        await this.assertRefundablePaidBooking(tx, order)
+      }
 
       const created = await this.createRefundRequestForOrder({
         tx,
@@ -501,12 +512,7 @@ export class RefundsService {
       }
 
       await this.coupons.releaseCouponForRefund(tx, current.orderId)
-      await this.users.ensureRefundDeductPointsForOrder(
-        tx,
-        current.orderId,
-        current.amount,
-        `退款 ${current.refundNo} 扣回积分`,
-      )
+      await this.points.reverseForRefund(tx, current.orderId, current.id, current.amount, current.refundNo)
       await this.reverseIncomeForRefund(tx, current.orderId, current.refundNo, requestId)
 
       await tx.paymentNotifyLog.create({
@@ -639,9 +645,14 @@ export class RefundsService {
     }
   }
 
-  private async assertMemberCardPurchaseRefundable(tx: Prisma.TransactionClient, order: RefundWithRelations['order']) {
-    const userCard = order.grantedUserMemberCardId
-      ? await tx.userMemberCard.findUnique({ where: { id: order.grantedUserMemberCardId }, include: { card: true } })
+  private async assertMemberCardPurchaseRefundable(
+    tx: Prisma.TransactionClient,
+    order: Pick<Order, 'id' | 'grantedUserMemberCardId'>,
+  ) {
+    const purchase = await tx.memberCardPurchaseOrder.findUnique({ where: { orderId: order.id } })
+    const grantedUserCardId = purchase?.grantedUserMemberCardId || order.grantedUserMemberCardId
+    const userCard = grantedUserCardId
+      ? await tx.userMemberCard.findUnique({ where: { id: grantedUserCardId }, include: { card: true } })
       : null
     if (!userCard) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card grant not found', 409)
@@ -650,15 +661,25 @@ export class RefundsService {
       where: { userMemberCardId: userCard.id },
       select: { recordType: true, units: true },
     })
-    const grantUnits = records.find(item => item.recordType === 'grant')?.units || userCard.card.totalUnits || userCard.remainingUnits
-    const hasUsage = records.some(item => item.recordType !== 'grant' && item.recordType !== 'refund_revoke')
+    const grantUnits = records.find(item => item.recordType === MEMBER_CARD_RECORD_TYPE.ISSUED)?.units
+      || userCard.card.totalUnits
+      || userCard.remainingUnits
+    const nonUsageRecordTypes = new Set<string>([
+      MEMBER_CARD_RECORD_TYPE.ISSUED,
+      MEMBER_CARD_RECORD_TYPE.REFUND_REVOKE,
+    ])
+    const hasUsage = records.some(item => !nonUsageRecordTypes.has(item.recordType))
     if (hasUsage || userCard.frozenUnits > 0 || userCard.remainingUnits !== grantUnits) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card has been used or frozen, refund requires after-sales review', 409)
     }
   }
 
-  private assertRefundablePaidBooking(order: Pick<Order, 'orderType' | 'memberCardId' | 'paidAt' | 'paidAmount' | 'payableAmount'>) {
-    if (order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE || order.memberCardId) {
+  private async assertRefundablePaidBooking(
+    tx: Prisma.TransactionClient,
+    order: Pick<Order, 'id' | 'orderType' | 'memberCardId' | 'paidAt' | 'paidAmount' | 'payableAmount'>,
+  ) {
+    const redemption = await tx.orderRedemption.findUnique({ where: { orderId: order.id }, select: { id: true } })
+    if (order.orderType === ORDER_TYPE.MEMBER_CARD_PURCHASE || order.memberCardId || redemption) {
       throw new BusinessException(ErrorCode.ORDER_STATUS_INVALID, 'order does not use cash refund flow', 409)
     }
     if (!order.paidAt && !order.paidAmount.gt(0) && !order.payableAmount.gt(0)) {

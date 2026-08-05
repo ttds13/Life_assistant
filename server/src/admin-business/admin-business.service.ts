@@ -1,12 +1,21 @@
 import { Inject, Injectable } from '@nestjs/common'
+import { createHash } from 'node:crypto'
+import { ADMIN_PERMISSION, parseRolePermissions } from '../admin-auth/admin-permissions'
 import { Prisma } from '@prisma/client'
 import { hashAdminPassword } from '../admin-auth/admin-password'
+import { addressRevisionSnapshot, clearDefaultAddresses } from '../addresses/address-revision'
 import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
 import { USER_COUPON_STATUS } from '../coupons/coupon-status'
 import { CouponsService } from '../coupons/coupons.service'
-import { MEMBER_CARD_RECORD_TYPE, MEMBER_CARD_TYPE, USER_MEMBER_CARD_STATUS } from '../member-cards/constants/member-card'
+import {
+  MEMBER_CARD_RECORD_TYPE,
+  MEMBER_CARD_TYPE,
+  USER_MEMBER_CARD_AVAILABILITY,
+  USER_MEMBER_CARD_COMPLETED_REASON,
+  USER_MEMBER_CARD_STATUS,
+} from '../member-cards/constants/member-card'
 import { ORDER_STATUS } from '../orders/constants/order-status'
 import { PAYMENT_STATUS } from '../payments/constants/payment-status'
 import { PrismaService } from '../prisma/prisma.service'
@@ -17,9 +26,24 @@ import { ObjectStorageService } from '../storage/storage.service'
 import { WITHDRAW_STATUS } from '../withdrawals/constants/withdraw-status'
 import { WithdrawalsService } from '../withdrawals/withdrawals.service'
 import type { AdminAuditReviewDto, AdminPageQueryDto, AdminStatusDto, AdminUserRoleDto } from './dto/admin-business.dto'
+import type {
+  AdminUserMemberCardActionDto,
+  AdminUserMemberCardAdjustDto,
+  AdminUserMemberCardExtendDto,
+} from './dto/admin-user-member-card-action.dto'
 
 type JsonRecord = Record<string, unknown>
 type StaffBindingClient = PrismaService | Prisma.TransactionClient
+type MemberCardProductWithRelations = Prisma.MemberCardGetPayload<{
+  include: {
+    publishedVersion: true
+    serviceRuleItems: { include: { service: true } }
+    _count: { select: { userCards: true, purchaseOrders: true, serviceRuleItems: true } }
+  }
+}>
+type MemberCardProductDraft = Prisma.MemberCardGetPayload<{
+  include: { serviceRuleItems: { include: { service: true } } }
+}>
 
 interface AdminWriteContext {
   adminId: number
@@ -31,6 +55,12 @@ interface PageMeta {
   page: number
   pageSize: number
   keyword?: string
+}
+
+interface ClaimedAdminOperation {
+  id: bigint
+  replayed: boolean
+  result: Prisma.JsonValue | null
 }
 
 const DATE_TIME_FORMAT = new Intl.DateTimeFormat('zh-CN', {
@@ -52,6 +82,175 @@ export class AdminBusinessService {
     @Inject(RefundsService) private readonly refunds: RefundsService,
     @Inject(WithdrawalsService) private readonly withdrawals: WithdrawalsService,
   ) {}
+
+  getAdminPermissionCatalog() {
+    return Object.values(ADMIN_PERMISSION).map(code => ({ code, group: code.split(':')[0] }))
+  }
+
+  async listAdminRoles() {
+    const roles = await this.prisma.role.findMany({
+      include: { _count: { select: { adminUsers: true } } },
+      orderBy: [{ isSystem: 'desc' }, { id: 'asc' }],
+    })
+    return roles.map(role => ({
+      id: String(role.id),
+      name: role.name,
+      displayName: role.displayName,
+      permissions: parseRolePermissions(role.permissions) || [],
+      status: role.status,
+      isSystem: role.isSystem,
+      version: role.version,
+      adminCount: role._count.adminUsers,
+      updatedAt: role.updatedAt.toISOString(),
+    }))
+  }
+
+  async listAdminUsersForRoleAssignment() {
+    const admins = await this.prisma.adminUser.findMany({
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        status: true,
+        role: true,
+        roleId: true,
+        version: true,
+        roleRecord: { select: { displayName: true, status: true } },
+      },
+      orderBy: { id: 'asc' },
+    })
+    return admins.map(admin => ({
+      id: String(admin.id),
+      username: admin.username,
+      name: admin.name,
+      status: admin.status,
+      role: admin.role,
+      roleId: admin.roleId ? String(admin.roleId) : null,
+      roleName: admin.roleRecord?.displayName || admin.role,
+      roleStatus: admin.roleRecord?.status || 'legacy',
+      version: admin.version,
+    }))
+  }
+
+  async createAdminRole(body: JsonRecord, context: AdminWriteContext) {
+    const name = this.requiredString(body.name, 'role name is required').toLowerCase()
+    if (!/^[a-z][a-z0-9_]{2,63}$/.test(name) || ['super_admin', 'operator', 'finance'].includes(name)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid or reserved role name', 400)
+    }
+    const displayName = this.requiredString(body.displayName, 'role displayName is required')
+    if (displayName.length > 64) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'role displayName is too long', 400)
+    }
+    const permissions = parseRolePermissions(body.permissions)
+    if (!permissions || permissions.includes('*')) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'custom roles require registered non-wildcard permissions', 400)
+    }
+    const role = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.role.create({
+        data: { name, displayName, permissions, status: 'active', isSystem: false },
+      })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'admin-role:create',
+        module: 'system',
+        targetType: 'role',
+        targetId: created.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { name, displayName, permissions },
+      })
+      return created
+    })
+    return { id: String(role.id), name: role.name, version: role.version }
+  }
+
+  async updateAdminRole(id: number, body: JsonRecord, context: AdminWriteContext) {
+    const permissions = parseRolePermissions(body.permissions)
+    if (!permissions) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'permissions must contain registered permission codes', 400)
+    }
+    const expectedVersion = Number(body.expectedVersion)
+    if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'expectedVersion is required', 400)
+    }
+    const status = this.optionalString(body.status) || 'active'
+    if (!['active', 'inactive'].includes(status)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid role status', 400)
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const role = await tx.role.findUnique({ where: { id: BigInt(id) } })
+      if (!role) throw this.notFound('admin role not found')
+      if (role.name !== 'super_admin' && permissions.includes('*')) {
+        throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'wildcard permission is restricted to super_admin', 403)
+      }
+      if (role.name === 'super_admin' && (status !== 'active' || !permissions.includes('*'))) {
+        throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'super_admin role must remain active with wildcard permission', 403)
+      }
+      const updated = await tx.role.updateMany({
+        where: { id: role.id, version: expectedVersion },
+        data: {
+          displayName: this.optionalString(body.displayName) || role.displayName,
+          permissions,
+          status,
+          version: { increment: 1 },
+        },
+      })
+      if (updated.count !== 1) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'admin role version changed, refresh and retry', 409)
+      }
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'admin-role:update',
+        module: 'system',
+        targetType: 'role',
+        targetId: role.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { before: role.permissions, after: permissions, status, expectedVersion },
+      })
+    })
+    return this.listAdminRoles()
+  }
+
+  async assignAdminRole(id: number, body: JsonRecord, context: AdminWriteContext) {
+    if (id === context.adminId) {
+      throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'administrators cannot change their own role', 403)
+    }
+    const roleId = Number(body.roleId)
+    const expectedVersion = Number(body.expectedVersion)
+    if (!Number.isInteger(roleId) || roleId < 1 || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'roleId and expectedVersion are required', 400)
+    }
+    await this.prisma.$transaction(async (tx) => {
+      const [admin, role] = await Promise.all([
+        tx.adminUser.findUnique({ where: { id: BigInt(id) } }),
+        tx.role.findUnique({ where: { id: BigInt(roleId) } }),
+      ])
+      if (!admin) throw this.notFound('admin user not found')
+      if (!role || role.status !== 'active' || !parseRolePermissions(role.permissions)) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'target admin role is unavailable', 409)
+      }
+      const updated = await tx.adminUser.updateMany({
+        where: { id: admin.id, version: expectedVersion },
+        data: { roleId: role.id, role: role.name, version: { increment: 1 } },
+      })
+      if (updated.count !== 1) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'admin user version changed, refresh and retry', 409)
+      }
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'admin-role:assign',
+        module: 'system',
+        targetType: 'admin_user',
+        targetId: admin.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { before: admin.role, after: role.name, expectedVersion },
+      })
+    })
+    return this.listAdminUsersForRoleAssignment()
+  }
 
   async getDashboard() {
     const todayStart = this.startOfDay(new Date())
@@ -243,7 +442,7 @@ export class AdminBusinessService {
           })
         }
         const address = addressBody
-          ? await this.createUserServiceAddress(tx, existing.id, addressBody)
+          ? await this.createUserServiceAddress(tx, existing.id, addressBody, context.adminId)
           : null
         await this.audit.writeWithClient(tx, {
           adminId: context.adminId,
@@ -278,7 +477,7 @@ export class AdminBusinessService {
       })
 
       const address = addressBody
-        ? await this.createUserServiceAddress(tx, user.id, addressBody)
+        ? await this.createUserServiceAddress(tx, user.id, addressBody, context.adminId)
         : null
 
       await this.audit.writeWithClient(tx, {
@@ -308,7 +507,20 @@ export class AdminBusinessService {
       this.prisma.user.findUnique({
         where: { id: BigInt(id) },
         include: {
-          orders: { orderBy: [{ createdAt: 'desc' }], take: 5 },
+          orders: {
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            take: 100,
+            include: {
+              serviceBooking: {
+                include: { redemption: true },
+              },
+              memberCardPurchase: true,
+            },
+          },
+          userMemberCards: {
+            include: { card: true },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          },
         },
       }),
       this.prisma.address.findMany({
@@ -322,6 +534,48 @@ export class AdminBusinessService {
       source: user.source || 'miniapp',
       adminRemark: user.adminRemark || '',
       addresses: addresses.map(address => this.presentAddress(address)),
+      orders: user.orders.map(order => ({
+        id: Number(order.id),
+        orderNo: order.orderNo,
+        orderType: order.orderType,
+        status: order.status,
+        serviceName: this.snapshotName(order.serviceSnapshot, ''),
+        appointmentStartAt: order.serviceBooking?.appointmentStartAt.toISOString() || null,
+        appointmentEndAt: order.serviceBooking?.appointmentEndAt.toISOString() || null,
+        paidAmount: this.decimalToNumber(order.paidAmount),
+        source: order.source,
+        createdAt: this.formatDateTime(order.createdAt),
+        memberCardPurchase: order.memberCardPurchase
+          ? {
+              planId: Number(order.memberCardPurchase.memberCardPlanId),
+              planVersion: order.memberCardPurchase.memberCardPlanVersion,
+              grantedUserMemberCardId: order.memberCardPurchase.grantedUserMemberCardId
+                ? Number(order.memberCardPurchase.grantedUserMemberCardId)
+                : null,
+            }
+          : null,
+        redemption: order.serviceBooking?.redemption
+          ? {
+              state: order.serviceBooking.redemption.state,
+              reservedMinutes: order.serviceBooking.redemption.reservedMinutes,
+              consumedMinutes: order.serviceBooking.redemption.consumedMinutes,
+              releasedMinutes: order.serviceBooking.redemption.releasedMinutes,
+            }
+          : null,
+      })),
+      memberCards: user.userMemberCards.map(card => ({
+        id: Number(card.id),
+        cardId: Number(card.cardId),
+        name: card.card.name,
+        status: card.status,
+        completedReason: card.completedReason || '',
+        availabilityState: card.availabilityState,
+        remainingMinutes: card.remainingMinutes,
+        frozenMinutes: card.frozenMinutes,
+        usableMinutes: Math.max(0, card.remainingMinutes - card.frozenMinutes),
+        activationDeadlineAt: this.formatNullableDateTime(card.activationDeadlineAt),
+        expireAt: this.formatNullableDateTime(card.expireAt),
+      })),
     }
   }
 
@@ -1747,7 +2001,17 @@ export class AdminBusinessService {
     }
     const remark = this.optionalString(body.remark) || 'admin point adjustment'
     const amount = this.optionalDecimal(body.amount)
-    const created = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const operation = await this.claimAdminOperation(
+        tx,
+        context,
+        'points:adjust',
+        this.optionalString(body.idempotencyKey) || '',
+        { userId: id, points, amount: amount?.toString() || null, remark },
+        'user',
+        id,
+      )
+      if (operation.replayed && operation.result) return operation.result as Record<string, unknown>
       const user = await tx.user.findFirst({ where: { id: BigInt(id), deletedAt: null } })
       if (!user) throw this.notFound('user not found')
       const summary = await tx.pointLedger.aggregate({
@@ -1775,19 +2039,20 @@ export class AdminBusinessService {
         ip: context.ip,
         detail: { points, balanceAfter, remark },
       })
-      return ledger
+      const response = {
+        id: Number(ledger.id),
+        userId: id,
+        type: ledger.type,
+        points: ledger.points,
+        amount: this.decimalToNumber(ledger.amount),
+        balanceAfter: ledger.balanceAfter,
+        remark: ledger.remark || '',
+        createdAt: this.formatDateTime(ledger.createdAt),
+      }
+      await this.completeAdminOperation(tx, operation.id, response)
+      return response
     })
-
-    return {
-      id: Number(created.id),
-      userId: id,
-      type: created.type,
-      points: created.points,
-      amount: this.decimalToNumber(created.amount),
-      balanceAfter: created.balanceAfter,
-      remark: created.remark || '',
-      createdAt: this.formatDateTime(created.createdAt),
-    }
+    return result
   }
 
   async listReviews(query: AdminPageQueryDto) {
@@ -2137,112 +2402,162 @@ export class AdminBusinessService {
   }
 
   async listMemberCards(query: AdminPageQueryDto) {
+    return this.listMemberCardProducts(query)
+  }
+
+  async listMemberCardProducts(query: AdminPageQueryDto) {
     const page = this.getPage(query)
-    const where: Prisma.MemberCardWhereInput = {}
-    if (query.status) where.status = this.publishStatusToNumber(query.status)
-    if (page.keyword) where.name = { contains: page.keyword }
+    const where: Prisma.MemberCardWhereInput = { deletedAt: null }
+    if (query.status === 'draft') where.publishedVersionId = null
+    else if (['active', 'on_sale', 'published'].includes(String(query.status))) {
+      where.status = 1
+      where.publishedVersionId = { not: null }
+    }
+    else if (['disabled', 'off_shelf'].includes(String(query.status))) {
+      where.status = 0
+      where.publishedVersionId = { not: null }
+    }
+    if (page.keyword) {
+      where.OR = [
+        { code: { contains: page.keyword } },
+        { name: { contains: page.keyword } },
+      ]
+    }
 
     const [total, cards] = await this.prisma.$transaction([
       this.prisma.memberCard.count({ where }),
       this.prisma.memberCard.findMany({
         where,
         include: {
-          _count: { select: { userCards: true, serviceRuleItems: true } },
+          publishedVersion: true,
+          _count: { select: { userCards: true, purchaseOrders: true, serviceRuleItems: true } },
           serviceRuleItems: {
-            where: { status: 1 },
             include: { service: true },
-            orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+            orderBy: [{ status: 'desc' }, { serviceId: 'asc' }, { id: 'asc' }],
           },
         },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ sortOrder: 'asc' }, { updatedAt: 'desc' }, { id: 'desc' }],
         skip: this.skip(page),
         take: page.pageSize,
       }),
     ])
 
-    return this.pageResult(cards.map(card => ({
-      id: String(card.id),
-      name: card.name,
-      totalTimes: card.totalTimes,
-      cardType: card.cardType,
-      unitName: card.unitName,
-      unitMinutes: card.unitMinutes || 0,
-      totalUnits: card.totalUnits,
-      allowHalfDeduct: card.allowHalfDeduct,
-      minConsumeUnits: card.minConsumeUnits,
-      applicableServices: Array.isArray(card.applicableServices) ? card.applicableServices.join(',') : '',
-      serviceRules: card.serviceRules ? JSON.stringify(card.serviceRules) : '',
-      serviceRuleList: this.presentMemberCardServiceRules(card.serviceRuleItems),
-      serviceRuleCount: card._count.serviceRuleItems,
-      effectiveRuleSummary: this.memberCardRuleSummary(card.serviceRuleItems),
-      price: this.decimalToNumber(card.price),
-      validityDays: card.validityDays,
-      soldCount: card._count.userCards,
-      status: this.publishStatus(card.status),
-      updatedAt: this.formatDateTime(card.updatedAt),
-    })), page, total)
+    return this.pageResult(cards.map(card => this.presentMemberCardProduct(card)), page, total)
+  }
+
+  async getMemberCardProduct(id: number) {
+    const card = await this.prisma.memberCard.findFirst({
+      where: { id: BigInt(id), deletedAt: null },
+      include: {
+        publishedVersion: true,
+        _count: { select: { userCards: true, purchaseOrders: true, serviceRuleItems: true } },
+        serviceRuleItems: {
+          include: { service: true },
+          orderBy: [{ status: 'desc' }, { serviceId: 'asc' }, { id: 'asc' }],
+        },
+      },
+    })
+    if (!card) throw this.notFound('member card product not found')
+    return this.presentMemberCardProduct(card)
   }
 
   async createMemberCard(body: JsonRecord, context: AdminWriteContext) {
+    return this.createMemberCardProduct(body, context)
+  }
+
+  async createMemberCardProduct(body: JsonRecord, context: AdminWriteContext) {
+    const coverImage = this.optionalString(body.coverImage)
+    this.storage.assertPermanentOssUrl(coverImage)
     const created = await this.prisma.$transaction(async (tx) => {
-      const totalUnits = this.optionalNumber(body.totalUnits)
-      const totalTimes = this.optionalNumber(body.totalTimes, totalUnits)
-      if (!totalTimes || totalTimes <= 0) {
-        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'totalUnits required', 400)
-      }
+      const totalUnits = this.requiredPositiveInt(body.totalUnits, 'totalUnits must be a positive integer')
+      const code = await this.ensureMemberCardProductCode(tx, body.code)
       const card = await tx.memberCard.create({
         data: {
+          code,
           name: this.requiredString(body.name, 'name required'),
-          applicableServices: this.parseJsonArray(body.applicableServices),
-          totalTimes,
-          cardType: this.normalizeCardType(body.cardType, 'times'),
-          unitName: this.optionalString(body.unitName) || '次',
-          unitMinutes: this.optionalPositiveInt(body.unitMinutes),
-          totalUnits: this.optionalNumber(body.totalUnits, totalTimes) || totalTimes,
-          serviceRules: this.parseJsonObject(body.serviceRules),
+          description: this.optionalString(body.description),
+          detail: this.optionalString(body.detail),
+          coverImage,
+          purchaseNotice: this.optionalString(body.purchaseNotice),
+          sortOrder: this.optionalNumber(body.sortOrder, 0),
+          applicableServices: [],
+          totalTimes: totalUnits,
+          cardType: MEMBER_CARD_TYPE.TIME,
+          unitName: '分钟',
+          unitMinutes: 1,
+          totalUnits,
+          serviceRules: Prisma.JsonNull,
           allowHalfDeduct: this.optionalBoolean(body.allowHalfDeduct),
           minConsumeUnits: this.optionalNumber(body.minConsumeUnits, 1),
           price: this.requiredDecimal(body.price, 'price required'),
-          validityDays: this.requiredNumber(body.validityDays, 'validityDays required'),
-          status: this.publishStatusToNumber(this.optionalString(body.status) || 'draft'),
+          activationDeadlineDays: this.requiredPositiveInt(body.activationDeadlineDays ?? 30, 'activationDeadlineDays must be a positive integer'),
+          validityDays: this.requiredPositiveInt(body.validityDays, 'validityDays must be a positive integer'),
+          currentVersion: 0,
+          draftRevision: 1,
+          publishedRevision: 0,
+          status: 0,
         },
       })
       await this.syncMemberCardServiceRulesFromBody(tx, card, body)
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
-        action: 'member-card:create',
-        module: 'marketing',
-        targetType: 'member_card',
+        action: 'member-card-product:create',
+        module: 'service',
+        targetType: 'member_card_product',
         targetId: card.id,
         requestId: context.requestId,
         ip: context.ip,
-        detail: { name: card.name },
+        detail: { code: card.code, name: card.name },
       })
       return card
     })
+    await this.storage.bindFilesToBiz([created.coverImage], IMAGE_BIZ_TYPE.MEMBER_CARD_COVER, created.id)
     return created
   }
 
   async updateMemberCard(id: number, body: JsonRecord, context: AdminWriteContext) {
-    const current = await this.prisma.memberCard.findUnique({ where: { id: BigInt(id) } })
-    if (!current) throw this.notFound('member card not found')
+    return this.updateMemberCardProduct(id, body, context)
+  }
+
+  async updateMemberCardProduct(id: number, body: JsonRecord, context: AdminWriteContext) {
+    const current = await this.prisma.memberCard.findFirst({ where: { id: BigInt(id), deletedAt: null } })
+    if (!current) throw this.notFound('member card product not found')
+    const coverImage = Object.prototype.hasOwnProperty.call(body, 'coverImage')
+      ? this.optionalString(body.coverImage)
+      : current.coverImage || undefined
+    this.storage.assertPermanentOssUrl(coverImage)
     const updated = await this.prisma.$transaction(async (tx) => {
+      const code = body.code === undefined
+        ? current.code
+        : await this.ensureMemberCardProductCode(tx, body.code, current.id, current.currentVersion > 0 ? current.code : undefined)
+      const totalUnits = body.totalUnits === undefined
+        ? current.totalUnits
+        : this.requiredPositiveInt(body.totalUnits, 'totalUnits must be a positive integer')
       const card = await tx.memberCard.update({
         where: { id: BigInt(id) },
         data: {
+          code,
           name: this.optionalString(body.name) ?? current.name,
-          applicableServices: body.applicableServices === undefined ? current.applicableServices as Prisma.InputJsonValue : this.parseJsonArray(body.applicableServices),
-          totalTimes: this.optionalNumber(body.totalTimes, current.totalTimes),
-          cardType: body.cardType === undefined ? current.cardType : this.normalizeCardType(body.cardType, current.cardType),
-          unitName: this.optionalString(body.unitName) ?? current.unitName,
-          unitMinutes: body.unitMinutes === undefined ? current.unitMinutes : this.optionalPositiveInt(body.unitMinutes),
-          totalUnits: this.optionalNumber(body.totalUnits, current.totalUnits || current.totalTimes),
-          serviceRules: body.serviceRules === undefined ? current.serviceRules as Prisma.InputJsonValue : this.parseJsonObject(body.serviceRules),
+          description: body.description === undefined ? current.description : this.optionalString(body.description),
+          detail: body.detail === undefined ? current.detail : this.optionalString(body.detail),
+          coverImage,
+          purchaseNotice: body.purchaseNotice === undefined ? current.purchaseNotice : this.optionalString(body.purchaseNotice),
+          sortOrder: this.optionalNumber(body.sortOrder, current.sortOrder),
+          totalTimes: totalUnits,
+          cardType: MEMBER_CARD_TYPE.TIME,
+          unitName: '分钟',
+          unitMinutes: 1,
+          totalUnits,
           allowHalfDeduct: body.allowHalfDeduct === undefined ? current.allowHalfDeduct : this.optionalBoolean(body.allowHalfDeduct),
           minConsumeUnits: this.optionalNumber(body.minConsumeUnits, current.minConsumeUnits),
           price: body.price === undefined ? current.price : this.requiredDecimal(body.price, 'price required'),
-          validityDays: this.optionalNumber(body.validityDays, current.validityDays),
-          status: body.status ? this.publishStatusToNumber(String(body.status)) : current.status,
+          activationDeadlineDays: body.activationDeadlineDays === undefined
+            ? current.activationDeadlineDays
+            : this.requiredPositiveInt(body.activationDeadlineDays, 'activationDeadlineDays must be a positive integer'),
+          validityDays: body.validityDays === undefined
+            ? current.validityDays
+            : this.requiredPositiveInt(body.validityDays, 'validityDays must be a positive integer'),
+          draftRevision: { increment: 1 },
         },
       })
       if (this.shouldSyncMemberCardServiceRules(body)) {
@@ -2250,37 +2565,169 @@ export class AdminBusinessService {
       }
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
-        action: 'member-card:update',
-        module: 'marketing',
-        targetType: 'member_card',
+        action: 'member-card-product:draft-update',
+        module: 'service',
+        targetType: 'member_card_product',
         targetId: id,
         requestId: context.requestId,
         ip: context.ip,
-        detail: { before: { name: current.name }, after: { name: card.name } },
+        detail: {
+          before: { code: current.code, name: current.name, draftRevision: current.draftRevision },
+          after: { code: card.code, name: card.name, draftRevision: card.draftRevision },
+        },
       })
       return card
     })
+    await this.storage.bindFilesToBiz([updated.coverImage], IMAGE_BIZ_TYPE.MEMBER_CARD_COVER, updated.id)
     return updated
   }
 
   async updateMemberCardStatus(id: number, dto: AdminStatusDto, context: AdminWriteContext) {
-    const current = await this.prisma.memberCard.findUnique({ where: { id: BigInt(id) } })
-    if (!current) throw this.notFound('member card not found')
-    const status = this.publishStatusToNumber(dto.status)
+    return this.updateMemberCardProductStatus(id, dto, context)
+  }
+
+  async updateMemberCardProductStatus(id: number, dto: AdminStatusDto, context: AdminWriteContext) {
+    const current = await this.prisma.memberCard.findFirst({ where: { id: BigInt(id), deletedAt: null } })
+    if (!current) throw this.notFound('member card product not found')
+    const status = ['active', 'published', 'on_sale'].includes(dto.status) ? 1 : 0
+    if (status === 1 && !current.publishedVersionId) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'publish a product version before putting it on sale', 409)
+    }
     await this.prisma.$transaction(async (tx) => {
       await tx.memberCard.update({ where: { id: BigInt(id) }, data: { status } })
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
-        action: 'member-card:status:update',
-        module: 'marketing',
-        targetType: 'member_card',
+        action: status === 1 ? 'member-card-product:on-sale' : 'member-card-product:off-shelf',
+        module: 'service',
+        targetType: 'member_card_product',
         targetId: id,
         requestId: context.requestId,
         ip: context.ip,
         detail: { before: current.status, after: status },
       })
     })
-    return { id, status: this.publishStatus(status) }
+    return { id, status: status === 1 ? 'active' : 'disabled' }
+  }
+
+  async publishMemberCardProduct(id: number, body: JsonRecord, context: AdminWriteContext) {
+    const published = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM member_cards WHERE id = ${BigInt(id)} FOR UPDATE`
+      const card = await tx.memberCard.findFirst({
+        where: { id: BigInt(id), deletedAt: null },
+        include: {
+          publishedVersion: true,
+          serviceRuleItems: {
+            where: { status: 1 },
+            include: { service: true },
+            orderBy: [{ serviceId: 'asc' }, { id: 'asc' }],
+          },
+        },
+      })
+      if (!card) throw this.notFound('member card product not found')
+      if (card.draftRevision <= card.publishedRevision) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card product has no unpublished changes', 409)
+      }
+      this.validateMemberCardProductDraft(card)
+      const nextVersion = card.currentVersion + 1
+      const redemptionRules = card.serviceRuleItems.map(rule => ({
+        serviceRuleId: Number(rule.id),
+        serviceId: Number(rule.serviceId),
+        serviceCode: rule.service.code,
+        serviceName: rule.service.name,
+        serviceDurationMinutes: rule.service.durationMinutes || 0,
+        consumeMode: rule.consumeMode,
+        consumeMinutes: rule.consumeUnits,
+        minConsumeMinutes: rule.minConsumeMinutes,
+        allowedMinutes: this.jsonNumberArray(rule.allowedMinutes),
+        remark: rule.remark || '',
+      }))
+      const snapshot = this.buildMemberCardProductSnapshot(card, nextVersion, redemptionRules)
+      if (
+        card.publishedVersion
+        && this.memberCardProductSnapshotFingerprint(snapshot)
+          === this.memberCardProductSnapshotFingerprint(card.publishedVersion.snapshot)
+      ) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card product has no effective changes', 409)
+      }
+      const version = await tx.memberCardPlanVersion.create({
+        data: {
+          memberCardId: card.id,
+          version: nextVersion,
+          productCode: card.code,
+          productName: card.name,
+          description: card.description,
+          detail: card.detail,
+          coverImage: card.coverImage,
+          price: card.price,
+          purchaseNotice: card.purchaseNotice,
+          totalMinutes: card.totalUnits,
+          activationDeadlineDays: card.activationDeadlineDays,
+          validityDays: card.validityDays,
+          redemptionRules: redemptionRules as Prisma.InputJsonValue,
+          snapshot: snapshot as Prisma.InputJsonObject,
+          publishedBy: BigInt(context.adminId),
+          sourceVersionId: card.draftSourceVersionId,
+          publishedAt: new Date(),
+        },
+      })
+      const putOnSale = body.onSale === undefined ? true : this.optionalBoolean(body.onSale)
+      const updated = await tx.memberCard.update({
+        where: { id: card.id },
+        data: {
+          currentVersion: nextVersion,
+          publishedVersionId: version.id,
+          publishedRevision: card.draftRevision,
+          publishedAt: version.publishedAt,
+          draftSourceVersionId: null,
+          status: putOnSale ? 1 : card.status,
+        },
+      })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'member-card-product:publish',
+        module: 'service',
+        targetType: 'member_card_product',
+        targetId: card.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: {
+          beforeVersion: card.currentVersion,
+          afterVersion: nextVersion,
+          draftRevision: card.draftRevision,
+          onSale: putOnSale,
+          price: card.price.toNumber(),
+          totalMinutes: card.totalUnits,
+          ruleCount: redemptionRules.length,
+        },
+      })
+      return updated
+    })
+    return this.getMemberCardProduct(Number(published.id))
+  }
+
+  async deleteMemberCardProduct(id: number, context: AdminWriteContext) {
+    const current = await this.prisma.memberCard.findFirst({
+      where: { id: BigInt(id), deletedAt: null },
+      include: { _count: { select: { userCards: true, purchaseOrders: true, versions: true } } },
+    })
+    if (!current) throw this.notFound('member card product not found')
+    if (current.publishedVersionId || current._count.userCards || current._count.purchaseOrders || current._count.versions) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'published or sold member card products can only be taken off sale', 409)
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.memberCard.update({ where: { id: current.id }, data: { status: 0, deletedAt: new Date() } })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'member-card-product:delete-draft',
+        module: 'service',
+        targetType: 'member_card_product',
+        targetId: current.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { code: current.code, name: current.name },
+      })
+    })
+    return { id, deleted: true }
   }
 
   async getMemberCardServiceRules(id: number) {
@@ -2307,16 +2754,130 @@ export class AdminBusinessService {
     }
   }
 
+  async listMemberCardPlanVersions(id: number) {
+    const card = await this.prisma.memberCard.findUnique({
+      where: { id: BigInt(id) },
+      select: { id: true, name: true, currentVersion: true, publishedVersionId: true },
+    })
+    if (!card) throw this.notFound('member card not found')
+    const versions = await this.prisma.memberCardPlanVersion.findMany({
+      where: { memberCardId: card.id },
+      orderBy: [{ version: 'desc' }, { id: 'desc' }],
+    })
+    return {
+      memberCardId: Number(card.id),
+      memberCardName: card.name,
+      currentVersion: card.currentVersion,
+      items: versions.map(version => ({
+        id: String(version.id),
+        version: version.version,
+        isCurrent: version.id === card.publishedVersionId,
+        productCode: version.productCode,
+        productName: version.productName,
+        description: version.description || '',
+        coverImage: this.storage.signNullableUrl(version.coverImage) || version.coverImage || '',
+        coverImageOssUrl: version.coverImage || '',
+        price: this.decimalToNumber(version.price),
+        totalMinutes: version.totalMinutes,
+        activationDeadlineDays: version.activationDeadlineDays,
+        validityDays: version.validityDays,
+        redemptionRules: version.redemptionRules,
+        snapshot: version.snapshot,
+        publishedBy: version.publishedBy ? Number(version.publishedBy) : null,
+        sourceVersionId: version.sourceVersionId ? Number(version.sourceVersionId) : null,
+        publishedAt: this.formatDateTime(version.publishedAt),
+      })),
+    }
+  }
+
+  async getMemberCardPlanVersion(id: number, versionId: number) {
+    const version = await this.prisma.memberCardPlanVersion.findFirst({
+      where: { id: BigInt(versionId), memberCardId: BigInt(id) },
+      include: {
+        memberCard: { select: { publishedVersionId: true } },
+      },
+    })
+    if (!version) throw this.notFound('member card product version not found')
+    return {
+      id: String(version.id),
+      memberCardId: Number(version.memberCardId),
+      version: version.version,
+      isCurrent: version.id === version.memberCard.publishedVersionId,
+      productCode: version.productCode,
+      productName: version.productName,
+      description: version.description || '',
+      detail: version.detail || '',
+      coverImage: this.storage.signNullableUrl(version.coverImage) || version.coverImage || '',
+      coverImageOssUrl: version.coverImage || '',
+      price: version.price.toNumber(),
+      purchaseNotice: version.purchaseNotice || '',
+      totalMinutes: version.totalMinutes,
+      activationDeadlineDays: version.activationDeadlineDays,
+      validityDays: version.validityDays,
+      redemptionRules: version.redemptionRules,
+      snapshot: version.snapshot,
+      publishedBy: version.publishedBy ? Number(version.publishedBy) : null,
+      sourceVersionId: version.sourceVersionId ? Number(version.sourceVersionId) : null,
+      publishedAt: version.publishedAt.toISOString(),
+    }
+  }
+
+  async copyMemberCardPlanVersionToDraft(id: number, versionId: number, context: AdminWriteContext) {
+    const version = await this.prisma.memberCardPlanVersion.findFirst({
+      where: { id: BigInt(versionId), memberCardId: BigInt(id) },
+    })
+    if (!version) throw this.notFound('member card product version not found')
+    const snapshot = this.asJsonRecord(version.snapshot)
+    const rules = Array.isArray(version.redemptionRules) ? version.redemptionRules : []
+    await this.prisma.$transaction(async (tx) => {
+      const current = await tx.memberCard.findFirst({ where: { id: BigInt(id), deletedAt: null } })
+      if (!current) throw this.notFound('member card product not found')
+      const updated = await tx.memberCard.update({
+        where: { id: current.id },
+        data: {
+          name: version.productName || this.optionalString(snapshot?.name) || current.name,
+          description: version.description,
+          detail: version.detail,
+          coverImage: version.coverImage,
+          purchaseNotice: version.purchaseNotice,
+          price: version.price,
+          totalUnits: version.totalMinutes,
+          totalTimes: version.totalMinutes,
+          activationDeadlineDays: version.activationDeadlineDays,
+          validityDays: version.validityDays,
+          draftSourceVersionId: version.id,
+          draftRevision: { increment: 1 },
+        },
+      })
+      await this.replaceMemberCardServiceRules(tx, updated, this.parseMemberCardServiceRuleInput(rules) || [])
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'member-card-product:copy-version',
+        module: 'service',
+        targetType: 'member_card_product',
+        targetId: current.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: { sourceVersionId: Number(version.id), sourceVersion: version.version },
+      })
+    })
+    return this.getMemberCardProduct(id)
+  }
+
   async updateMemberCardServiceRules(id: number, body: JsonRecord, context: AdminWriteContext) {
     const card = await this.prisma.memberCard.findUnique({ where: { id: BigInt(id) } })
     if (!card) throw this.notFound('member card not found')
     await this.prisma.$transaction(async (tx) => {
       await this.replaceMemberCardServiceRules(tx, card, this.parseMemberCardServiceRuleInput(body.serviceRuleList ?? body.rules ?? body.serviceRulesV2) || [])
+      await tx.memberCard.update({
+        where: { id: card.id },
+        data: { draftRevision: { increment: 1 } },
+      })
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
-        action: 'member-card:service-rules:update',
-        module: 'marketing',
-        targetType: 'member_card',
+        action: 'member-card-product:draft-rules-update',
+        module: 'service',
+        targetType: 'member_card_product',
         targetId: id,
         requestId: context.requestId,
         ip: context.ip,
@@ -2408,7 +2969,24 @@ export class AdminBusinessService {
     const where: Prisma.UserMemberCardWhereInput = {}
     if (query.userMemberCardId) where.id = BigInt(Number(query.userMemberCardId))
     if (query.userId) where.userId = BigInt(Number(query.userId))
-    if (query.status) where.status = query.status
+    if (query.status === 'usable') {
+      const now = new Date()
+      where.status = { in: [USER_MEMBER_CARD_STATUS.PENDING_ACTIVATION, USER_MEMBER_CARD_STATUS.ACTIVE] }
+      where.availabilityState = USER_MEMBER_CARD_AVAILABILITY.AVAILABLE
+      where.AND = [{
+        OR: [
+          {
+            status: USER_MEMBER_CARD_STATUS.PENDING_ACTIVATION,
+            activationDeadlineAt: { gt: now },
+          },
+          {
+            status: USER_MEMBER_CARD_STATUS.ACTIVE,
+            expireAt: { gt: now },
+          },
+        ],
+      }]
+    }
+    else if (query.status) where.status = query.status
     if (query.source) where.source = query.source
     if (query.cardType) where.card = { cardType: query.cardType }
     if (page.keyword) {
@@ -2427,6 +3005,8 @@ export class AdminBusinessService {
         where,
         include: {
           user: { select: { id: true, nickname: true, phone: true } },
+          _count: { select: { records: true, redemptions: true } },
+          records: { select: { recordType: true } },
           card: {
             include: {
               serviceRuleItems: {
@@ -2443,38 +3023,56 @@ export class AdminBusinessService {
       }),
     ])
 
-    const cardIds = cards.map(card => card.id)
-    const purchaseOrders = cardIds.length
+    const purchaseOrderIds = cards
+      .map(card => card.purchaseOrderId)
+      .filter((id): id is bigint => id !== null)
+    const purchaseOrders = purchaseOrderIds.length
       ? await this.prisma.order.findMany({
-          where: { grantedUserMemberCardId: { in: cardIds } },
-          select: { id: true, orderNo: true, grantedUserMemberCardId: true },
+          where: { id: { in: purchaseOrderIds } },
+          select: { id: true, orderNo: true },
         })
       : []
-    const purchaseOrderMap = new Map(purchaseOrders.map(order => [String(order.grantedUserMemberCardId), order]))
+    const purchaseOrderMap = new Map(purchaseOrders.map(order => [String(order.id), order]))
 
     return this.pageResult(cards.map(card => {
-      const usableUnits = Math.max(0, card.remainingUnits - card.frozenUnits)
-      const purchaseOrder = purchaseOrderMap.get(String(card.id))
+      const usableMinutes = Math.max(0, card.remainingMinutes - card.frozenMinutes)
+      const purchaseOrder = card.purchaseOrderId ? purchaseOrderMap.get(String(card.purchaseOrderId)) : undefined
+      const planSnapshot = this.asJsonRecord(card.planSnapshot)
+      const serviceRuleList = this.presentMemberCardSnapshotRules(card.planSnapshot, card.card.serviceRuleItems)
       return {
         id: String(card.id),
+        version: card.version,
         userId: Number(card.userId),
         userName: card.user.nickname || `User ${Number(card.userId)}`,
         userPhone: card.user.phone || '',
         cardId: Number(card.cardId),
-        cardName: card.card.name,
-        cardType: card.card.cardType,
-        unitName: card.card.unitName,
-        serviceRuleCount: card.card.serviceRuleItems.length,
-        effectiveRuleSummary: this.memberCardRuleSummary(card.card.serviceRuleItems),
+        cardName: this.optionalString(planSnapshot?.name) || card.card.name,
+        cardType: this.optionalString(planSnapshot?.cardType) || card.card.cardType,
+        unitName: this.optionalString(planSnapshot?.unitName) || card.card.unitName,
+        serviceRuleCount: serviceRuleList.length,
+        effectiveRuleSummary: this.memberCardSnapshotRuleSummary(serviceRuleList),
         source: card.source,
-        remainingUnits: card.remainingUnits,
-        frozenUnits: card.frozenUnits,
-        usableUnits,
+        planVersion: card.planVersion,
+        planSnapshot: card.planSnapshot,
+        remainingUnits: card.remainingMinutes,
+        frozenUnits: card.frozenMinutes,
+        usableUnits: usableMinutes,
+        totalMinutes: card.totalMinutes,
+        remainingMinutes: card.remainingMinutes,
+        frozenMinutes: card.frozenMinutes,
+        usableMinutes,
         remainingTimes: card.remainingTimes,
         purchaseOrderId: purchaseOrder ? Number(purchaseOrder.id) : null,
         purchaseOrderNo: purchaseOrder?.orderNo || '',
-        expireAt: this.formatDateTime(card.expireAt),
+        issuedAt: this.formatDateTime(card.issuedAt),
+        activationDeadlineAt: this.formatNullableDateTime(card.activationDeadlineAt),
+        activatedAt: this.formatNullableDateTime(card.activatedAt),
+        expireAt: this.formatNullableDateTime(card.expireAt),
+        completedAt: this.formatNullableDateTime(card.completedAt),
         status: card.status,
+        completedReason: card.completedReason || '',
+        availabilityState: card.availabilityState,
+        allowedActions: this.userMemberCardAllowedActions(card),
         createdAt: this.formatDateTime(card.createdAt),
         updatedAt: this.formatDateTime(card.updatedAt),
       }
@@ -2486,6 +3084,8 @@ export class AdminBusinessService {
       where: { id: BigInt(id) },
       include: {
         user: true,
+        _count: { select: { records: true, redemptions: true } },
+        records: { select: { recordType: true } },
         card: {
           include: {
             serviceRuleItems: {
@@ -2498,37 +3098,108 @@ export class AdminBusinessService {
       },
     })
     if (!card) throw this.notFound('user member card not found')
+    const planSnapshot = this.asJsonRecord(card.planSnapshot)
+    const serviceRuleList = this.presentMemberCardSnapshotRules(card.planSnapshot, card.card.serviceRuleItems)
     return {
       id: String(card.id),
+      version: card.version,
       userId: Number(card.userId),
       userName: card.user.nickname || `User ${Number(card.userId)}`,
       userPhone: card.user.phone || '',
       cardId: Number(card.cardId),
-      cardName: card.card.name,
-      cardType: card.card.cardType,
-      unitName: card.card.unitName,
-      unitMinutes: card.card.unitMinutes || 0,
-      serviceRuleList: this.presentMemberCardServiceRules(card.card.serviceRuleItems),
-      serviceRuleCount: card.card.serviceRuleItems.length,
-      effectiveRuleSummary: this.memberCardRuleSummary(card.card.serviceRuleItems),
+      cardName: this.optionalString(planSnapshot?.name) || card.card.name,
+      cardType: this.optionalString(planSnapshot?.cardType) || card.card.cardType,
+      unitName: this.optionalString(planSnapshot?.unitName) || card.card.unitName,
+      unitMinutes: Number(planSnapshot?.unitMinutes) || card.card.unitMinutes || 0,
+      serviceRuleList,
+      serviceRuleCount: serviceRuleList.length,
+      effectiveRuleSummary: this.memberCardSnapshotRuleSummary(serviceRuleList),
       source: card.source,
-      remainingUnits: card.remainingUnits,
-      frozenUnits: card.frozenUnits,
-      usableUnits: Math.max(0, card.remainingUnits - card.frozenUnits),
+      planVersion: card.planVersion,
+      planSnapshot: card.planSnapshot,
+      remainingUnits: card.remainingMinutes,
+      frozenUnits: card.frozenMinutes,
+      usableUnits: Math.max(0, card.remainingMinutes - card.frozenMinutes),
+      totalMinutes: card.totalMinutes,
+      remainingMinutes: card.remainingMinutes,
+      frozenMinutes: card.frozenMinutes,
+      usableMinutes: Math.max(0, card.remainingMinutes - card.frozenMinutes),
       remainingTimes: card.remainingTimes,
-      expireAt: this.formatDateTime(card.expireAt),
+      purchaseOrderId: card.purchaseOrderId ? Number(card.purchaseOrderId) : null,
+      issuedAt: this.formatDateTime(card.issuedAt),
+      activationDeadlineAt: this.formatNullableDateTime(card.activationDeadlineAt),
+      activatedAt: this.formatNullableDateTime(card.activatedAt),
+      expireAt: this.formatNullableDateTime(card.expireAt),
+      completedAt: this.formatNullableDateTime(card.completedAt),
       status: card.status,
+      completedReason: card.completedReason || '',
+      availabilityState: card.availabilityState,
+      allowedActions: this.userMemberCardAllowedActions(card),
       createdAt: this.formatDateTime(card.createdAt),
       updatedAt: this.formatDateTime(card.updatedAt),
     }
   }
 
   async updateUserMemberCardStatus(id: number, dto: AdminStatusDto, context: AdminWriteContext) {
-    const current = await this.prisma.userMemberCard.findUnique({ where: { id: BigInt(id) } })
-    if (!current) throw this.notFound('user member card not found')
-    const status = this.normalizeUserMemberCardStatus(dto.status)
+    const action = dto.status.trim().toLowerCase()
+    if (!['suspended', 'available'].includes(action)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'user member card status only supports suspended or available', 400)
+    }
+    const expectedVersion = dto.expectedVersion
+    if (expectedVersion === undefined || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'expectedVersion is required', 400)
+    }
+    const reason = (dto.reason || '').trim()
+    const now = new Date()
     await this.prisma.$transaction(async (tx) => {
-      await tx.userMemberCard.update({ where: { id: BigInt(id) }, data: { status } })
+      await tx.$queryRaw`SELECT id FROM user_member_cards WHERE id = ${BigInt(id)} FOR UPDATE`
+      const current = await tx.userMemberCard.findUnique({ where: { id: BigInt(id) } })
+      if (!current) throw this.notFound('user member card not found')
+      const operation = await this.claimAdminOperation(
+        tx,
+        context,
+        'user-member-card:status:update',
+        dto.idempotencyKey || '',
+        { cardId: id, action, expectedVersion, reason },
+        'user_member_card',
+        id,
+      )
+      if (operation.replayed) return
+      if (current.status === USER_MEMBER_CARD_STATUS.COMPLETED) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'completed member card cannot be resumed', 409)
+      }
+      const suspended = action === 'suspended'
+      const updated = await tx.userMemberCard.updateMany({
+        where: { id: BigInt(id), version: expectedVersion },
+        data: {
+          availabilityState: suspended
+            ? USER_MEMBER_CARD_AVAILABILITY.SUSPENDED
+            : USER_MEMBER_CARD_AVAILABILITY.AVAILABLE,
+          suspendedAt: suspended ? now : null,
+          suspendedReason: suspended ? reason || 'admin suspended member card' : null,
+          version: { increment: 1 },
+        },
+      })
+      if (updated.count !== 1) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card version changed, refresh and retry', 409)
+      }
+      await tx.memberCardRecord.create({
+        data: {
+          userMemberCardId: BigInt(id),
+          recordType: suspended ? MEMBER_CARD_RECORD_TYPE.SUSPENDED : MEMBER_CARD_RECORD_TYPE.RESUMED,
+          timesUsed: 0,
+          units: 0,
+          beforeUnits: current.remainingUnits,
+          afterUnits: current.remainingUnits,
+          beforeRemainingMinutes: current.remainingMinutes,
+          afterRemainingMinutes: current.remainingMinutes,
+          beforeFrozenMinutes: current.frozenMinutes,
+          afterFrozenMinutes: current.frozenMinutes,
+          operatorType: 'admin',
+          operatorId: BigInt(context.adminId),
+          remark: reason || `admin ${action} member card`,
+        },
+      })
       await this.audit.writeWithClient(tx, {
         adminId: context.adminId,
         action: 'user-member-card:status:update',
@@ -2537,66 +3208,101 @@ export class AdminBusinessService {
         targetId: id,
         requestId: context.requestId,
         ip: context.ip,
-        detail: { before: current.status, after: status },
+        detail: {
+          action,
+          reason: reason || '',
+          statusBefore: current.status,
+          availabilityBefore: current.availabilityState,
+          expectedVersion,
+        },
       })
+      await this.completeAdminOperation(tx, operation.id, { id: String(id), action })
     })
-    return { id, status }
+    return this.getUserMemberCard(id)
   }
 
-  async adjustUserMemberCardTime(id: number, body: JsonRecord, context: AdminWriteContext) {
+  async adjustUserMemberCardTime(id: number, body: AdminUserMemberCardAdjustDto, context: AdminWriteContext) {
     const mode = this.optionalString(body.mode) || 'delta'
     if (!['delta', 'target'].includes(mode)) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid adjust mode', 400)
     }
-    const reason = this.requiredString(body.reason || body.remark, 'adjust reason is required')
+    const reason = this.requiredString(body.reason, 'adjust reason is required')
     if (reason.length > 200) {
       throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'adjust reason is too long', 400)
     }
+    if (!Number.isInteger(body.expectedVersion) || body.expectedVersion < 0) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'expectedVersion is required', 400)
+    }
 
     const updatedId = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM user_member_cards WHERE id = ${BigInt(id)} FOR UPDATE`
       const current = await tx.userMemberCard.findUnique({
         where: { id: BigInt(id) },
         include: { card: true },
       })
       if (!current) throw this.notFound('user member card not found')
+      const operation = await this.claimAdminOperation(
+        tx,
+        context,
+        'user-member-card:time:adjust',
+        body.idempotencyKey,
+        {
+          cardId: id,
+          mode,
+          deltaMinutes: body.deltaMinutes ?? null,
+          targetRemainingMinutes: body.targetRemainingMinutes ?? null,
+          expectedVersion: body.expectedVersion,
+          reason,
+        },
+        'user_member_card',
+        id,
+      )
+      if (operation.replayed) return id
 
-      const deltaUnits = Number(body.deltaUnits)
-      const targetRemainingUnits = Number(body.targetRemainingUnits)
-      let nextRemainingUnits: number
+      if (current.status === USER_MEMBER_CARD_STATUS.COMPLETED) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'completed member card cannot be adjusted', 409)
+      }
+      const deltaMinutes = Number(body.deltaMinutes)
+      const targetRemainingMinutes = Number(body.targetRemainingMinutes)
+      let nextRemainingMinutes: number
       if (mode === 'delta') {
-        if (!Number.isInteger(deltaUnits) || deltaUnits === 0) {
-          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'deltaUnits must be non-zero integer', 400)
+        if (!Number.isInteger(deltaMinutes) || deltaMinutes === 0) {
+          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'deltaMinutes must be non-zero integer', 400)
         }
-        nextRemainingUnits = current.remainingUnits + deltaUnits
+        nextRemainingMinutes = current.remainingMinutes + deltaMinutes
       }
       else {
-        if (!Number.isInteger(targetRemainingUnits)) {
-          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'targetRemainingUnits must be integer', 400)
+        if (!Number.isInteger(targetRemainingMinutes)) {
+          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'targetRemainingMinutes must be integer', 400)
         }
-        nextRemainingUnits = targetRemainingUnits
+        nextRemainingMinutes = targetRemainingMinutes
       }
 
-      if (!Number.isInteger(nextRemainingUnits) || nextRemainingUnits < 0) {
-        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'remainingUnits must be non-negative integer', 400)
+      if (!Number.isInteger(nextRemainingMinutes) || nextRemainingMinutes <= 0) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'remainingMinutes must be a positive integer; use complete to end a card', 400)
       }
-      if (nextRemainingUnits < current.frozenUnits) {
-        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'remainingUnits cannot be less than frozenUnits', 409, {
-          remainingUnits: nextRemainingUnits,
-          frozenUnits: current.frozenUnits,
+      if (nextRemainingMinutes < current.frozenMinutes) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'remainingMinutes cannot be less than frozenMinutes', 409, {
+          remainingMinutes: nextRemainingMinutes,
+          frozenMinutes: current.frozenMinutes,
         })
       }
-      if (nextRemainingUnits === current.remainingUnits) {
+      if (nextRemainingMinutes === current.remainingMinutes) {
         throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card balance is unchanged', 400)
       }
+      if (current.version !== body.expectedVersion) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card version changed, refresh and retry', 409)
+      }
 
-      const now = new Date()
-      const nextStatus = this.nextUserMemberCardStatusAfterAdjust(current.status, current.expireAt, nextRemainingUnits, now)
+      const delta = nextRemainingMinutes - current.remainingMinutes
       const updated = await tx.userMemberCard.update({
         where: { id: current.id },
         data: {
-          remainingUnits: nextRemainingUnits,
-          remainingTimes: this.unitsToLegacyTimes(current.card, nextRemainingUnits),
-          status: nextStatus,
+          remainingMinutes: nextRemainingMinutes,
+          totalMinutes: { increment: delta },
+          remainingUnits: nextRemainingMinutes,
+          remainingTimes: this.unitsToLegacyTimes(current.card, nextRemainingMinutes),
+          version: { increment: 1 },
         },
       })
 
@@ -2604,10 +3310,14 @@ export class AdminBusinessService {
         data: {
           userMemberCardId: current.id,
           recordType: MEMBER_CARD_RECORD_TYPE.ADMIN_ADJUST,
-          timesUsed: this.unitsToLegacyTimes(current.card, Math.abs(updated.remainingUnits - current.remainingUnits)),
-          units: updated.remainingUnits - current.remainingUnits,
+          timesUsed: this.unitsToLegacyTimes(current.card, Math.abs(delta)),
+          units: delta,
           beforeUnits: current.remainingUnits,
           afterUnits: updated.remainingUnits,
+          beforeRemainingMinutes: current.remainingMinutes,
+          afterRemainingMinutes: updated.remainingMinutes,
+          beforeFrozenMinutes: current.frozenMinutes,
+          afterFrozenMinutes: updated.frozenMinutes,
           operatorType: 'admin',
           operatorId: BigInt(context.adminId),
           remark: reason,
@@ -2624,19 +3334,297 @@ export class AdminBusinessService {
         ip: context.ip,
         detail: {
           mode,
-          beforeUnits: current.remainingUnits,
-          afterUnits: updated.remainingUnits,
-          frozenUnits: current.frozenUnits,
+          beforeMinutes: current.remainingMinutes,
+          afterMinutes: updated.remainingMinutes,
+          frozenMinutes: current.frozenMinutes,
           statusBefore: current.status,
-          statusAfter: nextStatus,
+          statusAfter: updated.status,
           reason,
+          expectedVersion: body.expectedVersion,
         },
       })
+      await this.completeAdminOperation(tx, operation.id, { id: String(id), action: 'adjust-time' })
 
       return Number(updated.id)
     })
 
     return this.getUserMemberCard(updatedId)
+  }
+
+  async extendUserMemberCard(id: number, dto: AdminUserMemberCardExtendDto, context: AdminWriteContext) {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM user_member_cards WHERE id = ${BigInt(id)} FOR UPDATE`
+      const current = await tx.userMemberCard.findUnique({ where: { id: BigInt(id) } })
+      if (!current) throw this.notFound('user member card not found')
+      const operation = await this.claimAdminOperation(
+        tx,
+        context,
+        'user-member-card:extend',
+        dto.idempotencyKey,
+        { cardId: id, days: dto.days, expectedVersion: dto.expectedVersion, reason: dto.reason },
+        'user_member_card',
+        id,
+      )
+      if (operation.replayed) return
+      if (current.status === USER_MEMBER_CARD_STATUS.COMPLETED) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'completed member card cannot be extended', 409)
+      }
+      if (current.version !== dto.expectedVersion) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card version changed, refresh and retry', 409)
+      }
+
+      const pendingActivation = current.status === USER_MEMBER_CARD_STATUS.PENDING_ACTIVATION
+      const previousAt = pendingActivation ? current.activationDeadlineAt : current.expireAt
+      const baseAt = previousAt && previousAt > new Date() ? previousAt : new Date()
+      const nextAt = this.addDays(baseAt, dto.days)
+      await tx.userMemberCard.update({
+        where: { id: current.id },
+        data: {
+          ...(pendingActivation ? { activationDeadlineAt: nextAt } : { expireAt: nextAt }),
+          version: { increment: 1 },
+        },
+      })
+      await tx.memberCardRecord.create({
+        data: {
+          userMemberCardId: current.id,
+          recordType: MEMBER_CARD_RECORD_TYPE.EXTENDED,
+          timesUsed: 0,
+          units: 0,
+          beforeUnits: current.remainingUnits,
+          afterUnits: current.remainingUnits,
+          beforeRemainingMinutes: current.remainingMinutes,
+          afterRemainingMinutes: current.remainingMinutes,
+          beforeFrozenMinutes: current.frozenMinutes,
+          afterFrozenMinutes: current.frozenMinutes,
+          operatorType: 'admin',
+          operatorId: BigInt(context.adminId),
+          remark: dto.reason,
+        },
+      })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'user-member-card:extend',
+        module: 'marketing',
+        targetType: 'user_member_card',
+        targetId: current.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: {
+          days: dto.days,
+          field: pendingActivation ? 'activationDeadlineAt' : 'expireAt',
+          before: previousAt?.toISOString() || null,
+          after: nextAt.toISOString(),
+          reason: dto.reason,
+          expectedVersion: dto.expectedVersion,
+        },
+      })
+      await this.completeAdminOperation(tx, operation.id, { id: String(id), action: 'extend' })
+    })
+    return this.getUserMemberCard(id)
+  }
+
+  async revokeUserMemberCard(id: number, dto: AdminUserMemberCardActionDto, context: AdminWriteContext) {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM user_member_cards WHERE id = ${BigInt(id)} FOR UPDATE`
+      const current = await tx.userMemberCard.findUnique({
+        where: { id: BigInt(id) },
+        include: { records: true, redemptions: true },
+      })
+      if (!current) throw this.notFound('user member card not found')
+      const operation = await this.claimAdminOperation(
+        tx,
+        context,
+        'user-member-card:revoke',
+        dto.idempotencyKey,
+        { cardId: id, expectedVersion: dto.expectedVersion, reason: dto.reason },
+        'user_member_card',
+        id,
+      )
+      if (operation.replayed) return
+      if (current.status === USER_MEMBER_CARD_STATUS.COMPLETED) {
+        if (current.completedReason === USER_MEMBER_CARD_COMPLETED_REASON.REVOKED) return
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'completed member card cannot be revoked', 409)
+      }
+      if (current.version !== dto.expectedVersion) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card version changed, refresh and retry', 409)
+      }
+      if (current.purchaseOrderId || current.source !== 'admin') {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'paid or offline member card must be revoked through order refund', 409)
+      }
+      if (current.frozenMinutes > 0 || current.frozenUnits > 0) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card has frozen benefits; cancel related bookings first', 409)
+      }
+      const maintenanceRecords = new Set([
+        MEMBER_CARD_RECORD_TYPE.ISSUED,
+        MEMBER_CARD_RECORD_TYPE.EXTENDED,
+        MEMBER_CARD_RECORD_TYPE.SUSPENDED,
+        MEMBER_CARD_RECORD_TYPE.RESUMED,
+      ])
+      if (current.redemptions.length || current.records.some(record => !maintenanceRecords.has(record.recordType as any))) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card has redemption or adjustment facts and cannot be revoked directly', 409)
+      }
+
+      const now = new Date()
+      await tx.userMemberCard.update({
+        where: { id: current.id },
+        data: {
+          status: USER_MEMBER_CARD_STATUS.COMPLETED,
+          completedReason: USER_MEMBER_CARD_COMPLETED_REASON.REVOKED,
+          completedAt: now,
+          availabilityState: USER_MEMBER_CARD_AVAILABILITY.SUSPENDED,
+          suspendedAt: now,
+          suspendedReason: dto.reason,
+          version: { increment: 1 },
+        },
+      })
+      await tx.memberCardRecord.create({
+        data: {
+          userMemberCardId: current.id,
+          recordType: MEMBER_CARD_RECORD_TYPE.REVOKED,
+          timesUsed: 0,
+          units: 0,
+          beforeUnits: current.remainingUnits,
+          afterUnits: current.remainingUnits,
+          beforeRemainingMinutes: current.remainingMinutes,
+          afterRemainingMinutes: current.remainingMinutes,
+          beforeFrozenMinutes: current.frozenMinutes,
+          afterFrozenMinutes: current.frozenMinutes,
+          operatorType: 'admin',
+          operatorId: BigInt(context.adminId),
+          remark: dto.reason,
+        },
+      })
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'user-member-card:revoke',
+        module: 'marketing',
+        targetType: 'user_member_card',
+        targetId: current.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: {
+          statusBefore: current.status,
+          remainingMinutes: current.remainingMinutes,
+          reason: dto.reason,
+          expectedVersion: dto.expectedVersion,
+        },
+      })
+      await this.completeAdminOperation(tx, operation.id, { id: String(id), action: 'revoke' })
+    })
+    return this.getUserMemberCard(id)
+  }
+
+  async deleteUserMemberCardDraft(id: number, dto: AdminUserMemberCardActionDto, context: AdminWriteContext) {
+    const current = await this.prisma.userMemberCard.findUnique({
+      where: { id: BigInt(id) },
+      include: { records: true, redemptions: true },
+    })
+    if (!current) throw this.notFound('user member card not found')
+    if (current.version !== dto.expectedVersion) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card version changed, refresh and retry', 409)
+    }
+    const blockingReasons: string[] = []
+    if (current.status !== USER_MEMBER_CARD_STATUS.PENDING_ACTIVATION) blockingReasons.push('only pending activation cards can be deleted')
+    if (current.source !== 'admin' || current.purchaseOrderId) blockingReasons.push('paid or offline card source exists')
+    if (current.frozenMinutes > 0 || current.frozenUnits > 0) blockingReasons.push('frozen benefits exist')
+    if (current.remainingMinutes !== current.totalMinutes) blockingReasons.push('benefit balance has changed')
+    if (current.redemptions.length) blockingReasons.push('redemption records exist')
+    if (current.records.some(record => record.recordType !== MEMBER_CARD_RECORD_TYPE.ISSUED)) blockingReasons.push('non-issuance records exist')
+    if (blockingReasons.length) {
+      throw new BusinessException(
+        ErrorCode.COMMON_BAD_REQUEST,
+        'user member card contains business facts and cannot be deleted',
+        409,
+        { blockingReasons },
+      )
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM user_member_cards WHERE id = ${current.id} FOR UPDATE`
+      const operation = await this.claimAdminOperation(
+        tx,
+        context,
+        'user-member-card:draft:delete',
+        dto.idempotencyKey,
+        { cardId: id, expectedVersion: dto.expectedVersion, reason: dto.reason },
+        'user_member_card',
+        id,
+      )
+      if (operation.replayed) return
+      await tx.memberCardRecord.deleteMany({ where: { userMemberCardId: current.id } })
+      const deleted = await tx.userMemberCard.deleteMany({ where: { id: current.id, version: dto.expectedVersion } })
+      if (deleted.count !== 1) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card version changed, refresh and retry', 409)
+      }
+      await this.audit.writeWithClient(tx, {
+        adminId: context.adminId,
+        action: 'user-member-card:draft:delete',
+        module: 'marketing',
+        targetType: 'user_member_card',
+        targetId: current.id,
+        requestId: context.requestId,
+        ip: context.ip,
+        detail: {
+          userId: Number(current.userId),
+          cardId: Number(current.cardId),
+          totalMinutes: current.totalMinutes,
+          reason: dto.reason,
+          expectedVersion: dto.expectedVersion,
+        },
+      })
+      await this.completeAdminOperation(tx, operation.id, { id: String(id), action: 'delete-draft' })
+    })
+    return { id: String(current.id), deleted: true }
+  }
+
+  private userMemberCardAllowedActions(card: {
+    status: string
+    source: string
+    purchaseOrderId: bigint | null
+    remainingMinutes: number
+    totalMinutes: number
+    frozenMinutes: number
+    _count: { records: number, redemptions: number }
+    records: Array<{ recordType: string }>
+  }) {
+    const open = card.status !== USER_MEMBER_CARD_STATUS.COMPLETED
+    const freeAdminCard = card.source === 'admin' && !card.purchaseOrderId
+    const maintenanceRecordTypes = new Set<string>([
+      MEMBER_CARD_RECORD_TYPE.ISSUED,
+      MEMBER_CARD_RECORD_TYPE.EXTENDED,
+      MEMBER_CARD_RECORD_TYPE.SUSPENDED,
+      MEMBER_CARD_RECORD_TYPE.RESUMED,
+    ])
+    const hasAssetFacts = card.records.some(record => !maintenanceRecordTypes.has(record.recordType))
+    const onlyIssuanceRecords = card.records.every(record => record.recordType === MEMBER_CARD_RECORD_TYPE.ISSUED)
+    const untouched = card.remainingMinutes === card.totalMinutes
+      && card.frozenMinutes === 0
+      && card._count.redemptions === 0
+      && onlyIssuanceRecords
+    const revocable = open
+      && freeAdminCard
+      && card.frozenMinutes === 0
+      && card._count.redemptions === 0
+      && !hasAssetFacts
+    const revokeReason = !freeAdminCard
+      ? '付费或线下来源权益卡必须通过来源订单退款'
+      : card.frozenMinutes > 0
+        ? '权益卡存在冻结权益，请先取消或完成关联预约'
+        : card._count.redemptions > 0 || hasAssetFacts
+          ? '权益卡存在核销或余额调整事实，不能直接撤销'
+          : ''
+    return {
+      update: open,
+      adjust: open,
+      extend: open,
+      suspend: open,
+      revoke: revocable,
+      deleteDraft: card.status === USER_MEMBER_CARD_STATUS.PENDING_ACTIVATION && freeAdminCard && untouched,
+      reasons: {
+        revoke: revokeReason,
+        deleteDraft: untouched ? '' : '仅未激活且无冻结、核销、调整事实的后台赠送卡可删除',
+      },
+    }
   }
 
   async listMemberCardRecords(query: AdminPageQueryDto) {
@@ -2671,6 +3659,15 @@ export class AdminBusinessService {
             },
           },
           order: { select: { id: true, orderNo: true } },
+          redemption: {
+            select: {
+              id: true,
+              state: true,
+              reservedMinutes: true,
+              consumedMinutes: true,
+              releasedMinutes: true,
+            },
+          },
         },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: this.skip(page),
@@ -2678,28 +3675,40 @@ export class AdminBusinessService {
       }),
     ])
 
-    return this.pageResult(records.map(record => ({
-      id: String(record.id),
-      userMemberCardId: Number(record.userMemberCardId),
-      userId: Number(record.userMemberCard.userId),
-      userName: record.userMemberCard.user.nickname || `User ${Number(record.userMemberCard.userId)}`,
-      userPhone: record.userMemberCard.user.phone || '',
-      cardId: Number(record.userMemberCard.cardId),
-      cardName: record.userMemberCard.card.name,
-      cardType: record.userMemberCard.card.cardType,
-      unitName: record.userMemberCard.card.unitName,
-      orderId: record.orderId ? Number(record.orderId) : null,
-      orderNo: record.order?.orderNo || '',
-      recordType: record.recordType,
-      timesUsed: record.timesUsed,
-      units: record.units,
-      beforeUnits: record.beforeUnits ?? '',
-      afterUnits: record.afterUnits ?? '',
-      operatorType: record.operatorType || '',
-      operatorId: record.operatorId ? Number(record.operatorId) : '',
-      remark: record.remark || '',
-      createdAt: this.formatDateTime(record.createdAt),
-    })), page, total)
+    return this.pageResult(records.map(record => {
+      const planSnapshot = this.asJsonRecord(record.userMemberCard.planSnapshot)
+      return {
+        id: String(record.id),
+        userMemberCardId: Number(record.userMemberCardId),
+        userId: Number(record.userMemberCard.userId),
+        userName: record.userMemberCard.user.nickname || `User ${Number(record.userMemberCard.userId)}`,
+        userPhone: record.userMemberCard.user.phone || '',
+        cardId: Number(record.userMemberCard.cardId),
+        cardName: this.optionalString(planSnapshot?.name) || record.userMemberCard.card.name,
+        cardType: this.optionalString(planSnapshot?.cardType) || record.userMemberCard.card.cardType,
+        unitName: this.optionalString(planSnapshot?.unitName) || record.userMemberCard.card.unitName,
+        orderId: record.orderId ? Number(record.orderId) : null,
+        orderNo: record.order?.orderNo || '',
+        recordType: record.recordType,
+        timesUsed: record.timesUsed,
+        units: record.units,
+        beforeUnits: record.beforeUnits ?? '',
+        afterUnits: record.afterUnits ?? '',
+        beforeRemainingMinutes: record.beforeRemainingMinutes ?? '',
+        afterRemainingMinutes: record.afterRemainingMinutes ?? '',
+        beforeFrozenMinutes: record.beforeFrozenMinutes ?? '',
+        afterFrozenMinutes: record.afterFrozenMinutes ?? '',
+        redemptionId: record.redemptionId ? Number(record.redemptionId) : null,
+        redemptionState: record.redemption?.state || '',
+        reservedMinutes: record.redemption?.reservedMinutes ?? 0,
+        consumedMinutes: record.redemption?.consumedMinutes ?? 0,
+        releasedMinutes: record.redemption?.releasedMinutes ?? 0,
+        operatorType: record.operatorType || '',
+        operatorId: record.operatorId ? Number(record.operatorId) : '',
+        remark: record.remark || '',
+        createdAt: this.formatDateTime(record.createdAt),
+      }
+    }), page, total)
   }
 
   async listAuditItems(type: string | undefined, query: AdminPageQueryDto, allowedTypes?: string[]) {
@@ -3098,20 +4107,22 @@ export class AdminBusinessService {
     tx: Prisma.TransactionClient,
     userId: bigint,
     body: JsonRecord,
+    adminId: number,
   ) {
     const ownerId = Number(userId)
     const addressType = this.optionalString(body.addressType) || 'service'
     const shouldBeDefault = this.optionalBoolean(body.isDefault, true)
     if (shouldBeDefault) {
-      await tx.address.updateMany({
-        where: {
-          ownerType: 'user',
-          ownerId: userId,
-          addressType,
-          status: 1,
-          deletedAt: null,
-        },
-        data: { isDefault: false },
+      await clearDefaultAddresses(tx, {
+        ownerType: 'user',
+        ownerId: userId,
+        addressType,
+        status: 1,
+        deletedAt: null,
+      }, undefined, {
+        operatorType: 'admin',
+        operatorId: BigInt(adminId),
+        reason: 'admin changed default address while creating customer address',
       })
     }
 
@@ -3128,7 +4139,13 @@ export class AdminBusinessService {
       houseNumber: this.optionalString(body.houseNumber),
     }
 
-    return tx.address.create({
+    const latitude = this.optionalDecimal(body.latitude)
+    const longitude = this.optionalDecimal(body.longitude)
+    if ((latitude === null) !== (longitude === null)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'latitude and longitude must be provided together', 400)
+    }
+
+    const created = await tx.address.create({
       data: {
         ownerType: 'user',
         ownerId: BigInt(ownerId),
@@ -3144,16 +4161,28 @@ export class AdminBusinessService {
         detailAddress,
         houseNumber: addressData.houseNumber || null,
         formattedAddress: this.composeAdminAddressText(addressData),
-        latitude: this.optionalDecimal(body.latitude),
-        longitude: this.optionalDecimal(body.longitude),
-        coordinateType: this.optionalString(body.coordinateType) || 'gcj02',
-        poiId: this.optionalString(body.poiId) || null,
-        mapProvider: this.optionalString(body.mapProvider) || null,
+        latitude,
+        longitude,
+        coordinateType: latitude !== null ? this.optionalString(body.coordinateType) || 'gcj02' : null,
+        poiId: latitude !== null ? this.optionalString(body.poiId) || null : null,
+        mapProvider: latitude !== null ? this.optionalString(body.mapProvider) || null : null,
         isDefault: shouldBeDefault,
         source: 'admin',
         status: 1,
       },
     })
+    await tx.addressRevision.create({
+      data: {
+        addressId: created.id,
+        version: created.version,
+        snapshot: addressRevisionSnapshot(created),
+        changeType: 'admin_create',
+        operatorType: 'admin',
+        operatorId: BigInt(adminId),
+        reason: 'admin created customer address',
+      },
+    })
+    return created
   }
 
   private composeAdminAddressText(address: {
@@ -3568,6 +4597,10 @@ export class AdminBusinessService {
     return DATE_TIME_FORMAT.format(date).replace(/\//g, '-')
   }
 
+  private formatNullableDateTime(date: Date | null | undefined) {
+    return date ? this.formatDateTime(date) : ''
+  }
+
   private snapshotName(value: Prisma.JsonValue, fallback: string) {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       const name = (value as JsonRecord).name
@@ -3625,6 +4658,59 @@ export class AdminBusinessService {
     const text = this.optionalString(value)
     if (!text) throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, message, 400)
     return text
+  }
+
+  private async claimAdminOperation(
+    tx: Prisma.TransactionClient,
+    context: AdminWriteContext,
+    operation: string,
+    idempotencyKey: string,
+    payload: Record<string, unknown>,
+    targetType: string,
+    targetId: number | bigint,
+  ): Promise<ClaimedAdminOperation> {
+    const key = this.requiredString(idempotencyKey, 'idempotencyKey is required')
+    if (!/^[A-Za-z0-9:_-]{8,96}$/.test(key)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'idempotencyKey format is invalid', 400)
+    }
+    const requestHash = createHash('sha256').update(JSON.stringify(payload)).digest('hex')
+    const record = await tx.adminOperationRequest.upsert({
+      where: {
+        adminId_operation_idempotencyKey: {
+          adminId: BigInt(context.adminId),
+          operation,
+          idempotencyKey: key,
+        },
+      },
+      update: {},
+      create: {
+        adminId: BigInt(context.adminId),
+        operation,
+        idempotencyKey: key,
+        requestHash,
+        status: 'processing',
+        targetType,
+        targetId: String(targetId),
+      },
+    })
+    if (record.requestHash !== requestHash) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'idempotencyKey was already used with a different request', 409)
+    }
+    if (record.status === 'completed') {
+      return { id: record.id, replayed: true, result: record.result }
+    }
+    return { id: record.id, replayed: false, result: null }
+  }
+
+  private async completeAdminOperation(
+    tx: Prisma.TransactionClient,
+    operationId: bigint,
+    result: Prisma.InputJsonValue,
+  ) {
+    await tx.adminOperationRequest.update({
+      where: { id: operationId },
+      data: { status: 'completed', result, completedAt: new Date() },
+    })
   }
 
   private optionalString(value: unknown) {
@@ -3771,6 +4857,14 @@ export class AdminBusinessService {
     }
   }
 
+  private requiredPositiveInt(value: unknown, message: string) {
+    const number = Number(value)
+    if (!Number.isInteger(number) || number <= 0) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, message, 400)
+    }
+    return number
+  }
+
   private dateRangeFromQuery(query: AdminPageQueryDto): Prisma.DateTimeFilter | undefined {
     const startRaw = query.dateStart || query.startDate
     const endRaw = query.dateEnd || query.endDate
@@ -3828,11 +4922,26 @@ export class AdminBusinessService {
       unitMinutes: number | null
       minConsumeUnits: number
     },
-    rules: Array<{ serviceId: number, consumeUnits: number, status?: number, remark?: string }>,
+    rules: Array<{
+      serviceId: number
+      consumeUnits: number
+      consumeMode?: string
+      minConsumeMinutes?: number
+      allowedMinutes?: number[]
+      status?: number
+      remark?: string
+    }>,
   ) {
     const normalizedInput = rules.map(rule => ({
       serviceId: Number(rule.serviceId),
       consumeUnits: Number(rule.consumeUnits),
+      consumeMode: ['fixed_minutes', 'half_service', 'custom_minutes'].includes(rule.consumeMode || '')
+        ? rule.consumeMode!
+        : 'fixed_minutes',
+      minConsumeMinutes: Number(rule.minConsumeMinutes || rule.consumeUnits),
+      allowedMinutes: Array.isArray(rule.allowedMinutes)
+        ? rule.allowedMinutes.map(value => Number(value)).filter(value => Number.isInteger(value) && value > 0)
+        : [],
       status: rule.status === 0 ? 0 : 1,
       remark: rule.remark || null,
     }))
@@ -3855,6 +4964,12 @@ export class AdminBusinessService {
       if (!Number.isInteger(rule.consumeUnits) || rule.consumeUnits <= 0) {
         throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'consumeUnits must be a positive integer', 400)
       }
+      if (!Number.isInteger(rule.minConsumeMinutes) || rule.minConsumeMinutes <= 0) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'minConsumeMinutes must be a positive integer', 400)
+      }
+      if (rule.consumeMode === 'custom_minutes' && !rule.allowedMinutes.length) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'custom_minutes requires allowedMinutes', 400)
+      }
       const service = serviceMap.get(rule.serviceId)
       if (!service) {
         throw new BusinessException(ErrorCode.COMMON_NOT_FOUND, `service not found: ${rule.serviceId}`, 404)
@@ -3876,13 +4991,24 @@ export class AdminBusinessService {
         memberCardId: card.id,
         serviceId: BigInt(rule.serviceId),
         consumeUnits: rule.consumeUnits,
+        consumeMode: rule.consumeMode,
+        minConsumeMinutes: rule.minConsumeMinutes,
+        allowedMinutes: rule.allowedMinutes as Prisma.InputJsonArray,
         status: rule.status,
         remark: rule.remark,
       })),
     })
   }
 
-  private parseMemberCardServiceRuleInput(value: unknown): Array<{ serviceId: number, consumeUnits: number, status?: number, remark?: string }> | undefined {
+  private parseMemberCardServiceRuleInput(value: unknown): Array<{
+    serviceId: number
+    consumeUnits: number
+    consumeMode?: string
+    minConsumeMinutes?: number
+    allowedMinutes?: number[]
+    status?: number
+    remark?: string
+  }> | undefined {
     if (value === undefined || value === null) return undefined
     let parsed: unknown = value
     if (typeof value === 'string') {
@@ -3909,7 +5035,12 @@ export class AdminBusinessService {
       }
       const record = item as Record<string, unknown>
       const serviceId = Number(record.serviceId ?? record.id)
-      const consumeUnits = Number(record.consumeUnits ?? record.consumeUnit ?? record.units)
+      const consumeUnits = Number(record.consumeMinutes ?? record.consumeUnits ?? record.consumeUnit ?? record.units)
+      const consumeMode = this.optionalString(record.consumeMode) || 'fixed_minutes'
+      const minConsumeMinutes = Number(record.minConsumeMinutes ?? consumeUnits)
+      const allowedMinutes = Array.isArray(record.allowedMinutes)
+        ? record.allowedMinutes.map(value => Number(value)).filter(value => Number.isInteger(value) && value > 0)
+        : []
       const rawStatus = record.status
       const status = rawStatus === undefined || rawStatus === null || rawStatus === ''
         ? 1
@@ -3919,6 +5050,9 @@ export class AdminBusinessService {
       return {
         serviceId,
         consumeUnits,
+        consumeMode,
+        minConsumeMinutes,
+        allowedMinutes,
         status,
         remark: this.optionalString(record.remark),
       }
@@ -4027,6 +5161,9 @@ export class AdminBusinessService {
     memberCardId: bigint
     serviceId: bigint
     consumeUnits: number
+    consumeMode: string
+    minConsumeMinutes: number
+    allowedMinutes: Prisma.JsonValue | null
     status: number
     remark: string | null
     service: {
@@ -4052,6 +5189,9 @@ export class AdminBusinessService {
       serviceStatus: rule.service.deletedAt ? 'deleted' : this.activeStatus(rule.service.status),
       consumeUnits: rule.consumeUnits,
       effectiveConsumeUnits: rule.consumeUnits,
+      consumeMode: rule.consumeMode,
+      minConsumeMinutes: rule.minConsumeMinutes,
+      allowedMinutes: this.jsonNumberArray(rule.allowedMinutes),
       status: this.activeStatus(rule.status),
       remark: rule.remark || '',
     }))
@@ -4063,27 +5203,208 @@ export class AdminBusinessService {
       + (rules.length > 3 ? ` +${rules.length - 3}` : '')
   }
 
+  private presentMemberCardSnapshotRules(
+    snapshotValue: Prisma.JsonValue,
+    currentRules: MemberCardProductDraft['serviceRuleItems'],
+  ) {
+    const snapshot = this.asJsonRecord(snapshotValue)
+    const snapshotRules = Array.isArray(snapshot?.redemptionRules)
+      ? snapshot.redemptionRules
+          .map(item => this.asJsonRecord(item))
+          .filter((item): item is Record<string, Prisma.JsonValue> => Boolean(item))
+      : []
+    if (!snapshotRules.length) return this.presentMemberCardServiceRules(currentRules)
+
+    const currentMap = new Map(
+      this.presentMemberCardServiceRules(currentRules).map(rule => [Number(rule.serviceId), rule]),
+    )
+    return snapshotRules.map((rule, index) => {
+      const serviceId = Number(rule.serviceId)
+      const current = currentMap.get(serviceId)
+      const consumeUnits = Number(rule.consumeMinutes ?? rule.consumeUnits) || 0
+      return {
+        id: Number(rule.serviceRuleId) || current?.id || index + 1,
+        memberCardId: current?.memberCardId || 0,
+        serviceId,
+        serviceCode: this.optionalString(rule.serviceCode) || current?.serviceCode || '',
+        serviceName: this.optionalString(rule.serviceName) || current?.serviceName || `Service ${serviceId}`,
+        serviceCardType: current?.serviceCardType || MEMBER_CARD_TYPE.TIME,
+        serviceConsumeUnit: current?.serviceConsumeUnit || 0,
+        serviceDurationMinutes: Number(rule.serviceDurationMinutes) || current?.serviceDurationMinutes || 0,
+        serviceStatus: current?.serviceStatus || 'disabled',
+        consumeUnits,
+        effectiveConsumeUnits: consumeUnits,
+        consumeMode: this.optionalString(rule.consumeMode) || current?.consumeMode || 'fixed_minutes',
+        minConsumeMinutes: Number(rule.minConsumeMinutes) || consumeUnits,
+        allowedMinutes: this.jsonNumberArray(rule.allowedMinutes),
+        status: rule.status === 0 ? 'disabled' : 'active',
+        remark: this.optionalString(rule.remark) || '',
+      }
+    })
+  }
+
+  private memberCardSnapshotRuleSummary(rules: Array<{ serviceName: string, consumeUnits: number }>) {
+    if (!rules.length) return 'no published service rules'
+    return rules.slice(0, 3).map(rule => `${rule.serviceName}:${rule.consumeUnits}`).join(', ')
+      + (rules.length > 3 ? ` +${rules.length - 3}` : '')
+  }
+
+  private presentMemberCardProduct(card: MemberCardProductWithRelations) {
+    const hasPublishedVersion = Boolean(card.publishedVersionId && card.publishedVersion)
+    return {
+      id: String(card.id),
+      code: card.code,
+      name: card.name,
+      description: card.description || '',
+      detail: card.detail || '',
+      coverImage: this.storage.signNullableUrl(card.coverImage) || card.coverImage || '',
+      coverImageOssUrl: card.coverImage || '',
+      coverImageDisplayUrl: this.storage.signNullableUrl(card.coverImage) || card.coverImage || '',
+      purchaseNotice: card.purchaseNotice || '',
+      sortOrder: card.sortOrder,
+      cardType: card.cardType,
+      unitName: card.unitName,
+      unitMinutes: card.unitMinutes || 0,
+      totalUnits: card.totalUnits,
+      totalTimes: card.totalTimes,
+      price: card.price.toNumber(),
+      activationDeadlineDays: card.activationDeadlineDays,
+      validityDays: card.validityDays,
+      allowHalfDeduct: card.allowHalfDeduct,
+      minConsumeUnits: card.minConsumeUnits,
+      serviceRuleList: this.presentMemberCardServiceRules(card.serviceRuleItems),
+      serviceRuleCount: card.serviceRuleItems.filter(rule => rule.status === 1).length,
+      effectiveRuleSummary: this.memberCardRuleSummary(card.serviceRuleItems.filter(rule => rule.status === 1)),
+      currentVersion: card.currentVersion,
+      publishedVersionId: card.publishedVersionId ? String(card.publishedVersionId) : null,
+      publishedPrice: card.publishedVersion?.price.toNumber() ?? null,
+      draftRevision: card.draftRevision,
+      publishedRevision: card.publishedRevision,
+      hasUnpublishedChanges: card.draftRevision > card.publishedRevision,
+      publishedAt: card.publishedAt ? this.formatDateTime(card.publishedAt) : null,
+      soldCount: card._count.purchaseOrders,
+      userCardCount: card._count.userCards,
+      status: !hasPublishedVersion ? 'draft' : card.status === 1 ? 'active' : 'disabled',
+      updatedAt: this.formatDateTime(card.updatedAt),
+    }
+  }
+
+  private async ensureMemberCardProductCode(
+    tx: Prisma.TransactionClient,
+    value: unknown,
+    currentId?: bigint,
+    lockedCode?: string,
+  ) {
+    const code = this.requiredString(value, 'code required').trim().toUpperCase()
+    if (!/^[A-Z0-9][A-Z0-9_-]{1,63}$/.test(code)) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid member card product code', 400)
+    }
+    if (lockedCode && code !== lockedCode) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'published member card product code cannot be changed', 409)
+    }
+    const duplicate = await tx.memberCard.findFirst({
+      where: {
+        code,
+        ...(currentId ? { id: { not: currentId } } : {}),
+      },
+      select: { id: true },
+    })
+    if (duplicate) throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'member card product code already exists', 409)
+    return code
+  }
+
+  private validateMemberCardProductDraft(card: MemberCardProductDraft) {
+    if (!card.code || !card.name || !card.description || !card.coverImage) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'code, name, description and coverImage are required before publish', 400)
+    }
+    if (card.price.lessThan(0) || card.totalUnits <= 0 || card.activationDeadlineDays <= 0 || card.validityDays <= 0) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid member card price, minutes or validity settings', 400)
+    }
+    if (!card.serviceRuleItems.length) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'at least one active service rule is required before publish', 400)
+    }
+    for (const rule of card.serviceRuleItems) {
+      if (rule.service.deletedAt || rule.service.status !== 1) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, `service ${rule.service.name} is not active`, 409)
+      }
+      if (rule.consumeUnits <= 0 || rule.consumeUnits > card.totalUnits || rule.minConsumeMinutes <= 0) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, `invalid redemption minutes for ${rule.service.name}`, 400)
+      }
+      const allowed = this.jsonNumberArray(rule.allowedMinutes)
+      if (rule.consumeMode === 'custom_minutes') {
+        if (!allowed.length || allowed.some(minutes => minutes > card.totalUnits || minutes % rule.minConsumeMinutes !== 0)) {
+          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, `invalid custom minute options for ${rule.service.name}`, 400)
+        }
+      }
+      if (rule.consumeMode === 'half_service') {
+        const duration = rule.service.durationMinutes || rule.consumeUnits
+        if (duration <= 0 || duration % 2 !== 0) {
+          throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, `service ${rule.service.name} cannot use half-service redemption`, 400)
+        }
+      }
+    }
+  }
+
+  private buildMemberCardProductSnapshot(
+    card: MemberCardProductDraft,
+    version: number,
+    redemptionRules: Array<Record<string, unknown>>,
+  ) {
+    return {
+      id: Number(card.id),
+      code: card.code,
+      name: card.name,
+      description: card.description || '',
+      detail: card.detail || '',
+      coverImage: card.coverImage || '',
+      purchaseNotice: card.purchaseNotice || '',
+      sortOrder: card.sortOrder,
+      price: card.price.toNumber(),
+      cardType: MEMBER_CARD_TYPE.TIME,
+      unitName: '分钟',
+      unitMinutes: 1,
+      totalMinutes: card.totalUnits,
+      totalUnits: card.totalUnits,
+      activationDeadlineDays: card.activationDeadlineDays,
+      validityDays: card.validityDays,
+      version,
+      redemptionRules,
+    }
+  }
+
+  private memberCardProductSnapshotFingerprint(value: unknown) {
+    const normalize = (item: unknown): unknown => {
+      if (Array.isArray(item)) return item.map(normalize)
+      if (!item || typeof item !== 'object') return item
+      return Object.keys(item as Record<string, unknown>)
+        .filter(key => key !== 'version' && key !== 'serviceRuleId')
+        .sort()
+        .reduce<Record<string, unknown>>((result, key) => {
+          result[key] = normalize((item as Record<string, unknown>)[key])
+          return result
+        }, {})
+    }
+    return JSON.stringify(normalize(value))
+  }
+
+  private jsonNumberArray(value: Prisma.JsonValue | null | undefined) {
+    return Array.isArray(value)
+      ? value.map(item => Number(item)).filter(item => Number.isInteger(item) && item > 0)
+      : []
+  }
+
+  private asJsonRecord(value: Prisma.JsonValue | null | undefined): Record<string, Prisma.JsonValue> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, Prisma.JsonValue>
+      : null
+  }
+
   private unitsToLegacyTimes(card: { cardType: string, unitMinutes: number | null }, units: number) {
     const normalizedUnits = Math.max(0, Math.abs(units))
     if (card.cardType === MEMBER_CARD_TYPE.TIME && card.unitMinutes && card.unitMinutes > 0) {
       return Math.ceil(normalizedUnits / card.unitMinutes)
     }
     return normalizedUnits
-  }
-
-  private nextUserMemberCardStatusAfterAdjust(status: string, expireAt: Date, remainingUnits: number, now = new Date()) {
-    if (status === USER_MEMBER_CARD_STATUS.DISABLED || status === USER_MEMBER_CARD_STATUS.REFUNDED) return status
-    if (expireAt <= now) return USER_MEMBER_CARD_STATUS.EXPIRED
-    if (remainingUnits <= 0) return USER_MEMBER_CARD_STATUS.USED_UP
-    if (status === USER_MEMBER_CARD_STATUS.USED_UP || status === USER_MEMBER_CARD_STATUS.EXPIRED) return USER_MEMBER_CARD_STATUS.ACTIVE
-    return status
-  }
-
-  private normalizeUserMemberCardStatus(value: string) {
-    if (['active', 'disabled', 'expired', 'used_up'].includes(value)) return value
-    if (value === 'published') return 'active'
-    if (value === 'draft') return 'disabled'
-    throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'invalid user member card status', 400)
   }
 
   private parseJsonArray(value: unknown): Prisma.InputJsonValue {

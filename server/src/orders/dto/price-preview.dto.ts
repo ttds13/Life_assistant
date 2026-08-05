@@ -26,9 +26,29 @@ export class PricePreviewDto {
   @Transform(({ value }) => trimOptional(value))
   serviceCode?: string
 
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
+  appointmentDate!: string
+
+  @IsString()
+  @Matches(/^\d{2}:\d{2}-\d{2}:\d{2}$/)
+  appointmentTimeSlot!: string
+
   @IsOptional()
   @IsInt()
   @Min(1)
   @Transform(({ value }) => toOptionalNumber(value))
   couponId?: number
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Transform(({ value }) => toOptionalNumber(value))
+  memberCardId?: number
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Transform(({ value }) => toOptionalNumber(value))
+  memberCardConsumeMinutes?: number
 }

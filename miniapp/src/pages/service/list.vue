@@ -22,6 +22,7 @@ const loading = ref(true)
 const isError = ref(false)
 const page = ref(1)
 const pageSize = 30
+const isMemberCardMode = computed(() => source.value === 'member_card' && Boolean(memberCardId.value))
 
 function normalizeServiceList(data: any): Service[] {
   if (Array.isArray(data))
@@ -50,8 +51,18 @@ function serviceDetailUrl(service: Service) {
   return `/pages/service/detail?${query}`
 }
 
+function memberCardBookingUrl(service: Service) {
+  const query = [
+    service.code ? `serviceCode=${encodeURIComponent(service.code)}` : '',
+    `serviceId=${encodeURIComponent(String(service.id))}`,
+    `memberCardId=${encodeURIComponent(String(memberCardId.value))}`,
+    `source=member_card`,
+  ].filter(Boolean).join('&')
+  return `/pages/order/create?${query}`
+}
+
 function onServiceTap(service: Service) {
-  uni.navigateTo({ url: serviceDetailUrl(service) })
+  uni.navigateTo({ url: isMemberCardMode.value ? memberCardBookingUrl(service) : serviceDetailUrl(service) })
 }
 
 async function loadServices() {
@@ -87,13 +98,15 @@ onLoad((query) => {
   const cardId = Number(query?.memberCardId)
   memberCardId.value = Number.isInteger(cardId) && cardId > 0 ? cardId : undefined
   memberCardName.value = typeof query?.cardName === 'string' ? decodeURIComponent(query.cardName) : ''
-  if (memberCardName.value && !query?.categoryName)
+  source.value = typeof query?.source === 'string' ? decodeURIComponent(query.source) : ''
+  if (memberCardId.value && source.value === 'member_card')
+    categoryName.value = '选择预约服务'
+  else if (memberCardName.value && !query?.categoryName)
     categoryName.value = `${memberCardName.value}可预约服务`
   cardType.value = ['none', 'time', 'times', 'consultation'].includes(String(query?.cardType))
     ? String(query?.cardType) as any
     : undefined
   serviceCodes.value = typeof query?.serviceCodes === 'string' ? decodeURIComponent(query.serviceCodes) : ''
-  source.value = typeof query?.source === 'string' ? decodeURIComponent(query.source) : ''
   promotionKey.value = typeof query?.promotionKey === 'string' ? decodeURIComponent(query.promotionKey) : ''
   campaignId.value = typeof query?.campaignId === 'string' ? decodeURIComponent(query.campaignId) : ''
   void loadServices()
@@ -107,7 +120,7 @@ onLoad((query) => {
         {{ categoryName }}
       </text>
       <text class="block mt-[8rpx] text-[26rpx] leading-[38rpx] text-gray-500">
-        选择具体服务商品，进入详情后可预约下单。
+        {{ isMemberCardMode ? `使用${memberCardName || '会员卡'}权益预约` : '选择具体服务商品，进入详情后可预约下单。' }}
       </text>
     </view>
 
@@ -147,14 +160,20 @@ onLoad((query) => {
                 {{ item.description || '专业师傅上门服务' }}
               </text>
               <view class="mt-[16rpx] flex items-center">
-                <text class="text-[34rpx] leading-[42rpx] font-700 text-[#FF373D]">
-                  ￥{{ formatPrice(item.basePrice) }}
-                </text>
-                <text class="ml-[6rpx] text-[22rpx] text-gray-400">
-                  / {{ item.priceUnit || '次' }}
-                </text>
+                <template v-if="isMemberCardMode">
+                  <text class="text-[28rpx] leading-[40rpx] font-700 text-[#1677FF]">权益预约</text>
+                  <text class="ml-[8rpx] text-[23rpx] text-gray-400">应付 ¥0</text>
+                </template>
+                <template v-else>
+                  <text class="text-[34rpx] leading-[42rpx] font-700 text-[#FF373D]">
+                    ￥{{ formatPrice(item.basePrice) }}
+                  </text>
+                  <text class="ml-[6rpx] text-[22rpx] text-gray-400">
+                    / {{ item.priceUnit || '次' }}
+                  </text>
+                </template>
                 <view class="ml-auto h-[48rpx] px-[18rpx] rounded-full bg-[#FFECEF] flex items-center justify-center">
-                  <text class="text-[24rpx] text-[#FF373D] font-600">查看详情</text>
+                  <text class="text-[24rpx] text-[#FF373D] font-600">{{ isMemberCardMode ? '去预约' : '查看详情' }}</text>
                 </view>
               </view>
             </view>
@@ -165,8 +184,8 @@ onLoad((query) => {
       <empty-state
         v-else
         type="empty"
-        title="暂无服务"
-        description="该列表下暂无可选服务"
+        :title="isMemberCardMode ? '暂无可预约服务' : '暂无服务'"
+        :description="isMemberCardMode ? '该会员卡暂时没有可预约服务' : '该列表下暂无可选服务'"
       />
     </loading-state>
   </view>

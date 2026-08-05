@@ -6,6 +6,7 @@ import { MemberCardsService } from '../src/member-cards/member-cards.service'
 import { ORDER_STATUS } from '../src/orders/constants/order-status'
 import { OrdersService } from '../src/orders/orders.service'
 import { PrismaService } from '../src/prisma/prisma.service'
+import { RefundsService } from '../src/refunds/refunds.service'
 
 const RUN_PREFIX = 'DAY46_MEMBER_CARD_TIME_BALANCE_TEST'
 
@@ -125,6 +126,9 @@ async function createBaseData(prisma: PrismaService, runId: string) {
       memberCardId: cardTemplate.id,
       serviceId: service.id,
       consumeUnits: 120,
+      consumeMode: 'custom_minutes',
+      minConsumeMinutes: 60,
+      allowedMinutes: [60, 120],
       status: 1,
       remark: `${runId} consume 120 minutes`,
     },
@@ -261,6 +265,7 @@ async function collectRunData(prisma: PrismaService, runId: string) {
     pointLedgers,
     auditLogs,
     paymentNotifyLogs,
+    refundRows,
   ] = await Promise.all([
     prisma.address.findMany({
       where: { OR: [{ ownerType: 'user', ownerId: { in: userIds } }, { detailAddress: { contains: runId } }] },
@@ -291,6 +296,10 @@ async function collectRunData(prisma: PrismaService, runId: string) {
       where: { OR: [{ paymentId: { in: paymentIds } }, { paymentNo: { in: paymentNos } }, { rawBody: { contains: runId } }] },
       select: { id: true },
     }),
+    prisma.refund.findMany({
+      where: { OR: [{ orderId: { in: orderIds } }, { paymentId: { in: paymentIds } }, { reason: { contains: runId } }] },
+      select: { id: true },
+    }),
   ])
 
   return {
@@ -315,6 +324,7 @@ async function collectRunData(prisma: PrismaService, runId: string) {
       pointLedgerIds: pointLedgers.map(item => item.id),
       auditLogIds: auditLogs.map(item => item.id),
       paymentNotifyLogIds: paymentNotifyLogs.map(item => item.id),
+      refundIds: refundRows.map(item => item.id),
     },
     counts: {
       users: userIds.length,
@@ -325,6 +335,7 @@ async function collectRunData(prisma: PrismaService, runId: string) {
       userMemberCards: userCardIds.length,
       orders: orderIds.length,
       payments: paymentIds.length,
+      refunds: refundRows.length,
       memberCardRecords: memberCardRecords.length,
       pointLedgers: pointLedgers.length,
       auditLogs: auditLogs.length,
@@ -346,6 +357,7 @@ async function cleanupRunData(prisma: PrismaService, runId: string) {
     await tx.orderStatusLog.deleteMany({ where: { id: { in: ids.orderStatusLogIds } } })
     await tx.memberCardRecord.deleteMany({ where: { id: { in: ids.memberCardRecordIds } } })
     await tx.pointLedger.deleteMany({ where: { id: { in: ids.pointLedgerIds } } })
+    await tx.refund.deleteMany({ where: { id: { in: ids.refundIds } } })
     await tx.payment.deleteMany({ where: { id: { in: ids.paymentIds } } })
     await tx.order.deleteMany({ where: { id: { in: ids.orderIds } } })
     await tx.address.deleteMany({ where: { id: { in: ids.addressIds } } })
@@ -377,6 +389,7 @@ async function runSmoke(runId: string) {
   const memberCards = app.get(MemberCardsService)
   const orders = app.get(OrdersService)
   const admin = app.get(AdminBusinessService)
+  const refunds = app.get(RefundsService)
   const keepData = hasFlag('keep-data')
 
   try {
@@ -400,7 +413,89 @@ async function runSmoke(runId: string) {
       orderBy: [{ id: 'desc' }],
     })
     assertClosed(userCard, 'paid purchase should grant user member card')
+    const storedPurchase = await prisma.order.findUnique({
+      where: { id: BigInt(purchase.id) },
+      include: { memberCardPurchase: true },
+    })
+    assertClosed(
+      storedPurchase?.purchaseCardId === null
+      && storedPurchase.grantedUserMemberCardId === null
+      && storedPurchase.memberCardConsumeUnits === 0,
+      'new purchase must not write legacy member-card columns on orders',
+    )
+    assertClosed(
+      storedPurchase.memberCardPurchase?.memberCardPlanId === base.cardTemplate.id
+      && storedPurchase.memberCardPurchase.grantedUserMemberCardId === userCard.id,
+      'new purchase must keep plan and grant links in member_card_purchase_orders',
+    )
     await assertCardBalance(prisma, userCard.id, { remaining: 120, frozen: 0, usable: 120 })
+    const adminUsableBeforeActivation = await admin.listUserMemberCards({
+      page: 1,
+      pageSize: 20,
+      userId: String(userId),
+      status: 'usable',
+    } as any)
+    assertClosed(
+      adminUsableBeforeActivation.items.some((item: any) => Number(item.id) === Number(userCard.id) && item.status === 'pending_activation'),
+      'admin usable card list should include a pending activation card',
+    )
+
+    const memberCardPricePreview = await orders.getPricePreview(userId, {
+      serviceId: Number(base.service.id),
+      memberCardId: Number(userCard.id),
+      memberCardConsumeMinutes: 60,
+    })
+    assertClosed(memberCardPricePreview.pricingMode === 'member_card', 'member card preview should use member_card pricing mode')
+    assertClosed(memberCardPricePreview.payableAmount === 0, 'member card preview should be zero payable')
+    assertClosed(memberCardPricePreview.memberCardConsumeMinutes === 60, 'member card preview should keep selected minutes')
+    assertClosed(
+      memberCardPricePreview.items.some(item => item.label === '会员卡权益抵扣' && item.amount === 120),
+      'member card preview should show the full service amount as entitlement discount',
+    )
+
+    const cashPricePreview = await orders.getPricePreview(userId, { serviceId: Number(base.service.id) })
+    assertClosed(cashPricePreview.pricingMode === 'cash', 'cash preview should keep cash pricing mode')
+    assertClosed(cashPricePreview.payableAmount === 120, 'cash preview should keep the service price')
+
+    let invalidPreviewRejected = false
+    try {
+      await orders.getPricePreview(userId, {
+        serviceId: Number(base.service.id),
+        memberCardId: Number(userCard.id),
+        memberCardConsumeMinutes: 30,
+      })
+    }
+    catch {
+      invalidPreviewRejected = true
+    }
+    assertClosed(invalidPreviewRejected, 'member card preview should reject minutes outside the template rule')
+
+    const refundablePurchase = await memberCards.createAdminPurchaseOrder({
+      userId,
+      cardId: Number(base.cardTemplate.id),
+      source: 'offline',
+      paymentMode: 'offline_paid',
+      paymentRemark: `${runId} refundable purchase paid`,
+      adminRemark: `${runId} refundable purchase paid`,
+    }, { adminId: 1, requestId: requestId(runId, 'refundable-purchase'), ip: '127.0.0.1' }) as { id: string | number, status: string }
+    const refundableUserCard = await prisma.userMemberCard.findUnique({
+      where: { purchaseOrderId: BigInt(refundablePurchase.id) },
+    })
+    assertClosed(refundableUserCard?.status === 'pending_activation', 'unused purchase should grant a pending activation card')
+    const refundRequest = await refunds.createUserRefundRequest(userId, Number(refundablePurchase.id), {
+      reason: `${runId} unused card refund`,
+      source: 'user_request',
+    }, requestId(runId, 'refundable-purchase-request')) as { id: number }
+    await refunds.approveRefund(refundRequest.id, {
+      remark: `${runId} approve unused card refund`,
+    }, { adminId: 1, requestId: requestId(runId, 'refundable-purchase-approve'), ip: '127.0.0.1' })
+    const refundedUserCard = await prisma.userMemberCard.findUnique({ where: { id: refundableUserCard.id } })
+    const refundedPurchase = await prisma.order.findUnique({ where: { id: BigInt(refundablePurchase.id) } })
+    assertClosed(
+      refundedUserCard?.status === 'completed' && refundedUserCard.completedReason === 'refunded',
+      'approved unused purchase refund should complete the card with refunded reason',
+    )
+    assertClosed(refundedPurchase?.status === ORDER_STATUS.REFUNDED, 'approved unused purchase refund should refund the purchase order')
 
     const range = appointmentRange(1, 10)
     const booking = await orders.createAdminOrder(1, {
@@ -417,6 +512,15 @@ async function runSmoke(runId: string) {
     }, requestId(runId, 'booking'), '127.0.0.1') as { id: string | number, status: string }
     const orderId = Number(booking.id)
     assertClosed(booking.status === ORDER_STATUS.PENDING_DISPATCH, 'member card booking should be pending dispatch')
+    const storedBooking = await prisma.order.findUnique({
+      where: { id: BigInt(orderId) },
+      include: { serviceBooking: { include: { redemption: true } } },
+    })
+    assertClosed(storedBooking?.memberCardId === null, 'new booking must not write legacy orders.member_card_id')
+    assertClosed(
+      storedBooking.serviceBooking?.redemption?.userMemberCardId === userCard.id,
+      'new booking must use order_redemptions as the user-card source',
+    )
     await assertCardBalance(prisma, userCard.id, { remaining: 120, frozen: 120, usable: 0 })
 
     await orders.assignOrder(1, orderId, { staffId, remark: `${runId} assign staff` }, requestId(runId, 'assign'), '127.0.0.1')
@@ -443,10 +547,10 @@ async function runSmoke(runId: string) {
       where: { userMemberCardId: userCard.id },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     })
-    assertClosed(recordsAfterConsume.some(item => item.recordType === 'grant' && item.units === 120), 'records should contain grant 120')
-    assertClosed(recordsAfterConsume.some(item => item.recordType === 'freeze' && item.units === 120), 'records should contain freeze 120')
-    assertClosed(recordsAfterConsume.some(item => item.recordType === 'consume' && item.units === 60), 'records should contain consume 60')
-    assertClosed(recordsAfterConsume.some(item => item.recordType === 'release' && item.units === 60), 'records should contain release 60')
+    assertClosed(recordsAfterConsume.some(item => item.recordType === 'issued' && item.units === 120), 'records should contain issued 120')
+    assertClosed(recordsAfterConsume.some(item => item.recordType === 'reserved' && item.units === 120), 'records should contain reserved 120')
+    assertClosed(recordsAfterConsume.some(item => item.recordType === 'consumed' && item.units === 60), 'records should contain consumed 60')
+    assertClosed(recordsAfterConsume.some(item => item.recordType === 'released' && item.units === 60), 'records should contain released 60')
 
     const adjusted = await admin.adjustUserMemberCardTime(Number(userCard.id), {
       mode: 'delta',
@@ -469,6 +573,48 @@ async function runSmoke(runId: string) {
     const adminRecords = await admin.listMemberCardRecords({ page: 1, pageSize: 20, keyword: runId } as any)
     assertClosed(adminRecords.items.some((item: any) => item.recordType === 'admin_adjust' && item.units === 30), 'admin records should show admin_adjust +30')
 
+    const selectedRange = appointmentRange(2, 10)
+    const selectedBooking = await orders.createAdminOrder(1, {
+      userId,
+      serviceId: Number(base.service.id),
+      addressId: Number(base.address.id),
+      appointmentStartTime: toAdminDate(selectedRange.start),
+      appointmentEndTime: toAdminDate(selectedRange.end),
+      source: 'offline',
+      paymentMode: 'member_card',
+      memberCardId: Number(userCard.id),
+      memberCardConsumeMinutes: 60,
+      remark: `${runId} selected 60 minute booking`,
+      adminRemark: `${runId} selected 60 minute booking`,
+    }, requestId(runId, 'selected-booking'), '127.0.0.1') as { id: string | number, version: number, plannedConsumeUnits?: number }
+    const selectedBookingId = Number(selectedBooking.id)
+    assertClosed(selectedBooking.plannedConsumeUnits === 60, 'selected booking should reserve 60 minutes')
+    await assertCardBalance(prisma, userCard.id, { remaining: 90, frozen: 60, usable: 30 })
+    await orders.cancelOrder(userId, selectedBookingId, {
+      version: selectedBooking.version,
+      reason: `${runId} release selected reservation`,
+    }, requestId(runId, 'selected-booking-cancel'))
+    await assertCardBalance(prisma, userCard.id, { remaining: 90, frozen: 0, usable: 90 })
+
+    const userBookingOrders = await orders.listUserOrders(userId, {
+      orderType: 'bookings',
+      page: 1,
+      pageSize: 20,
+    })
+    const userPurchaseOrders = await orders.listUserOrders(userId, {
+      orderType: 'member_card_purchase',
+      page: 1,
+      pageSize: 20,
+    })
+    assertClosed(
+      userBookingOrders.items.length === 2 && userBookingOrders.items.every(item => item.orderType !== 'member_card_purchase'),
+      'user booking view must contain only service bookings',
+    )
+    assertClosed(
+      userPurchaseOrders.items.length === 2 && userPurchaseOrders.items.every(item => item.orderType === 'member_card_purchase'),
+      'user purchase view must contain only member-card purchase orders',
+    )
+
     const beforeCleanup = await collectRunData(prisma, runId)
     let cleanupBeforeCounts: Record<string, number> | null = null
     let cleanupAfterCounts: Record<string, number> | null = null
@@ -483,13 +629,22 @@ async function runSmoke(runId: string) {
       cleaned: !keepData,
       purchaseOrderId: Number(purchase.id),
       bookingOrderId: orderId,
+      selectedBookingOrderId: selectedBookingId,
       userMemberCardId: Number(userCard.id),
       assertions: {
+        day51MemberCardPricePreviewZero: true,
+        day51InvalidPreviewMinutesRejected: true,
         purchaseGranted120: true,
+        purchaseUsesExtensionSourceOnly: true,
         bookingFrozen120: true,
+        bookingUsesRedemptionSourceOnly: true,
         staffConsumed60Released60: true,
         adminAdjustedTo90: true,
         userStaffAdminBalanceConsistent: true,
+        pendingActivationVisibleToAdmin: true,
+        unusedPurchaseRefundedAndRevoked: true,
+        selected60ReservationReleasedOnCancel: true,
+        userOrderViewsSeparated: true,
       },
       records: beforeCleanup.counts,
       cleanup: {

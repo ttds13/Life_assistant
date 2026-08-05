@@ -7,8 +7,10 @@ import type {
   PricePreview,
   QueryOrdersParams,
   RescheduleOrderPayload,
+  UpdateOrderAddressPayload,
   UserOrder,
 } from './types/orders'
+import type { CustomRequestOptions } from '@/http/types'
 import { http } from '@/http/http'
 
 export function getOrders(params?: QueryOrdersParams) {
@@ -25,6 +27,10 @@ export function createOrder(data: CreateOrderPayload) {
 
 export function cancelOrder(id: number, data?: { version?: number, reason?: string }) {
   return http.post<OrderDetail>(`/orders/${id}/cancel`, data)
+}
+
+export function updateOrderAddress(id: number, data: UpdateOrderAddressPayload) {
+  return http.put<OrderDetail>(`/orders/${id}/address`, data)
 }
 
 export function createRefundRequest(id: number, data?: { reason?: string, source?: string }) {
@@ -47,6 +53,6 @@ export function payOrder(id: number) {
   return http.post<PayOrderResult>(`/orders/${id}/pay`)
 }
 
-export function getOrderPricePreview(data: Partial<CreateOrderPayload>) {
-  return http.get<PricePreview>('/orders/price-preview', data)
+export function getOrderPricePreview(data: Partial<CreateOrderPayload>, options?: Partial<CustomRequestOptions>) {
+  return http.get<PricePreview>('/orders/price-preview', data, undefined, options)
 }

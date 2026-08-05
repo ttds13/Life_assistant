@@ -38,6 +38,7 @@ export const ORDER_DETAIL_INCLUDE = Prisma.validator<Prisma.OrderInclude>()({
       phone: true,
     },
   },
+  orderAddress: true,
   statusLogs: {
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   },
@@ -70,6 +71,28 @@ export const ORDER_DETAIL_INCLUDE = Prisma.validator<Prisma.OrderInclude>()({
         include: { card: true },
       },
     },
+  },
+  serviceBooking: {
+    include: {
+      redemption: {
+        include: {
+          userCard: {
+            include: { card: true },
+          },
+        },
+      },
+    },
+  },
+  memberCardPurchase: {
+    include: {
+      plan: true,
+      grantedUserCard: {
+        include: { card: true },
+      },
+    },
+  },
+  incomeRecords: {
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   },
   assignments: {
     orderBy: [{ assignedAt: 'desc' }, { id: 'desc' }],
@@ -125,13 +148,15 @@ export class OrdersRepository {
   async findUserOrders(params: {
     userId: number
     status?: string
+    orderType?: 'bookings' | 'member_card_purchase' | 'all'
     page: number
     pageSize: number
   }) {
     const where: Prisma.OrderWhereInput = {
       userId: BigInt(params.userId),
-      orderType: { not: ORDER_TYPE.MEMBER_CARD_PURCHASE },
     }
+    if (params.orderType === 'member_card_purchase') where.orderType = ORDER_TYPE.MEMBER_CARD_PURCHASE
+    else if (params.orderType !== 'all') where.orderType = { in: [...STAFF_VISIBLE_ORDER_TYPES] }
     if (params.status && params.status !== 'all') {
       where.status = params.status
     }
@@ -200,6 +225,135 @@ export class OrdersRepository {
         where,
         include: ORDER_DETAIL_INCLUDE,
         orderBy: [{ appointmentStartTime: 'asc' }, { id: 'desc' }],
+        skip: (params.page - 1) * params.pageSize,
+        take: params.pageSize,
+      }),
+    ])
+
+    return { total, items }
+  }
+
+  async findAdminUserProductOrders(params: {
+    userId?: number
+    productType?: 'service_product' | 'member_card_product'
+    status?: string
+    keyword?: string
+    source?: string
+    dateStart?: Date
+    dateEnd?: Date
+    page: number
+    pageSize: number
+  }) {
+    const where: Prisma.OrderWhereInput = {}
+    const and: Prisma.OrderWhereInput[] = []
+    if (params.userId) where.userId = BigInt(params.userId)
+    if (params.status && params.status !== 'all') where.status = params.status
+    if (params.source) where.source = params.source
+
+    if (params.productType === 'service_product') {
+      and.push({ serviceBooking: { is: { redemption: { is: null } } } })
+    }
+    else if (params.productType === 'member_card_product') {
+      and.push({ memberCardPurchase: { isNot: null } })
+    }
+    else {
+      and.push({
+        OR: [
+          { serviceBooking: { is: { redemption: { is: null } } } },
+          { memberCardPurchase: { isNot: null } },
+        ],
+      })
+    }
+
+    if (params.keyword) {
+      and.push({
+        OR: [
+          { orderNo: { contains: params.keyword } },
+          { user: { nickname: { contains: params.keyword } } },
+          { user: { phone: { contains: params.keyword } } },
+          { service: { name: { contains: params.keyword } } },
+          { memberCardPurchase: { is: { plan: { name: { contains: params.keyword } } } } },
+        ],
+      })
+    }
+    if (params.dateStart || params.dateEnd) {
+      where.createdAt = {
+        ...(params.dateStart ? { gte: params.dateStart } : {}),
+        ...(params.dateEnd ? { lte: params.dateEnd } : {}),
+      }
+    }
+    if (and.length) where.AND = and
+
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.order.count({ where }),
+      this.prisma.order.findMany({
+        where,
+        include: ORDER_DETAIL_INCLUDE,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (params.page - 1) * params.pageSize,
+        take: params.pageSize,
+      }),
+    ])
+
+    return { total, items }
+  }
+
+  async findAdminUserServiceBookings(params: {
+    userId?: number
+    entitlementType?: 'service_entitlement' | 'member_card_entitlement'
+    serviceId?: number
+    staffId?: number
+    status?: string
+    keyword?: string
+    source?: string
+    dateStart?: Date
+    dateEnd?: Date
+    page: number
+    pageSize: number
+  }) {
+    const where: Prisma.OrderWhereInput = {}
+    const and: Prisma.OrderWhereInput[] = []
+    if (params.userId) where.userId = BigInt(params.userId)
+    if (params.serviceId) where.serviceId = BigInt(params.serviceId)
+    if (params.staffId) where.staffId = BigInt(params.staffId)
+    if (params.status && params.status !== 'all') where.status = params.status
+    if (params.source) where.source = params.source
+
+    if (params.entitlementType === 'service_entitlement') {
+      and.push({ serviceBooking: { is: { redemption: { is: null } } } })
+    }
+    else if (params.entitlementType === 'member_card_entitlement') {
+      and.push({ serviceBooking: { is: { redemption: { isNot: null } } } })
+    }
+    else {
+      and.push({ serviceBooking: { isNot: null } })
+    }
+
+    if (params.keyword) {
+      and.push({
+        OR: [
+          { orderNo: { contains: params.keyword } },
+          { user: { nickname: { contains: params.keyword } } },
+          { user: { phone: { contains: params.keyword } } },
+          { service: { name: { contains: params.keyword } } },
+          { staff: { name: { contains: params.keyword } } },
+        ],
+      })
+    }
+    if (params.dateStart || params.dateEnd) {
+      where.appointmentStartTime = {
+        ...(params.dateStart ? { gte: params.dateStart } : {}),
+        ...(params.dateEnd ? { lte: params.dateEnd } : {}),
+      }
+    }
+    if (and.length) where.AND = and
+
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.order.count({ where }),
+      this.prisma.order.findMany({
+        where,
+        include: ORDER_DETAIL_INCLUDE,
+        orderBy: [{ appointmentStartTime: 'desc' }, { id: 'desc' }],
         skip: (params.page - 1) * params.pageSize,
         take: params.pageSize,
       }),

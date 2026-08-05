@@ -121,14 +121,6 @@ async function createBaseData(prisma: PrismaService, runId: string) {
         priceUnit: service.priceUnit,
         cardType: service.cardType,
       },
-      addressSnapshot: {
-        contactName: `${runId} user`,
-        contactPhone: userPhone,
-        cityName: '杭州',
-        districtName: '西湖',
-        detailAddress: `${runId} address`,
-        formattedAddress: `杭州西湖 ${runId} address`,
-      },
       appointmentStartTime: start,
       appointmentEndTime: end,
       originalAmount: new Prisma.Decimal(120),
@@ -137,6 +129,35 @@ async function createBaseData(prisma: PrismaService, runId: string) {
       adminRemark: `${runId} smoke order`,
       source: 'day40',
       cityCode: '330100',
+    },
+  })
+  await prisma.orderAddress.create({
+    data: {
+      orderId: order.id,
+      contactName: `${runId} user`,
+      contactPhone: userPhone,
+      city: '杭州',
+      district: '西湖',
+      detailAddress: `${runId} address`,
+      formattedAddress: `杭州西湖 ${runId} address`,
+      source: 'manual',
+      revisions: {
+        create: {
+          version: 1,
+          snapshot: {
+            contactName: `${runId} user`,
+            contactPhone: userPhone,
+            cityName: '杭州',
+            districtName: '西湖',
+            detailAddress: `${runId} address`,
+            formattedAddress: `杭州西湖 ${runId} address`,
+            version: 1,
+          },
+          changeType: 'create',
+          operatorType: 'system',
+          reason: `${runId} smoke order address`,
+        },
+      },
     },
   })
   await prisma.orderStatusLog.create({

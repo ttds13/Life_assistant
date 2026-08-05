@@ -9,6 +9,7 @@ export const IMAGE_BIZ_TYPE = {
   HOME_BANNER: 'home_banner',
   SERVICE_COVER: 'service_cover',
   SERVICE_IMAGE: 'service_image',
+  MEMBER_CARD_COVER: 'member_card_cover',
   ADMIN_AVATAR: 'admin_avatar',
   RICH_TEXT_IMAGE: 'rich_text_image',
   REVIEW_IMAGE: 'review_image',

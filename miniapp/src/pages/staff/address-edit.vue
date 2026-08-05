@@ -56,6 +56,8 @@ async function loadAddress(id: number) {
       coordinateType: address.coordinateType || 'gcj02',
       poiId: address.poiId || undefined,
       mapProvider: address.mapProvider || undefined,
+      source: address.source || 'manual',
+      expectedVersion: address.version,
     })
   }
   finally {
@@ -91,6 +93,8 @@ function payload(): SaveAddressPayload {
     coordinateType: form.coordinateType || 'gcj02',
     poiId: form.poiId,
     mapProvider: form.mapProvider,
+    source: form.source || 'manual',
+    expectedVersion: form.expectedVersion,
   }
 }
 

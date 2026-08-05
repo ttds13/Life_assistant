@@ -16,7 +16,7 @@ export interface AddressLocationResult {
 }
 
 export async function chooseAddressLocation(): Promise<AddressLocationResult> {
-  return new Promise((resolve) => {
+  const selected = await new Promise<AddressLocationResult>((resolve) => {
     uni.chooseLocation({
       success: (res) => {
         resolve({
@@ -24,17 +24,46 @@ export async function chooseAddressLocation(): Promise<AddressLocationResult> {
           message: '已选择地图位置',
           data: {
             addressTitle: res.name || '',
-            detailAddress: res.address || res.name || '',
             latitude: res.latitude,
             longitude: res.longitude,
             coordinateType: 'gcj02',
             mapProvider: 'tencent',
+            source: 'map',
           },
         })
       },
       fail: error => resolve(failedResult(error, '地图选点失败，可手动填写地址')),
     })
   })
+  if (!selected.ok || selected.data?.latitude === undefined || selected.data?.longitude === undefined)
+    return selected
+
+  try {
+    const detail = await reverseGeocode({
+      latitude: selected.data.latitude,
+      longitude: selected.data.longitude,
+    })
+    return {
+      ok: true,
+      message: '已选择地图位置',
+      data: {
+        ...selected.data,
+        provinceName: detail.province,
+        cityName: detail.city,
+        districtName: detail.district,
+        streetName: detail.street,
+        addressTitle: selected.data.addressTitle || detail.pois[0]?.title || detail.formattedAddress || detail.address || '',
+        poiId: detail.pois[0]?.poiId || undefined,
+        mapProvider: detail.provider,
+      },
+    }
+  }
+  catch {
+    return {
+      ...selected,
+      message: '位置已选择，部分地址信息需手动补充',
+    }
+  }
 }
 
 export async function locateCurrentAddress(): Promise<AddressLocationResult> {
@@ -60,13 +89,14 @@ export async function locateCurrentAddress(): Promise<AddressLocationResult> {
         provinceName: detail.province,
         cityName: detail.city,
         districtName: detail.district,
-        detailAddress: detail.address || detail.formattedAddress,
-        addressTitle: detail.pois[0]?.title || '',
+        streetName: detail.street,
+        addressTitle: detail.pois[0]?.title || detail.formattedAddress || detail.address || '',
         latitude: detail.latitude,
         longitude: detail.longitude,
         coordinateType: 'gcj02',
         poiId: detail.pois[0]?.poiId || undefined,
         mapProvider: detail.provider,
+        source: 'gps',
       },
     }
   }
@@ -80,6 +110,7 @@ export async function locateCurrentAddress(): Promise<AddressLocationResult> {
         longitude: location.longitude,
         coordinateType: 'gcj02',
         mapProvider: 'tencent',
+        source: 'gps',
       },
     }
   }

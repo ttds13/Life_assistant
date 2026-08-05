@@ -1,6 +1,7 @@
 export interface PointRule {
   unitAmount: number
   pointsPerUnit: number
+  redemptionPointsPerYuan?: number
   description?: string
 }
 
@@ -10,6 +11,7 @@ export interface PointEarnRecord {
   orderNo: string
   type?: string
   amount: number
+  rewardValue?: number
   points: number
   balanceAfter?: number
   remark?: string

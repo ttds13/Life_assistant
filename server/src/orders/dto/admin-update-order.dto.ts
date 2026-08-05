@@ -29,6 +29,17 @@ function toNullableNumber(value: unknown): number | null | undefined {
 }
 
 export class AdminUpdateOrderDto {
+  @IsInt()
+  @Min(0)
+  @Transform(({ value }) => toOptionalNumber(value))
+  expectedVersion!: number
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  @Transform(({ value }) => trimOptional(value))
+  reason?: string
+
   @IsOptional()
   @IsIn(ORDER_STATUS_VALUES)
   @Transform(({ value }) => trimOptional(value))

@@ -7,6 +7,7 @@ import { ORDER_ACTION } from '../orders/constants/order-action'
 import { ORDER_STATUS } from '../orders/constants/order-status'
 import { OrderTransitionService } from '../orders/order-transition.service'
 import { PrismaService } from '../prisma/prisma.service'
+import { PointsService } from '../points/points.service'
 import { IMAGE_BIZ_TYPE } from '../storage/image-biz-types'
 import { ObjectStorageService } from '../storage/storage.service'
 import { ACTIVE_TICKET_STATUSES, TICKET_STATUS } from './constants/ticket-status'
@@ -48,6 +49,7 @@ export class AfterSalesService {
     @Inject(OrderTransitionService) private readonly transitions: OrderTransitionService,
     @Inject(ObjectStorageService) private readonly storage: ObjectStorageService,
     @Inject(AdminAuditService) private readonly audit: AdminAuditService,
+    @Inject(PointsService) private readonly points: PointsService,
   ) {}
 
   async createOrderTicket(userId: number, orderId: number, dto: CreateTicketDto, requestId?: string) {
@@ -420,6 +422,8 @@ export class AfterSalesService {
         detail: params.detail ? params.detail as Prisma.InputJsonObject : undefined,
       },
     })
+    const completedOrder = await tx.order.findUnique({ where: { id: order.id } })
+    if (completedOrder) await this.points.handleOrderCompleted(tx, completedOrder)
   }
 
   private normalizeImages(images?: string[]) {

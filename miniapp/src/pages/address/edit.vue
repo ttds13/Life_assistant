@@ -36,6 +36,31 @@ const form = reactive<SaveAddressPayload>({
 
 const isEdit = computed(() => !!addressId.value)
 
+watch(
+  () => [
+    form.provinceName,
+    form.cityName,
+    form.districtName,
+    form.streetName,
+    form.addressTitle,
+    form.detailAddress,
+  ],
+  () => {
+    if (loading.value || locating.value)
+      return
+    if (form.latitude === null && form.longitude === null)
+      return
+    form.latitude = null
+    form.longitude = null
+    form.coordinateType = undefined
+    form.poiId = undefined
+    form.mapProvider = undefined
+    form.source = 'manual'
+    locationTip.value = '地址文字已修改，旧地图坐标已清除'
+  },
+  { flush: 'sync' },
+)
+
 async function loadAddress(id: number) {
   loading.value = true
   try {
@@ -57,6 +82,8 @@ async function loadAddress(id: number) {
       coordinateType: address.coordinateType || 'gcj02',
       poiId: address.poiId || undefined,
       mapProvider: address.mapProvider || undefined,
+      source: address.source || 'manual',
+      expectedVersion: address.version,
     })
   }
   finally {
@@ -89,9 +116,11 @@ function payload(): SaveAddressPayload {
     isDefault: !!form.isDefault,
     latitude: form.latitude ?? null,
     longitude: form.longitude ?? null,
-    coordinateType: form.coordinateType || 'gcj02',
-    poiId: form.poiId,
-    mapProvider: form.mapProvider,
+    coordinateType: form.latitude !== null ? form.coordinateType || 'gcj02' : undefined,
+    poiId: form.latitude !== null ? form.poiId : undefined,
+    mapProvider: form.latitude !== null ? form.mapProvider : undefined,
+    source: form.source || 'manual',
+    expectedVersion: form.expectedVersion,
   }
 }
 
@@ -203,6 +232,9 @@ onLoad((query) => {
   if (id) {
     addressId.value = id
     void loadAddress(id)
+  }
+  else {
+    void onLocateCurrent()
   }
 })
 </script>

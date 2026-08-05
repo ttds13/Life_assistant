@@ -22,7 +22,6 @@ export class MemberCardsController {
   }
 
   @Get('member-cards/shop')
-  @UseGuards(JwtAuthGuard)
   listPurchasableCards() {
     return this.memberCards.listPurchasableCards()
   }
@@ -41,7 +40,7 @@ export class MemberCardsController {
 
   @Post('admin/member-cards/grant')
   @UseGuards(AdminAuthGuard)
-  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_GRANT)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_MEMBER_CARD_GRANT)
   @HttpCode(200)
   grantCard(@Req() request: RequestWithContext, @Body() dto: GrantMemberCardDto) {
     const adminId = request.user?.adminId || request.user?.userId
@@ -57,7 +56,7 @@ export class MemberCardsController {
 
   @Post('admin/member-cards/purchase-orders')
   @UseGuards(AdminAuthGuard)
-  @RequireAdminPermissions(ADMIN_PERMISSION.MEMBER_CARD_GRANT)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_ORDER_CREATE)
   @HttpCode(200)
   createAdminPurchaseOrder(@Req() request: RequestWithContext, @Body() dto: AdminCreateMemberCardPurchaseDto) {
     const adminId = request.user?.adminId || request.user?.userId

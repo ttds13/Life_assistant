@@ -28,6 +28,8 @@ export interface LifeQueryParams {
   keywords?: string;
   status?: string;
   orderType?: string;
+  productType?: string;
+  entitlementType?: string;
   module?: LifeModuleKey;
   type?: AuditType;
   recordType?: string;
@@ -41,6 +43,7 @@ export interface LifeQueryParams {
   couponId?: string;
   targetType?: string;
   staffId?: string;
+  serviceId?: string;
   orderId?: string;
   orderNo?: string;
   sendStatus?: string;
@@ -85,8 +88,181 @@ export interface LifeResourceConfig {
 
 export interface LifeResourceRecord {
   id: string;
+  version?: number;
   status?: string;
   [key: string]: unknown;
+}
+
+export interface AdminRoleRecord {
+  id: string;
+  name: string;
+  displayName: string;
+  permissions: string[];
+  status: "active" | "inactive";
+  isSystem: boolean;
+  version: number;
+  adminCount: number;
+  updatedAt: string;
+}
+
+export interface AdminRoleAssignment {
+  id: string;
+  username: string;
+  name: string;
+  status: number;
+  role: string;
+  roleId: string | null;
+  roleName: string;
+  roleStatus: string;
+  version: number;
+}
+
+export interface AdminPermissionDescriptor {
+  code: string;
+  group: string;
+}
+
+export interface AdminAllowedActions {
+  update?: boolean;
+  cancel?: boolean;
+  deleteDraft?: boolean;
+  reschedule?: boolean;
+  assign?: boolean;
+  addressUpdate?: boolean;
+  adjust?: boolean;
+  extend?: boolean;
+  suspend?: boolean;
+  revoke?: boolean;
+  reasons?: Record<string, string>;
+}
+
+export interface MemberCardProductServiceRule {
+  id?: number;
+  memberCardId?: number;
+  serviceId: number;
+  serviceCode?: string;
+  serviceName?: string;
+  serviceDurationMinutes?: number;
+  serviceStatus?: string;
+  consumeUnits: number;
+  consumeMode: "fixed_minutes" | "half_service" | "custom_minutes";
+  minConsumeMinutes: number;
+  allowedMinutes: number[];
+  status: "active" | "disabled" | number;
+  remark?: string;
+}
+
+export interface MemberCardProduct {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  detail: string;
+  coverImage: string;
+  coverImageOssUrl?: string;
+  coverImageDisplayUrl?: string;
+  purchaseNotice: string;
+  sortOrder: number;
+  totalUnits: number;
+  price: number;
+  activationDeadlineDays: number;
+  validityDays: number;
+  allowHalfDeduct: boolean;
+  minConsumeUnits: number;
+  serviceRuleList: MemberCardProductServiceRule[];
+  serviceRuleCount: number;
+  effectiveRuleSummary: string;
+  currentVersion: number;
+  publishedVersionId?: string | null;
+  publishedPrice?: number | null;
+  draftRevision: number;
+  publishedRevision: number;
+  hasUnpublishedChanges: boolean;
+  publishedAt?: string | null;
+  soldCount: number;
+  userCardCount: number;
+  status: "draft" | "active" | "disabled";
+  updatedAt: string;
+}
+
+export interface AppointmentTimeLock {
+  id: string;
+  lockDate: string;
+  timeSlot: string;
+  reason: string;
+  status: "active" | "inactive";
+  createdBy: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AppointmentTimeLockList {
+  items: AppointmentTimeLock[];
+}
+
+export interface CreateAppointmentTimeLockPayload {
+  lockDate: string;
+  timeSlots: string[];
+  reason?: string;
+}
+
+export interface UpdateAppointmentTimeLockPayload {
+  lockDate?: string;
+  timeSlot?: string;
+  reason?: string;
+  status?: "active" | "inactive";
+}
+
+export interface MemberCardProductPayload {
+  code: string;
+  name: string;
+  description?: string;
+  detail?: string;
+  coverImage?: string;
+  purchaseNotice?: string;
+  sortOrder?: number;
+  totalUnits: number;
+  price: number;
+  activationDeadlineDays: number;
+  validityDays: number;
+  minConsumeUnits?: number;
+  allowHalfDeduct?: boolean;
+  serviceRuleList: Array<{
+    serviceId: number;
+    consumeUnits: number;
+    consumeMode: "fixed_minutes" | "half_service" | "custom_minutes";
+    minConsumeMinutes: number;
+    allowedMinutes: number[];
+    status: number;
+    remark?: string;
+  }>;
+}
+
+export interface MemberCardProductVersion {
+  id: string;
+  version: number;
+  isCurrent: boolean;
+  productCode: string;
+  productName: string;
+  description: string;
+  coverImage: string;
+  coverImageOssUrl?: string;
+  price: number;
+  totalMinutes: number;
+  activationDeadlineDays: number;
+  validityDays: number;
+  redemptionRules: Array<Record<string, unknown>>;
+  snapshot: Record<string, unknown>;
+  publishedBy?: number | null;
+  sourceVersionId?: number | null;
+  publishedAt: string;
+}
+
+export interface MemberCardProductVersionList {
+  memberCardId: number;
+  memberCardName: string;
+  currentVersion: number;
+  items: MemberCardProductVersion[];
 }
 
 export interface AddressRecord extends LifeResourceRecord {
@@ -102,7 +278,63 @@ export interface AddressRecord extends LifeResourceRecord {
   addressTitle?: string;
   detailAddress?: string;
   houseNumber?: string;
+  formattedAddress?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  coordinateType?: string;
+  poiId?: string;
+  mapProvider?: string;
+  source?: string;
+  version: number;
   isDefault?: boolean;
+}
+
+export interface OrderAddressView {
+  id: number;
+  orderId: number;
+  sourceAddressId?: number | null;
+  sourceAddressVersion?: number | null;
+  version: number;
+  contactName: string;
+  contactPhone: string;
+  country?: string;
+  provinceName?: string;
+  cityName?: string;
+  districtName?: string;
+  streetName?: string;
+  addressTitle?: string;
+  detailAddress: string;
+  houseNumber?: string;
+  formattedAddress: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  coordinateType?: string;
+  poiId?: string;
+  mapProvider?: string;
+  source: string;
+  mapAvailable: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OrderAddressRevision {
+  id: number;
+  version: number;
+  snapshot: Record<string, unknown>;
+  changeType: string;
+  operatorType: string;
+  operatorId?: number | null;
+  reason: string;
+  requestId: string;
+  createdAt: string;
+}
+
+export interface UpdateOrderAddressPayload {
+  sourceAddressId: number;
+  expectedOrderVersion: number;
+  expectedOrderAddressVersion: number;
+  expectedSourceAddressVersion?: number;
+  reason: string;
 }
 
 export interface AdminCreateOrderPayload {
@@ -138,6 +370,7 @@ export interface AdminCreateOrderPayload {
   source?: string;
   paymentMode?: string;
   memberCardId?: number;
+  memberCardConsumeMinutes?: number;
   couponId?: number;
   offlinePaidAt?: string;
   offlinePaymentRemark?: string;
@@ -489,6 +722,7 @@ export interface AdminUserPointsSummary {
 
 export interface OrderListItem {
   id: string;
+  userId?: number;
   orderNo: string;
   orderType?: string;
   status: string;
@@ -504,6 +738,7 @@ export interface OrderListItem {
   appointmentEndTime: string;
   appointmentTime: string;
   addressText: string;
+  orderAddressVersion?: number | null;
   totalAmount?: number;
   payableAmount: number;
   paidAmount: number;
@@ -520,6 +755,9 @@ export interface OrderListItem {
   memberCardUnitName?: string;
   memberCardRuleSource?: string;
   memberCardRuleSnapshot?: Record<string, unknown> | null;
+  memberCardConsumeMode?: string;
+  memberCardMinConsumeMinutes?: number;
+  memberCardAllowedMinutes?: number[];
   memberCardRuleChanged?: boolean;
   plannedConsumeUnits?: number;
   actualConsumeUnits?: number;
@@ -551,10 +789,122 @@ export interface OrderListItem {
   cancelReason?: string;
   createdAt: string;
   updatedAt?: string;
+  version: number;
+  allowedActions?: AdminAllowedActions;
+}
+
+export interface UserProductOrderItem extends OrderListItem {
+  productType: "service_product" | "member_card_product";
+  productName: string;
+  transactionStatus: string;
+  refundedAt?: string | null;
+  refundStatus?: string;
+  serviceProductSummary?: {
+    serviceId: number;
+    serviceName: string;
+    bookingOrderId: number;
+    appointmentStartAt?: string | null;
+    appointmentEndAt?: string | null;
+    fulfillmentStatus: string;
+  } | null;
+  memberCardProductSummary?: {
+    memberCardPlanId: number;
+    memberCardPlanVersion: number;
+    grantedUserMemberCardId?: number | null;
+    grantedAt?: string | null;
+    userMemberCardStatus: string;
+    userMemberCardCompletedReason: string;
+  } | null;
+}
+
+export interface UserServiceBookingItem extends OrderListItem {
+  entitlementType: "service_entitlement" | "member_card_entitlement";
+  fulfillmentStatus: string;
+  serviceId: number;
+  appointmentStartAt: string;
+  appointmentEndAt: string;
+  orderAddressSummary?: {
+    version: number;
+    formattedAddress: string;
+    cityName: string;
+    districtName: string;
+    mapAvailable: boolean;
+  } | null;
+  redemption?: {
+    id: number;
+    userMemberCardId: number;
+    memberCardName: string;
+    state: string;
+    reservedMinutes: number;
+    consumedMinutes: number;
+    releasedMinutes: number;
+    actualServiceMinutes?: number | null;
+    activatedCard: boolean;
+    settledAt?: string | null;
+  } | null;
+  staffIncomeSummary: {
+    amount: number;
+    status: string;
+    settlementStatus: string;
+    withdrawStatus: string;
+  };
+}
+
+export interface UserCommerceOverview {
+  user: {
+    id: number;
+    nickname: string;
+    phone: string;
+    source: string;
+    createdAt: string;
+  };
+  purchaseSummary: {
+    serviceProductCount: number;
+    memberCardProductCount: number;
+    totalOrderCount: number;
+    totalPaidAmount: number;
+    refundedAmount: number;
+  };
+  userMemberCardSummary: {
+    pendingActivationCount: number;
+    activeCount: number;
+    completedCount: number;
+    totalCount: number;
+    remainingMinutes: number;
+    frozenMinutes: number;
+    usableMinutes: number;
+    expiringWithinThirtyDaysCount: number;
+  };
+  serviceBookingSummary: {
+    serviceEntitlementCount: number;
+    memberCardEntitlementCount: number;
+    totalCount: number;
+    statusCounts: Record<string, number>;
+  };
+  recentProductOrders: UserProductOrderItem[];
+  recentServiceBookings: UserServiceBookingItem[];
+  recentUserMemberCards: Array<{
+    id: number;
+    cardId: number;
+    cardName: string;
+    planVersion: number;
+    status: string;
+    completedReason: string;
+    availabilityState: string;
+    remainingMinutes: number;
+    frozenMinutes: number;
+    usableMinutes: number;
+    activationDeadlineAt?: string | null;
+    activatedAt?: string | null;
+    expireAt?: string | null;
+    createdAt: string;
+  }>;
 }
 
 export interface OrderDetail extends OrderListItem {
-  version?: number;
+  version: number;
+  orderAddress?: OrderAddressView | null;
+  orderAddressRevisions?: OrderAddressRevision[];
   serviceSpec: string;
   statusLogs: Array<{
     id?: number;
@@ -640,6 +990,8 @@ export interface OrderDetail extends OrderListItem {
 }
 
 export interface UpdateOrderPayload {
+  expectedVersion: number;
+  reason?: string;
   status?: string;
   staffId?: number | null;
   appointmentStartTime?: string;
@@ -657,6 +1009,11 @@ export interface UpdateOrderPayload {
   completedAt?: string | null;
   cancelledAt?: string | null;
   cancelReason?: string | null;
+}
+
+export interface AdminOrderActionPayload {
+  version: number;
+  reason: string;
 }
 
 export interface StaffOption {
@@ -791,4 +1148,52 @@ export interface AdminWithdrawStatusLog {
 export interface AdminWithdrawDetail extends AdminWithdrawRequest {
   incomeRecords: AdminWithdrawIncomeRecord[];
   statusLogs: AdminWithdrawStatusLog[];
+}
+
+export interface PointRewardRule {
+  id: number;
+  ruleId: number;
+  code: "consumer_spend" | "referral_first_consumption";
+  name: string;
+  trigger?: string;
+  status: "active" | "inactive";
+  version: number;
+  calculationType: string;
+  qualificationConfig: Record<string, unknown>;
+  calculationConfig: Record<string, unknown>;
+  earnPointsPerYuan: number;
+  redemptionPointsPerYuan: number;
+  effectiveAt: string;
+  description: string;
+}
+
+export interface PointRewardEvent {
+  id: number;
+  eventKey: string;
+  orderId: number;
+  orderNo: string;
+  ruleCode: string;
+  ruleVersion: number;
+  status: string;
+  baseAmount: number;
+  rewardValue: number;
+  points: number;
+  reversedPoints: number;
+  beneficiary: { id: number; nickname: string; phone: string } | null;
+  sourceUser: { id: number; nickname: string; phone: string } | null;
+  referralBindingId: number | null;
+  createdAt: string;
+}
+
+export interface ReferralBinding {
+  id: number;
+  inviter: { id: number; nickname: string; phone: string } | null;
+  invitee: { id: number; nickname: string; phone: string } | null;
+  source: "link" | "share_code";
+  status: "active" | "held" | "invalid" | "revoked";
+  shareCode: string;
+  riskLevel: string;
+  riskReason: string;
+  boundAt: string;
+  reviewedAt: string | null;
 }

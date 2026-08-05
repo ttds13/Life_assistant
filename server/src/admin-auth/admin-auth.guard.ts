@@ -6,7 +6,7 @@ import { ErrorCode } from '../common/errors/error-code'
 import type { RequestWithContext } from '../common/utils/request-context'
 import { PrismaService } from '../prisma/prisma.service'
 import { ADMIN_PERMISSION_KEY } from './admin-permission.decorator'
-import { getAdminPermissions, getAdminRoles } from './admin-permissions'
+import { getAdminPermissions, getAdminRoles, normalizeAdminRole, parseRolePermissions } from './admin-permissions'
 
 export interface AdminTokenPayload {
   adminId: number
@@ -38,13 +38,30 @@ export class AdminAuthGuard implements CanActivate {
 
       const admin = await this.prisma.adminUser.findUnique({
         where: { id: BigInt(payload.adminId) },
-        select: { id: true, username: true, role: true, status: true },
+        select: {
+          id: true,
+          username: true,
+          role: true,
+          status: true,
+          roleRecord: { select: { name: true, permissions: true, status: true, version: true } },
+        },
       })
       if (!admin || admin.status !== 1) {
         throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, 'admin account disabled or missing', 401)
       }
 
-      const perms = getAdminPermissions(admin.role)
+      if (admin.roleRecord && admin.roleRecord.status !== 'active') {
+        throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'admin role disabled', 403)
+      }
+      const roleName = admin.roleRecord?.name || admin.role
+      if (!admin.roleRecord && !normalizeAdminRole(roleName)) {
+        throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'admin role is invalid', 403)
+      }
+      const dbPerms = admin.roleRecord ? parseRolePermissions(admin.roleRecord.permissions) : null
+      if (admin.roleRecord && !dbPerms) {
+        throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'admin role permissions are invalid', 403)
+      }
+      const perms = dbPerms || getAdminPermissions(roleName)
       const requiredPerms = this.reflector.getAllAndOverride<string[]>(ADMIN_PERMISSION_KEY, [
         context.getHandler(),
         context.getClass(),
@@ -57,8 +74,8 @@ export class AdminAuthGuard implements CanActivate {
         userId: Number(admin.id),
         adminId: Number(admin.id),
         username: admin.username || payload.username,
-        role: admin.role,
-        roles: getAdminRoles(admin.role),
+        role: roleName,
+        roles: admin.roleRecord ? [roleName.toUpperCase()] : getAdminRoles(roleName),
         perms,
         userType: 'admin' as const,
       }

@@ -1,16 +1,17 @@
 <script lang="ts" setup>
-import { getUserAddresses } from '@/api/address'
-import { getUsableCoupons } from '@/api/coupons'
-import { getMyMemberCards } from '@/api/memberCards'
-import { createOrder, getOrderPricePreview } from '@/api/orders'
-import { getServiceDetail, getServices } from '@/api/services'
 import type { UserAddress } from '@/api/types/address'
 import type { UserCoupon } from '@/api/types/coupons'
 import type { UserMemberCard } from '@/api/types/memberCards'
 import type { PricePreview } from '@/api/types/orders'
 import type { Service } from '@/api/types/services'
+import { getUserAddresses } from '@/api/address'
+import { getAppointmentSlots, type AppointmentSlotItem } from '@/api/appointments'
+import { getUsableCoupons } from '@/api/coupons'
+import { getMyMemberCards } from '@/api/memberCards'
+import { createOrder, getOrderPricePreview } from '@/api/orders'
+import { getServiceDetail, getServices } from '@/api/services'
 import { formatAddress, getSelectedAddress } from '@/utils/addressSelection'
-import { availableAppointmentSlots, buildAppointmentDateOptions } from '@/utils/appointmentSlots'
+import { buildAppointmentDateOptions } from '@/utils/appointmentSlots'
 
 definePage({
   style: {
@@ -36,40 +37,71 @@ const remark = ref('')
 const loading = ref(true)
 const submitting = ref(false)
 const priceLoading = ref(false)
+const slotLoading = ref(false)
+const slotLoadError = ref('')
+const appointmentSlotItems = ref<AppointmentSlotItem[]>([])
 const pricePreview = ref<PricePreview>({ ...emptyPricePreview })
 const pricePreviewReady = ref(false)
 const memberCards = ref<UserMemberCard[]>([])
 const usableCoupons = ref<UserCoupon[]>([])
 const selectedMemberCardId = ref<number | undefined>()
+const selectedMemberCardConsumeMinutes = ref<number | undefined>()
 const selectedCouponId = ref<number | undefined>()
 const preferredMemberCardId = ref<number | undefined>()
+const preferredMemberCardConsumeMinutes = ref<number | undefined>()
 const memberCardLoading = ref(false)
 const couponLoading = ref(false)
 const source = ref('')
 const promotionKey = ref('')
 const campaignId = ref('')
+const memberCardIntentError = ref('')
+let pricePreviewRequestId = 0
+let appointmentSlotsRequestId = 0
 
 const dateOptions = computed(() => buildAppointmentDateOptions())
-const timeSlots = computed(() => availableAppointmentSlots(selectedDate.value))
+const timeSlots = computed(() => appointmentSlotItems.value
+  .filter(item => item.available)
+  .map(item => item.timeSlot))
 const effectiveServiceId = computed(() => serviceId.value)
 const effectiveServiceCode = computed(() => service.value?.code || serviceCode.value)
 const hasServiceIdentifier = computed(() => !!effectiveServiceCode.value || effectiveServiceId.value > 0)
 const selectedMemberCard = computed(() => memberCards.value.find(item => item.id === selectedMemberCardId.value))
+const selectedMemberCardConsumeOptions = computed(() => {
+  const card = selectedMemberCard.value
+  if (!card)
+    return []
+  const configured = card.consumeMode === 'custom_minutes' && card.allowedMinutes?.length
+    ? card.allowedMinutes
+    : [card.consumeMinutes || card.consumeUnits]
+  const usableMinutes = card.usableMinutes ?? card.usableUnits
+  return Array.from(new Set(configured))
+    .filter(value => Number.isInteger(value) && value > 0 && value <= usableMinutes)
+    .sort((left, right) => left - right)
+})
 const selectedCoupon = computed(() => usableCoupons.value.find(item => item.couponId === selectedCouponId.value))
+const hasMemberCardIntent = computed(() => source.value === 'member_card' && Boolean(preferredMemberCardId.value))
 const isConsultationService = computed(() =>
   service.value?.consultationRequired
   || service.value?.cardType === 'consultation'
   || pricePreview.value.consultationRequired,
 )
-const displayPayableAmount = computed(() =>
-  selectedMemberCard.value || isConsultationService.value ? 0 : pricePreview.value.payableAmount,
+const isMemberCardBooking = computed(() =>
+  pricePreview.value.pricingMode === 'member_card'
+  || hasMemberCardIntent.value,
 )
+const displayPayableAmount = computed(() => pricePreview.value.payableAmount)
 const canSubmit = computed(() =>
   !!service.value
   && hasServiceIdentifier.value
   && !!selectedDate.value
   && !!selectedTimeSlot.value
   && !!selectedAddress.value
+  && (!selectedMemberCard.value || !!selectedMemberCardConsumeMinutes.value)
+  && !memberCardIntentError.value
+  && (!hasMemberCardIntent.value || (
+    pricePreview.value.pricingMode === 'member_card'
+    && pricePreview.value.payableAmount === 0
+  ))
   && pricePreviewReady.value
   && !priceLoading.value,
 )
@@ -142,11 +174,18 @@ async function loadMemberCards() {
   }
 
   memberCardLoading.value = true
+  memberCardIntentError.value = ''
   try {
     memberCards.value = await getMyMemberCards({ serviceId: service.value.id })
-    if (preferredMemberCardId.value && memberCards.value.some(item => item.id === preferredMemberCardId.value)) {
-      selectedMemberCardId.value = preferredMemberCardId.value
-      preferredMemberCardId.value = undefined
+    if (preferredMemberCardId.value) {
+      const preferredCard = memberCards.value.find(item => item.id === preferredMemberCardId.value)
+      if (!preferredCard) {
+        selectedMemberCardId.value = undefined
+        if (hasMemberCardIntent.value)
+          memberCardIntentError.value = '该会员卡不可用于当前服务，请返回卡包重新选择'
+        return
+      }
+      selectedMemberCardId.value = preferredCard.id
     }
     if (selectedMemberCardId.value && !memberCards.value.some(item => item.id === selectedMemberCardId.value)) {
       selectedMemberCardId.value = undefined
@@ -155,10 +194,15 @@ async function loadMemberCards() {
       selectedCouponId.value = undefined
       usableCoupons.value = []
     }
+    syncSelectedMemberCardConsumeMinutes()
+    if (selectedMemberCardId.value && !selectedMemberCardConsumeMinutes.value)
+      memberCardIntentError.value = '该会员卡当前没有可用的核销分钟'
   }
   catch {
     memberCards.value = []
     selectedMemberCardId.value = undefined
+    if (hasMemberCardIntent.value)
+      memberCardIntentError.value = '会员卡权益加载失败，请稍后重试'
   }
   finally {
     memberCardLoading.value = false
@@ -166,17 +210,45 @@ async function loadMemberCards() {
 }
 
 function formatCardBalance(card: UserMemberCard) {
-  if (card.cardType === 'time')
-    return `${card.usableUnits}分钟可用`
-  return `${card.usableUnits}${card.unitName || '次'}可用`
+  return `${card.usableMinutes ?? card.usableUnits}分钟可用`
+}
+
+function cardValidityText(card: UserMemberCard) {
+  if (card.status === 'pending_activation') {
+    return card.activationDeadlineAt
+      ? `首次预约后开始计时，请在 ${card.activationDeadlineAt.slice(0, 10)} 前激活`
+      : '首次预约后开始计时'
+  }
+  return card.expireAt ? `有效期至 ${card.expireAt.slice(0, 10)}` : '权益卡不可用'
 }
 
 function onSelectMemberCard(card?: UserMemberCard) {
+  if (!card && hasMemberCardIntent.value)
+    return
   selectedMemberCardId.value = card?.id
+  memberCardIntentError.value = ''
+  syncSelectedMemberCardConsumeMinutes()
   if (card) {
     selectedCouponId.value = undefined
     usableCoupons.value = []
   }
+  void loadPricePreview()
+}
+
+function syncSelectedMemberCardConsumeMinutes() {
+  const options = selectedMemberCardConsumeOptions.value
+  const preferred = selectedMemberCard.value?.consumeMinutes || selectedMemberCard.value?.consumeUnits
+  selectedMemberCardConsumeMinutes.value = options.includes(selectedMemberCardConsumeMinutes.value || 0)
+    ? selectedMemberCardConsumeMinutes.value
+    : options.includes(preferredMemberCardConsumeMinutes.value || 0)
+      ? preferredMemberCardConsumeMinutes.value
+      : options.includes(preferred || 0)
+        ? preferred
+        : options[0]
+}
+
+function onSelectMemberCardConsumeMinutes(minutes: number) {
+  selectedMemberCardConsumeMinutes.value = minutes
   void loadPricePreview()
 }
 
@@ -225,9 +297,25 @@ async function loadUsableCoupons(amount?: number) {
 }
 
 async function loadPricePreview() {
-  if (!service.value)
+  if (!service.value || !selectedDate.value || !selectedTimeSlot.value) {
+    pricePreview.value = { ...emptyPricePreview }
+    pricePreviewReady.value = false
     return
+  }
 
+  if (hasMemberCardIntent.value && !selectedMemberCard.value) {
+    pricePreview.value = { ...emptyPricePreview }
+    pricePreviewReady.value = false
+    return
+  }
+  if (selectedMemberCard.value && !selectedMemberCardConsumeMinutes.value) {
+    pricePreview.value = { ...emptyPricePreview }
+    pricePreviewReady.value = false
+    memberCardIntentError.value = '请选择本次核销分钟'
+    return
+  }
+
+  const requestId = ++pricePreviewRequestId
   priceLoading.value = true
   pricePreviewReady.value = false
   try {
@@ -238,17 +326,56 @@ async function loadPricePreview() {
       appointmentDate: selectedDate.value,
       appointmentTimeSlot: selectedTimeSlot.value,
       couponId: selectedMemberCard.value || isConsultationService.value ? undefined : selectedCouponId.value,
-    })
+      memberCardId: selectedMemberCardId.value,
+      memberCardConsumeMinutes: selectedMemberCardId.value ? selectedMemberCardConsumeMinutes.value : undefined,
+    }, { hideErrorToast: Boolean(selectedMemberCard.value || hasMemberCardIntent.value) })
+    if (requestId !== pricePreviewRequestId)
+      return
+    if (selectedMemberCard.value
+      && (nextPreview.pricingMode !== 'member_card' || nextPreview.payableAmount !== 0)) {
+      throw new Error('invalid member card price preview')
+    }
     pricePreview.value = nextPreview
     pricePreviewReady.value = true
+    memberCardIntentError.value = ''
     await loadUsableCoupons(nextPreview.serviceAmount)
   }
   catch {
+    if (requestId !== pricePreviewRequestId)
+      return
     pricePreview.value = { ...emptyPricePreview }
-    uni.showToast({ icon: 'none', title: '价格预览失败' })
+    pricePreviewReady.value = false
+    if (selectedMemberCard.value || hasMemberCardIntent.value)
+      memberCardIntentError.value = '会员卡权益校验失败，请确认卡状态、余额和适用服务'
+    else
+      uni.showToast({ icon: 'none', title: '价格预览失败' })
   }
   finally {
-    priceLoading.value = false
+    if (requestId === pricePreviewRequestId)
+      priceLoading.value = false
+  }
+}
+
+async function loadAppointmentSlots() {
+  const date = selectedDate.value
+  const requestId = ++appointmentSlotsRequestId
+  appointmentSlotItems.value = []
+  slotLoadError.value = ''
+  if (!date) return
+
+  slotLoading.value = true
+  try {
+    const result = await getAppointmentSlots(date)
+    if (requestId !== appointmentSlotsRequestId) return
+    appointmentSlotItems.value = result.items || []
+  }
+  catch {
+    if (requestId !== appointmentSlotsRequestId) return
+    slotLoadError.value = '预约时段加载失败，请稍后重试'
+  }
+  finally {
+    if (requestId === appointmentSlotsRequestId)
+      slotLoading.value = false
   }
 }
 
@@ -275,6 +402,14 @@ function validate() {
     return '请选择预约时间'
   if (!selectedAddress.value)
     return '请选择服务地址'
+  if (memberCardIntentError.value)
+    return memberCardIntentError.value
+  if (hasMemberCardIntent.value && !selectedMemberCard.value)
+    return '指定会员卡不可用'
+  if (selectedMemberCard.value && !selectedMemberCardConsumeMinutes.value)
+    return '请选择本次核销分钟'
+  if (selectedMemberCard.value && pricePreview.value.pricingMode !== 'member_card')
+    return '会员卡权益价格尚未确认'
   if (!pricePreviewReady.value)
     return '请先加载价格预览'
   return ''
@@ -297,12 +432,13 @@ async function onSubmit() {
       addressId: selectedAddress.value!.id,
       remark: remark.value.trim() || undefined,
       memberCardId: selectedMemberCardId.value,
+      memberCardConsumeMinutes: selectedMemberCardId.value ? selectedMemberCardConsumeMinutes.value : undefined,
       couponId: selectedMemberCard.value || isConsultationService.value ? undefined : selectedCouponId.value,
       source: source.value || undefined,
       promotionKey: promotionKey.value || undefined,
       campaignId: campaignId.value || undefined,
     })
-    if (selectedMemberCard.value || isConsultationService.value) {
+    if (pricePreview.value.pricingMode === 'member_card' || isConsultationService.value) {
       uni.showToast({ icon: 'success', title: '预约成功' })
       uni.redirectTo({ url: `/pages/order/detail?id=${order.id}` })
       return
@@ -325,6 +461,8 @@ onLoad((query) => {
   const cardId = Number(query?.memberCardId)
   preferredMemberCardId.value = Number.isInteger(cardId) && cardId > 0 ? cardId : undefined
   selectedMemberCardId.value = preferredMemberCardId.value
+  const consumeMinutes = Number(query?.memberCardConsumeMinutes)
+  preferredMemberCardConsumeMinutes.value = Number.isInteger(consumeMinutes) && consumeMinutes > 0 ? consumeMinutes : undefined
   source.value = typeof query?.source === 'string' ? decodeURIComponent(query.source) : ''
   promotionKey.value = typeof query?.promotionKey === 'string' ? decodeURIComponent(query.promotionKey) : ''
   campaignId.value = typeof query?.campaignId === 'string' ? decodeURIComponent(query.campaignId) : ''
@@ -340,6 +478,11 @@ onShow(() => {
 watch([selectedAddress, selectedDate, selectedTimeSlot], () => {
   if (service.value)
     void loadPricePreview()
+})
+
+watch(selectedDate, () => {
+  selectedTimeSlot.value = ''
+  void loadAppointmentSlots()
 })
 
 watch(timeSlots, (slots) => {
@@ -366,7 +509,13 @@ watch(timeSlots, (slots) => {
             <text class="text-[24rpx] text-gray-400 block mt-1 leading-[34rpx]">
               {{ service.description || '暂无服务说明' }}
             </text>
-            <view class="mt-2">
+            <view v-if="isMemberCardBooking" class="mt-2 rounded-[10rpx] bg-[#EAF3FF] px-3 py-2">
+              <text class="block text-[24rpx] font-600 text-[#1677FF]">会员卡权益预约</text>
+              <text class="block mt-1 text-[23rpx] text-gray-500">
+                {{ selectedMemberCard?.name || '正在确认会员卡' }}<template v-if="selectedMemberCardConsumeMinutes"> · 本次核销 {{ selectedMemberCardConsumeMinutes }} 分钟</template>
+              </text>
+            </view>
+            <view v-else class="mt-2">
               <price-text :price="service.basePrice" :unit="service.priceUnit || '次'" size="sm" />
             </view>
           </view>
@@ -388,7 +537,10 @@ watch(timeSlots, (slots) => {
             </text>
           </view>
         </view>
-        <view class="flex flex-wrap gap-2 mt-3">
+        <view v-if="slotLoading" class="mt-3 rounded-[12rpx] bg-[#F3F4F6] px-3 py-2">
+          <text class="text-[24rpx] text-gray-500">正在加载可预约时段</text>
+        </view>
+        <view v-else class="flex flex-wrap gap-2 mt-3">
           <view
             v-for="slot in timeSlots"
             :key="slot"
@@ -401,9 +553,14 @@ watch(timeSlots, (slots) => {
             </text>
           </view>
         </view>
-        <view v-if="!timeSlots.length" class="mt-3 rounded-[12rpx] bg-[#FFF7E6] px-3 py-2">
+        <view v-if="!slotLoading && slotLoadError" class="mt-3 rounded-[12rpx] bg-[#FFF1F0] px-3 py-2">
+          <text class="text-[24rpx] text-[#CF1322]">
+            {{ slotLoadError }}
+          </text>
+        </view>
+        <view v-else-if="!slotLoading && !timeSlots.length" class="mt-3 rounded-[12rpx] bg-[#FFF7E6] px-3 py-2">
           <text class="text-[24rpx] text-[#AD6800]">
-            今天已无可预约时间段，请选择明天或更晚日期
+            当天暂无可预约时段，请选择其他日期
           </text>
         </view>
       </form-section>
@@ -440,6 +597,9 @@ watch(timeSlots, (slots) => {
       </form-section>
 
       <form-section title="优惠权益">
+        <view v-if="memberCardIntentError" class="mb-3 rounded-[12rpx] bg-[#FFF1F2] px-3 py-3">
+          <text class="text-[24rpx] leading-[34rpx] text-[#DC2626]">{{ memberCardIntentError }}</text>
+        </view>
         <view class="flex items-center justify-between py-3 border-b border-[#F3F4F6]">
           <text class="text-[28rpx] text-gray-700">优惠券</text>
           <text v-if="couponLoading" class="text-[26rpx] text-gray-400">加载中</text>
@@ -451,6 +611,7 @@ watch(timeSlots, (slots) => {
         </view>
         <view v-if="!selectedMemberCard && !isConsultationService && usableCoupons.length" class="mt-2">
           <view
+            v-if="!hasMemberCardIntent"
             class="mb-2 rounded-[12rpx] border px-3 py-2"
             :class="!selectedCouponId ? 'border-[#1677FF] bg-[#EAF3FF]' : 'border-[#E5E7EB] bg-white'"
             @tap="onSelectCoupon(undefined)"
@@ -489,6 +650,7 @@ watch(timeSlots, (slots) => {
         </view>
         <view v-if="memberCards.length" class="mt-2">
           <view
+            v-if="!hasMemberCardIntent"
             class="mb-2 rounded-[12rpx] border px-3 py-2"
             :class="!selectedMemberCardId ? 'border-[#1677FF] bg-[#EAF3FF]' : 'border-[#E5E7EB] bg-white'"
             @tap="onSelectMemberCard(undefined)"
@@ -509,12 +671,28 @@ watch(timeSlots, (slots) => {
                 {{ card.name }}
               </text>
               <text class="text-[24rpx] text-gray-500">
-                本次扣 {{ card.consumeUnits }}{{ card.cardType === 'time' ? '分钟' : card.unitName || '次' }}
+                本次扣 {{ selectedMemberCardId === card.id && selectedMemberCardConsumeMinutes ? selectedMemberCardConsumeMinutes : card.consumeUnits }}分钟
               </text>
             </view>
             <text class="block mt-1 text-[23rpx] text-gray-400">
-              {{ formatCardBalance(card) }}，有效期至 {{ card.expireAt.slice(0, 10) }}
+              {{ formatCardBalance(card) }}，{{ cardValidityText(card) }}
             </text>
+          </view>
+        </view>
+        <view v-if="selectedMemberCard && selectedMemberCardConsumeOptions.length > 1" class="mt-3 border-t border-[#F3F4F6] pt-3">
+          <text class="block text-[26rpx] text-gray-700">本次核销分钟</text>
+          <view class="mt-2 flex flex-wrap gap-2">
+            <view
+              v-for="minutes in selectedMemberCardConsumeOptions"
+              :key="minutes"
+              class="h-[64rpx] min-w-[128rpx] px-3 flex items-center justify-center border rounded-[8rpx]"
+              :class="selectedMemberCardConsumeMinutes === minutes ? 'border-[#1677FF] bg-[#EAF3FF]' : 'border-[#E5E7EB] bg-white'"
+              @tap="onSelectMemberCardConsumeMinutes(minutes)"
+            >
+              <text class="text-[26rpx]" :class="selectedMemberCardConsumeMinutes === minutes ? 'text-[#1677FF]' : 'text-gray-600'">
+                {{ minutes }} 分钟
+              </text>
+            </view>
           </view>
         </view>
       </form-section>
@@ -524,12 +702,18 @@ watch(timeSlots, (slots) => {
           <text class="text-[26rpx] text-gray-400">价格加载中</text>
         </view>
         <amount-detail v-else :items="pricePreview.items" :total="displayPayableAmount" />
+        <view v-if="pricePreview.pricingMode === 'member_card'" class="mt-2 rounded-[10rpx] bg-[#F0FDF4] px-3 py-2">
+          <text class="text-[24rpx] text-[#15803D]">
+            本次冻结 {{ pricePreview.memberCardConsumeMinutes }} 分钟，预约完成后按核销规则结算
+          </text>
+        </view>
       </form-section>
     </loading-state>
 
     <bottom-action-bar
       :price="displayPayableAmount"
-      :primary-text="selectedMemberCard || isConsultationService ? '提交预约' : '提交订单'"
+      price-label="应付"
+      :primary-text="isMemberCardBooking || isConsultationService ? '提交预约' : '提交订单'"
       :primary-disabled="!canSubmit"
       :loading="submitting"
       @primary="onSubmit"

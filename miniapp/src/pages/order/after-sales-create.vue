@@ -41,7 +41,7 @@ async function loadOrder() {
   loading.value = true
   try {
     order.value = await getOrderDetail(orderId.value)
-    contactPhone.value = order.value.address?.contactPhone || ''
+    contactPhone.value = order.value.orderAddress?.contactPhone || ''
     if (order.value.latestTicket?.id && ['open', 'pending'].includes(order.value.latestTicket.status)) {
       uni.redirectTo({ url: `/pages/order/after-sales-detail?id=${order.value.latestTicket.id}` })
     }

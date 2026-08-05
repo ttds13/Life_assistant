@@ -15,6 +15,11 @@ function toOptionalString(value: unknown): string | undefined {
 
 export class QueryOrdersDto {
   @IsOptional()
+  @IsIn(['bookings', 'member_card_purchase', 'all'])
+  @Transform(({ value }) => toOptionalString(value))
+  orderType?: 'bookings' | 'member_card_purchase' | 'all'
+
+  @IsOptional()
   @IsIn(['all', ...ORDER_STATUS_VALUES])
   @Transform(({ value }) => toOptionalString(value))
   status?: string

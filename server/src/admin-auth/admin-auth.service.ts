@@ -6,7 +6,7 @@ import { ErrorCode } from '../common/errors/error-code'
 import { PrismaService } from '../prisma/prisma.service'
 import { ObjectStorageService } from '../storage/storage.service'
 import { IMAGE_BIZ_TYPE } from '../storage/image-biz-types'
-import { getAdminPermissions, getAdminRoles, normalizeAdminRole } from './admin-permissions'
+import { getAdminPermissions, getAdminRoles, normalizeAdminRole, parseRolePermissions } from './admin-permissions'
 import { verifyAdminPassword } from './admin-password'
 import type { AdminLoginDto } from './dto/admin-login.dto'
 
@@ -21,7 +21,7 @@ export class AdminAuthService {
 
   async login(dto: AdminLoginDto) {
     const username = dto.username.trim()
-    const admin = await this.prisma.adminUser.findUnique({ where: { username } })
+    const admin = await this.prisma.adminUser.findUnique({ where: { username }, include: { roleRecord: true } })
     const isValid = admin
       ? await verifyAdminPassword(dto.password, admin.passwordHash)
       : false
@@ -39,7 +39,15 @@ export class AdminAuthService {
     })
 
     const expiresIn = Number(this.config.get<string | number>('ADMIN_JWT_EXPIRES_IN', this.config.get<string | number>('JWT_EXPIRES_IN', 604800)))
-    const role = normalizeAdminRole(admin.role)
+    const role = admin.roleRecord?.name || normalizeAdminRole(admin.role)
+    const hasValidDatabaseRole = Boolean(
+      admin.roleRecord
+      && admin.roleRecord.status === 'active'
+      && parseRolePermissions(admin.roleRecord.permissions),
+    )
+    if (!role || (admin.roleRecord && !hasValidDatabaseRole)) {
+      throw new BusinessException(ErrorCode.AUTH_FORBIDDEN, 'admin role is invalid', 403)
+    }
     const accessToken = await this.jwt.signAsync(
       {
         adminId: Number(admin.id),
@@ -59,7 +67,7 @@ export class AdminAuthService {
   }
 
   async getMe(adminId: number) {
-    const admin = await this.prisma.adminUser.findUnique({ where: { id: BigInt(adminId) } })
+    const admin = await this.prisma.adminUser.findUnique({ where: { id: BigInt(adminId) }, include: { roleRecord: true } })
     if (!admin || admin.status !== 1) {
       throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, '管理员不存在或已禁用', 401)
     }
@@ -72,13 +80,13 @@ export class AdminAuthService {
       avatar: avatarUrls.avatar,
       avatarOssUrl: avatarUrls.avatarOssUrl,
       avatarDisplayUrl: avatarUrls.avatarDisplayUrl,
-      roles: getAdminRoles(admin.role),
-      perms: getAdminPermissions(admin.role),
+      roles: admin.roleRecord ? [admin.roleRecord.name.toUpperCase()] : getAdminRoles(admin.role),
+      perms: admin.roleRecord ? (parseRolePermissions(admin.roleRecord.permissions) || []) : getAdminPermissions(admin.role),
     }
   }
 
   async getProfile(adminId: number) {
-    const admin = await this.prisma.adminUser.findUnique({ where: { id: BigInt(adminId) } })
+    const admin = await this.prisma.adminUser.findUnique({ where: { id: BigInt(adminId) }, include: { roleRecord: true } })
     if (!admin || admin.status !== 1) {
       throw new BusinessException(ErrorCode.AUTH_NOT_LOGIN, '管理员不存在或已禁用', 401)
     }
@@ -92,7 +100,7 @@ export class AdminAuthService {
       avatarOssUrl: avatarUrls.avatarOssUrl,
       avatarDisplayUrl: avatarUrls.avatarDisplayUrl,
       mobile: admin.phone || '',
-      roleNames: getAdminRoles(admin.role).join(','),
+      roleNames: admin.roleRecord ? admin.roleRecord.name.toUpperCase() : getAdminRoles(admin.role).join(','),
       createTime: admin.createdAt,
     }
   }

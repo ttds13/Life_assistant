@@ -5,8 +5,10 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator'
 
@@ -57,11 +59,15 @@ export class AdminOrderCustomerDto {
 
 export class AdminOrderAddressDto {
   @IsString()
+  @MinLength(1)
   @MaxLength(64)
+  @Transform(({ value }) => trimOptional(value))
   contactName!: string
 
   @IsString()
+  @MinLength(1)
   @MaxLength(20)
+  @Transform(({ value }) => trimOptional(value))
   contactPhone!: string
 
   @IsOptional()
@@ -90,7 +96,9 @@ export class AdminOrderAddressDto {
   addressTitle?: string
 
   @IsString()
+  @MinLength(1)
   @MaxLength(256)
+  @Transform(({ value }) => trimOptional(value))
   detailAddress!: string
 
   @IsOptional()
@@ -100,11 +108,15 @@ export class AdminOrderAddressDto {
 
   @IsOptional()
   @IsNumber()
+  @Min(-90)
+  @Max(90)
   @Transform(({ value }) => toOptionalNumber(value))
   latitude?: number
 
   @IsOptional()
   @IsNumber()
+  @Min(-180)
+  @Max(180)
   @Transform(({ value }) => toOptionalNumber(value))
   longitude?: number
 
@@ -180,6 +192,12 @@ export class AdminCreateOrderDto {
   @Min(1)
   @Type(() => Number)
   memberCardId?: number
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  memberCardConsumeMinutes?: number
 
   @IsOptional()
   @IsInt()

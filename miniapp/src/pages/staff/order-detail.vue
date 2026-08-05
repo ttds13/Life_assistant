@@ -67,11 +67,11 @@ function onCallCustomer() {
 function onNavigate() {
   if (!task.value)
     return
-  if (task.value.latitude && task.value.longitude) {
+  if (task.value.addressMapAvailable && Number.isFinite(task.value.latitude) && Number.isFinite(task.value.longitude)) {
     uni.openLocation({
-      latitude: task.value.latitude,
-      longitude: task.value.longitude,
-      name: task.value.customerName || '服务地址',
+      latitude: task.value.latitude!,
+      longitude: task.value.longitude!,
+      name: task.value.addressTitle || '用户指定服务位置',
       address: task.value.addressText,
     })
     return
@@ -89,41 +89,21 @@ function chooseActualMinutes(current: StaffTask) {
       return
     }
     const planned = current.plannedConsumeUnits || current.memberCardConsumeUnits || 120
-    const half = Math.max(1, Math.ceil(planned / 2))
-    const options = Array.from(new Set([half, planned])).map(value => ({ label: `${value} 分钟`, value }))
-    const customIndex = options.length
+    const configured = current.memberCardConsumeMode === 'custom_minutes'
+      ? current.memberCardAllowedMinutes || []
+      : [planned]
+    const options = Array.from(new Set([...configured, planned]))
+      .filter(value => Number.isInteger(value) && value > 0 && value <= planned)
+      .sort((left, right) => left - right)
+      .map(value => ({ label: `${value} 分钟`, value }))
+    if (options.length === 1) {
+      resolve(options[0].value)
+      return
+    }
     uni.showActionSheet({
-      itemList: [...options.map(item => item.label), '手动输入'],
+      itemList: options.map(item => item.label),
       success: (res) => {
-        if (res.tapIndex === customIndex) {
-          inputActualMinutes(planned).then(resolve)
-          return
-        }
         resolve(options[res.tapIndex]?.value)
-      },
-      fail: () => resolve(undefined),
-    })
-  })
-}
-
-function inputActualMinutes(planned: number) {
-  return new Promise<number | undefined>((resolve) => {
-    ;(uni.showModal as any)({
-      title: '确认实际服务时长',
-      editable: true,
-      placeholderText: `请输入 1-${planned} 分钟`,
-      success: (res: any) => {
-        if (!res.confirm) {
-          resolve(undefined)
-          return
-        }
-        const minutes = Number(res.content)
-        if (!Number.isInteger(minutes) || minutes < 1 || minutes > planned) {
-          uni.showToast({ icon: 'none', title: '时长不正确' })
-          resolve(undefined)
-          return
-        }
-        resolve(minutes)
       },
       fail: () => resolve(undefined),
     })
@@ -289,18 +269,25 @@ onShow(() => {
             <text class="w-[150rpx] text-[26rpx] text-[#9CA3AF]">客户电话</text>
             <text class="flex-1 text-[26rpx] text-[#4B5563]">{{ rowValue(task.customerPhone) }}</text>
           </view>
-          <view class="py-[10rpx] flex">
-            <text class="w-[150rpx] text-[26rpx] text-[#9CA3AF]">服务地址</text>
-            <text class="flex-1 text-[26rpx] leading-[38rpx] text-[#4B5563]">{{ task.addressText }}</text>
-          </view>
-          <view class="mt-[18rpx] flex gap-[16rpx]">
+          <view class="mt-[18rpx]">
             <button class="flex-1 h-[72rpx] rounded-full bg-[#FFECEF] text-[#FF373D] text-[26rpx] flex items-center justify-center" @tap="onCallCustomer">
               联系客户
             </button>
-            <button class="flex-1 h-[72rpx] rounded-full bg-[#EAF3FF] text-[#1677FF] text-[26rpx] flex items-center justify-center" @tap="onNavigate">
-              导航/复制地址
-            </button>
           </view>
+        </form-section>
+
+        <form-section title="用户指定服务位置">
+          <view class="rounded-[16rpx] bg-[#F9FAFB] p-[20rpx]">
+            <view class="flex items-center justify-between gap-[16rpx]">
+              <text class="flex-1 text-[30rpx] leading-[42rpx] text-[#1F2937] font-600">{{ task.addressTitle || '用户指定服务位置' }}</text>
+              <text v-if="task.addressVersion && task.addressVersion > 1" class="text-[22rpx] text-[#B45309]">地址已更新 v{{ task.addressVersion }}</text>
+            </view>
+            <text class="block mt-[12rpx] text-[26rpx] leading-[40rpx] text-[#4B5563]">{{ task.addressText }}</text>
+            <text v-if="!task.addressMapAvailable" class="block mt-[10rpx] text-[22rpx] text-[#9CA3AF]">手动填写地址，暂无地图坐标</text>
+          </view>
+          <button class="mt-[18rpx] h-[72rpx] w-full rounded-full bg-[#EAF3FF] text-[#1677FF] text-[26rpx] flex items-center justify-center" @tap="onNavigate">
+            {{ task.addressMapAvailable ? '打开地图导航' : '复制完整地址' }}
+          </button>
         </form-section>
 
         <form-section title="备注与提示">

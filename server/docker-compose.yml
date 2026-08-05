@@ -6,6 +6,9 @@ services:
     container_name: life_assistant_server
     env_file:
       - .env.production
+    environment:
+      RUN_MIGRATIONS_ON_START: "true"
+      SEED_ON_START: "false"
     ports:
       - "127.0.0.1:3100:3100"
     volumes:

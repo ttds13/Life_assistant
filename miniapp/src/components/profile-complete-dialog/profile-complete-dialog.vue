@@ -1,5 +1,4 @@
 <script lang="ts" setup>
-import { avatarDebugLog, clearAvatarDebugLogs, formatAvatarDebugLog, logWechatProfileEnvironment } from '@/utils/avatarDebugLog'
 import { assertImageSize, getChooseImageErrorMessage } from '@/utils/uploadImage'
 
 const props = defineProps<{
@@ -17,27 +16,17 @@ const emit = defineEmits<{
 const avatarFilePath = ref('')
 const nicknameInput = ref('')
 const defaultAvatarUrl = 'https://mmbiz.qpic.cn/mmbiz/icTdbqWNOwNRna42FI242Lcia07jQodd2FJGIYQfG0LAJGFxM4FbnQP6yfMxBgJ0F3YRqJCJ1aPAK2dQagdusBZg/0'
-
-const localDebugLogs = ref<Array<{ time: string, level: 'log' | 'error', label: string, message: string }>>([])
-const debugLogItems = computed(() => localDebugLogs.value.slice(-16).reverse())
+let avatarChooseFallbackTimer: ReturnType<typeof setTimeout> | undefined
 
 watch(
   () => props.visible,
   (visible) => {
-    if (!visible)
+    if (!visible) {
+      clearAvatarChooseFallbackTimer()
       return
-    clearAvatarDebugLogs()
-    localDebugLogs.value = []
+    }
     avatarFilePath.value = ''
-    nicknameInput.value = ''
-    logProfileDebug('profile dialog opened', {
-      initialNicknameLength: (props.initialNickname || '').length,
-      hasInitialAvatar: !!props.initialAvatar,
-    })
-    logWechatProfileEnvironment('profile dialog')
-    logProfileDebug('profile dialog visible', {
-      displayAvatar: avatarFilePath.value || props.initialAvatar || defaultAvatarUrl,
-    })
+    nicknameInput.value = props.initialNickname || ''
   },
   { immediate: true },
 )
@@ -45,15 +34,32 @@ watch(
 const displayAvatar = computed(() => avatarFilePath.value || props.initialAvatar || defaultAvatarUrl)
 
 function onChooseWechatAvatar(e: any) {
-  logProfileDebug('profile dialog choose avatar payload', e)
+  clearAvatarChooseFallbackTimer()
   const url = e.detail?.avatarUrl
   if (!url) {
-    logProfileDebug('profile dialog choose avatar missing avatarUrl', e, 'error')
     uni.showToast({ icon: 'none', title: '未获取到头像' })
     return
   }
   avatarFilePath.value = url
   uni.showToast({ icon: 'none', title: '头像已选择' })
+}
+
+function clearAvatarChooseFallbackTimer() {
+  if (!avatarChooseFallbackTimer)
+    return
+  clearTimeout(avatarChooseFallbackTimer)
+  avatarChooseFallbackTimer = undefined
+}
+
+function startAvatarChooseFallbackTimer() {
+  clearAvatarChooseFallbackTimer()
+  avatarChooseFallbackTimer = setTimeout(() => {
+    uni.showToast({ icon: 'none', title: '微信头像未回调，可用相册上传' })
+  }, 1800)
+}
+
+function onWechatAvatarTap() {
+  startAvatarChooseFallbackTimer()
 }
 
 function onChooseLocalAvatar() {
@@ -65,13 +71,11 @@ function onChooseLocalAvatar() {
     sizeType: ['compressed'],
     sourceType: ['album', 'camera'],
     success: (res) => {
-      logProfileDebug('profile dialog choose local avatar payload', res)
       const file = Array.isArray(res.tempFiles) ? res.tempFiles[0] : undefined
       if (!assertImageSize(file?.size))
         return
       const filePath = res.tempFilePaths[0] || ''
       if (!filePath) {
-        logProfileDebug('profile dialog choose local avatar missing filePath', res, 'error')
         uni.showToast({ icon: 'none', title: '未获取到头像文件' })
         return
       }
@@ -79,36 +83,18 @@ function onChooseLocalAvatar() {
       uni.showToast({ icon: 'none', title: '头像已选择' })
     },
     fail: (err) => {
-      logProfileDebug('profile dialog choose local avatar failed', err, 'error')
       const message = getChooseImageErrorMessage(err, '选择头像失败')
-      if (message) {
+      if (message)
         uni.showToast({ icon: 'none', title: message })
-      }
     },
   })
 }
 
 function onNicknameInput(e: any) {
-  logProfileDebug('profile dialog nickname input', {
-    value: e.detail?.value || '',
-    detail: e.detail,
-  })
   nicknameInput.value = e.detail?.value || ''
 }
 
-function onNicknameFocus(e: any) {
-  logProfileDebug('profile dialog nickname focus', {
-    value: e.detail?.value || nicknameInput.value,
-    detail: e.detail,
-  })
-}
-
 function onNicknameValueChange(e: any) {
-  logProfileDebug('profile dialog nickname value changed', {
-    type: e.type,
-    value: e.detail?.value || '',
-    detail: e.detail,
-  })
   const value = e.detail?.value
   if (typeof value === 'string')
     nicknameInput.value = value
@@ -120,61 +106,23 @@ function onSubmit() {
 
   const nickname = nicknameInput.value.trim()
   if (!avatarFilePath.value && !nickname) {
-    logProfileDebug('profile dialog submit blocked: empty profile', undefined, 'error')
     uni.showToast({ icon: 'none', title: '请先选择头像或填写昵称' })
     return
   }
 
-  logProfileDebug('profile dialog submit requested', {
-    hasAvatarFilePath: !!avatarFilePath.value,
-    nicknameLength: nickname.length,
-  })
   emit('submit', {
     avatarFilePath: avatarFilePath.value || undefined,
     nickname: nickname || undefined,
   })
 }
 
-function normalizeDebugPayload(payload: unknown) {
-  if (payload === undefined)
-    return ''
-  if (payload instanceof Error)
-    return payload.message
-  if (typeof payload === 'string')
-    return payload
-  try {
-    return JSON.stringify(payload)
-  }
-  catch {
-    return String(payload)
-  }
-}
-
-function logProfileDebug(label: string, payload?: unknown, level: 'log' | 'error' = 'log') {
-  avatarDebugLog(label, payload, level)
-  localDebugLogs.value = [
-    ...localDebugLogs.value,
-    {
-      time: new Date().toISOString(),
-      level,
-      label,
-      message: normalizeDebugPayload(payload),
-    },
-  ].slice(-40)
-}
-
-function clearProfileDebugLogs() {
-  clearAvatarDebugLogs()
-  localDebugLogs.value = []
-}
-
 function onSkip() {
   if (props.loading)
     return
 
+  clearAvatarChooseFallbackTimer()
   emit('skip')
 }
-
 </script>
 
 <template>
@@ -204,13 +152,15 @@ function onSkip() {
         </view>
 
         <!-- #ifdef MP-WEIXIN -->
-        <button
-          class="avatar-wrapper mt-4"
-          open-type="chooseAvatar"
-          @chooseavatar="onChooseWechatAvatar"
-        >
-          <image class="avatar" :src="displayAvatar" mode="aspectFill" />
-        </button>
+        <view class="wechat-avatar-choice mt-4" @tap="onWechatAvatarTap">
+          <button
+            class="avatar-wrapper"
+            open-type="chooseAvatar"
+            @chooseavatar="onChooseWechatAvatar"
+          >
+            <image class="avatar" :src="displayAvatar" mode="aspectFill" />
+          </button>
+        </view>
         <view class="mt-2 text-center">
           <text class="text-[24rpx] text-[#6B7280]">点击头像选择微信头像</text>
         </view>
@@ -235,7 +185,6 @@ function onSkip() {
           placeholder-class="text-[#C4C8D0]"
           :maxlength="20"
           :value="nicknameInput"
-          @focus="onNicknameFocus"
           @input="onNicknameInput"
           @change="onNicknameValueChange"
           @blur="onNicknameValueChange"
@@ -263,23 +212,6 @@ function onSkip() {
         >
           {{ loading ? '保存中...' : '保存并继续' }}
         </view>
-      </view>
-
-      <view v-if="debugLogItems.length" class="profile-debug-log mt-4">
-        <view class="profile-debug-log__header">
-          <text>调试信息</text>
-          <text class="profile-debug-log__clear" @tap="clearProfileDebugLogs">清空</text>
-        </view>
-        <scroll-view scroll-y class="profile-debug-log__body">
-          <text
-            v-for="item in debugLogItems"
-            :key="item.time + item.label"
-            class="profile-debug-log__line"
-            :class="{ 'profile-debug-log__line--error': item.level === 'error' }"
-          >
-            {{ formatAvatarDebugLog(item) }}
-          </text>
-        </scroll-view>
       </view>
 
       <view
@@ -327,6 +259,10 @@ function onSkip() {
   display: block;
 }
 
+.wechat-avatar-choice {
+  width: 144rpx;
+}
+
 .weui-input {
   width: 100%;
   height: 88rpx;
@@ -336,43 +272,5 @@ function onSkip() {
   background: #F5F7FA;
   color: #1F2937;
   font-size: 30rpx;
-}
-
-.profile-debug-log {
-  padding: 20rpx;
-  border-radius: 16rpx;
-  background: #111827;
-}
-
-.profile-debug-log__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: #E5E7EB;
-  font-size: 24rpx;
-  font-weight: 600;
-}
-
-.profile-debug-log__clear {
-  color: #93C5FD;
-  font-weight: 500;
-}
-
-.profile-debug-log__body {
-  height: 220rpx;
-  margin-top: 12rpx;
-}
-
-.profile-debug-log__line {
-  display: block;
-  margin-bottom: 10rpx;
-  color: #D1D5DB;
-  font-size: 22rpx;
-  line-height: 32rpx;
-  word-break: break-all;
-}
-
-.profile-debug-log__line--error {
-  color: #FCA5A5;
 }
 </style>

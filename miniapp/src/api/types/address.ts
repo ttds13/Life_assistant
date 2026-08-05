@@ -24,10 +24,12 @@ export interface AddressView {
   mapProvider?: 'tencent' | 'amap' | string
   source?: string
   status?: number
+  version: number
   updatedAt?: string
 }
 
 export interface SaveAddressPayload {
+  expectedVersion?: number
   contactName: string
   contactPhone: string
   country?: string
@@ -45,6 +47,7 @@ export interface SaveAddressPayload {
   coordinateType?: 'gcj02' | 'wgs84' | 'bd09' | string
   poiId?: string
   mapProvider?: 'tencent' | 'amap' | string
+  source?: 'gps' | 'map' | 'manual' | string
 }
 
 export type UserAddress = AddressView

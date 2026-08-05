@@ -12,6 +12,11 @@ const emit = defineEmits<{
 }>()
 
 const actionConfig = computed(() => {
+  if (props.order.orderType === 'member_card_purchase') {
+    return props.order.status === 'pending_payment'
+      ? { primary: '去支付', secondary: '' }
+      : { primary: '查看详情', secondary: '' }
+  }
   switch (props.order.status) {
     case 'pending_payment':
       return { primary: '去支付', secondary: '取消订单' }
@@ -48,7 +53,7 @@ function formatAmount(amount: number) {
       <order-status-tag :status="order.status" size="sm" />
     </view>
 
-    <view class="mt-3">
+    <view v-if="order.orderType !== 'member_card_purchase'" class="mt-3">
       <view class="flex items-start mt-2">
         <text class="text-[24rpx] text-gray-400 w-[112rpx]">时间</text>
         <text class="text-[26rpx] text-gray-700 flex-1">{{ order.appointmentTime }}</text>
@@ -61,7 +66,7 @@ function formatAmount(amount: number) {
 
     <view class="flex items-center justify-between mt-4 pt-3 border-t border-[#F3F4F6]">
       <view class="flex items-baseline">
-        <text class="text-[24rpx] text-gray-400 mr-1">应付</text>
+        <text class="text-[24rpx] text-gray-400 mr-1">{{ order.orderType === 'member_card_purchase' ? '实付' : '应付' }}</text>
         <text class="text-[24rpx] text-[#EF4444] font-600">¥</text>
         <text class="text-[34rpx] text-[#EF4444] font-700">{{ formatAmount(order.payableAmount) }}</text>
       </view>

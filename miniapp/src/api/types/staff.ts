@@ -49,6 +49,9 @@ export interface StaffTask {
   customerName: string
   customerPhone?: string
   addressText: string
+  addressTitle?: string
+  addressVersion?: number
+  addressMapAvailable?: boolean
   latitude?: number | null
   longitude?: number | null
   distanceText?: string
@@ -56,6 +59,9 @@ export interface StaffTask {
   incomeAmount?: number
   memberCardName?: string
   memberCardUnitName?: string
+  memberCardConsumeMode?: string
+  memberCardMinConsumeMinutes?: number
+  memberCardAllowedMinutes?: number[]
   memberCardConsumeUnits?: number
   plannedConsumeUnits?: number
   actualConsumeUnits?: number

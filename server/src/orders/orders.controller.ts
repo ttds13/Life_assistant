@@ -10,9 +10,16 @@ import { ErrorCode } from '../common/errors/error-code'
 import { getRequestId, RequestWithContext } from '../common/utils/request-context'
 import { AutoAssignOrderDto } from './dto/auto-assign-order.dto'
 import { AdminOrderRemarkDto } from './dto/admin-order-remark.dto'
+import { AdminOrderActionDto } from './dto/admin-order-action.dto'
+import { AdminRescheduleBookingDto } from './dto/admin-reschedule-booking.dto'
 import { AdminCreateOrderDto } from './dto/admin-create-order.dto'
 import { AdminQueryOrdersDto } from './dto/admin-query-orders.dto'
 import { AdminUpdateOrderDto } from './dto/admin-update-order.dto'
+import {
+  AdminUserCommerceOverviewQueryDto,
+  AdminUserProductOrdersQueryDto,
+  AdminUserServiceBookingsQueryDto,
+} from './dto/admin-user-commerce-query.dto'
 import { AssignOrderDto } from './dto/assign-order.dto'
 import { CompleteServiceDto } from './dto/complete-service.dto'
 import { ConfirmOfflinePaymentDto } from './dto/confirm-offline-payment.dto'
@@ -22,6 +29,7 @@ import { QueryOrdersDto } from './dto/query-orders.dto'
 import { RejectOrderDto } from './dto/reject-order.dto'
 import { RescheduleOrderDto } from './dto/reschedule-order.dto'
 import { TransitionVersionDto } from './dto/transition-version.dto'
+import { UpdateOrderAddressDto } from './dto/update-order-address.dto'
 import { UpdateStaffProfileDto } from './dto/update-staff-profile.dto'
 import { UpdateStaffWorkStatusDto } from './dto/update-staff-work-status.dto'
 import { OrdersService } from './orders.service'
@@ -82,9 +90,48 @@ export class OrdersController {
     return this.ordersService.listAdminOrders(query)
   }
 
+  @Get('admin/user-orders')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_COMMERCE_LIST)
+  listAdminUserProductOrders(@Req() request: RequestWithContext, @Query() query: AdminUserProductOrdersQueryDto) {
+    this.parseAdminId(request)
+    return this.ordersService.listAdminUserProductOrders(query)
+  }
+
+  @Get('admin/user-service-bookings')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_COMMERCE_LIST)
+  listAdminUserServiceBookings(@Req() request: RequestWithContext, @Query() query: AdminUserServiceBookingsQueryDto) {
+    this.parseAdminId(request)
+    return this.ordersService.listAdminUserServiceBookings(query)
+  }
+
+  @Get('admin/users/:id/commerce-overview')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_COMMERCE_DETAIL)
+  getAdminUserCommerceOverview(
+    @Req() request: RequestWithContext,
+    @Param('id') idText: string,
+    @Query() query: AdminUserCommerceOverviewQueryDto,
+  ) {
+    this.parseAdminId(request)
+    return this.ordersService.getAdminUserCommerceOverview(this.parseId(idText), query.recentLimit)
+  }
+
+  @Put('orders/:id/address')
+  @HttpCode(200)
+  updateUserOrderAddress(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: UpdateOrderAddressDto) {
+    return this.ordersService.updateUserOrderAddress(
+      request.user!.userId,
+      this.parseId(idText),
+      dto,
+      getRequestId(request),
+    )
+  }
+
   @Post('admin/orders')
   @UseGuards(AdminAuthGuard)
-  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_UPDATE)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_BOOKING_CREATE)
   @HttpCode(200)
   createAdminOrder(@Req() request: RequestWithContext, @Body() dto: AdminCreateOrderDto) {
     return this.ordersService.createAdminOrder(
@@ -97,7 +144,7 @@ export class OrdersController {
 
   @Get('admin/orders/:id/dispatch-check')
   @UseGuards(AdminAuthGuard)
-  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_ASSIGN)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_BOOKING_ASSIGN)
   getAdminOrderDispatchCheck(@Req() request: RequestWithContext, @Param('id') idText: string) {
     this.parseAdminId(request)
     return this.ordersService.getAdminOrderDispatchCheck(this.parseId(idText))
@@ -135,7 +182,7 @@ export class OrdersController {
 
   @Put('admin/orders/:id')
   @UseGuards(AdminAuthGuard)
-  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_UPDATE)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_ORDER_UPDATE)
   @HttpCode(200)
   updateAdminOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminUpdateOrderDto) {
     return this.ordersService.updateAdminOrder(
@@ -147,14 +194,71 @@ export class OrdersController {
     )
   }
 
+  @Post('admin/user-service-bookings/:id/reschedule')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_BOOKING_RESCHEDULE)
+  @HttpCode(200)
+  rescheduleAdminBooking(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminRescheduleBookingDto) {
+    return this.ordersService.rescheduleAdminBooking(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
+  }
+
+  @Post('admin/orders/:id/cancel')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_ORDER_CANCEL)
+  @HttpCode(200)
+  cancelAdminOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminOrderActionDto) {
+    return this.ordersService.cancelAdminOrder(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
+  }
+
+  @Post('admin/user-service-bookings/:id/cancel')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_BOOKING_CANCEL)
+  @HttpCode(200)
+  cancelAdminBooking(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminOrderActionDto) {
+    return this.ordersService.cancelAdminBooking(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
+  }
+
   @Delete('admin/orders/:id')
   @UseGuards(AdminAuthGuard)
-  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_DELETE)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_ORDER_DELETE_DRAFT)
   @HttpCode(200)
-  deleteAdminOrder(@Req() request: RequestWithContext, @Param('id') idText: string) {
+  deleteAdminOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminOrderActionDto) {
     return this.ordersService.deleteAdminOrder(
       this.parseAdminId(request),
       this.parseId(idText),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
+  }
+
+  @Delete('admin/user-service-bookings/:id/draft')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_BOOKING_DELETE_DRAFT)
+  @HttpCode(200)
+  deleteAdminBookingDraft(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminOrderActionDto) {
+    return this.ordersService.deleteAdminBookingDraft(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      dto,
       getRequestId(request),
       this.getClientIp(request),
     )
@@ -162,7 +266,7 @@ export class OrdersController {
 
   @Post('admin/orders/:id/assign')
   @UseGuards(AdminAuthGuard)
-  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_ASSIGN)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_BOOKING_ASSIGN)
   @HttpCode(200)
   assignOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AssignOrderDto) {
     return this.ordersService.assignOrder(
@@ -176,7 +280,7 @@ export class OrdersController {
 
   @Post('admin/orders/:id/auto-assign')
   @UseGuards(AdminAuthGuard)
-  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_ASSIGN)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_BOOKING_ASSIGN)
   @HttpCode(200)
   autoAssignOrder(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AutoAssignOrderDto) {
     return this.ordersService.autoAssignOrder(
@@ -190,7 +294,7 @@ export class OrdersController {
 
   @Put('admin/orders/:id/remark')
   @UseGuards(AdminAuthGuard)
-  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_UPDATE)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_ORDER_UPDATE)
   @HttpCode(200)
   updateAdminOrderRemark(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: AdminOrderRemarkDto) {
     return this.ordersService.updateAdminOrderRemark(
@@ -213,6 +317,28 @@ export class OrdersController {
   @Get('staff/orders')
   async listStaffOrders(@Req() request: RequestWithContext, @Query() query: QueryOrdersDto) {
     return this.ordersService.listStaffOrders(await this.parseStaffId(request), query)
+  }
+
+  @Get('admin/orders/:id/address-revisions')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.ORDER_DETAIL)
+  getAdminOrderAddressRevisions(@Req() request: RequestWithContext, @Param('id') idText: string) {
+    this.parseAdminId(request)
+    return this.ordersService.getAdminOrderAddressRevisions(this.parseId(idText))
+  }
+
+  @Put('admin/orders/:id/address')
+  @UseGuards(AdminAuthGuard)
+  @RequireAdminPermissions(ADMIN_PERMISSION.USER_BOOKING_ADDRESS_UPDATE)
+  @HttpCode(200)
+  updateAdminOrderAddress(@Req() request: RequestWithContext, @Param('id') idText: string, @Body() dto: UpdateOrderAddressDto) {
+    return this.ordersService.updateAdminOrderAddress(
+      this.parseAdminId(request),
+      this.parseId(idText),
+      dto,
+      getRequestId(request),
+      this.getClientIp(request),
+    )
   }
 
   @Get('staff/profile')

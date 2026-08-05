@@ -18,11 +18,34 @@ export const ADMIN_PERMISSION = {
   USER_DETAIL: 'user:detail',
   USER_UPDATE: 'user:update',
   USER_DELETE: 'user:delete',
+  USER_COMMERCE_LIST: 'user-commerce:list',
+  USER_COMMERCE_DETAIL: 'user-commerce:detail',
+  USER_ORDER_CREATE: 'user-order:create',
+  USER_ORDER_UPDATE: 'user-order:update',
+  USER_ORDER_CANCEL: 'user-order:cancel',
+  USER_ORDER_DELETE_DRAFT: 'user-order:delete-draft',
+  USER_BOOKING_CREATE: 'user-booking:create',
+  USER_BOOKING_UPDATE: 'user-booking:update',
+  USER_BOOKING_RESCHEDULE: 'user-booking:reschedule',
+  USER_BOOKING_ADDRESS_UPDATE: 'user-booking:address:update',
+  USER_BOOKING_ASSIGN: 'user-booking:assign',
+  USER_BOOKING_CANCEL: 'user-booking:cancel',
+  USER_BOOKING_DELETE_DRAFT: 'user-booking:delete-draft',
+  USER_MEMBER_CARD_GRANT: 'user-member-card:grant',
+  USER_MEMBER_CARD_UPDATE: 'user-member-card:update',
+  USER_MEMBER_CARD_ADJUST: 'user-member-card:adjust',
+  USER_MEMBER_CARD_SUSPEND: 'user-member-card:suspend',
+  USER_MEMBER_CARD_REVOKE: 'user-member-card:revoke',
+  USER_MEMBER_CARD_DELETE_DRAFT: 'user-member-card:delete-draft',
   USER_ROLE_UPDATE: 'user:role:update',
   SERVICE_LIST: 'service:list',
   SERVICE_CREATE: 'service:create',
   SERVICE_UPDATE: 'service:update',
   SERVICE_DELETE: 'service:delete',
+  APPOINTMENT_LOCK_LIST: 'appointment-lock:list',
+  APPOINTMENT_LOCK_CREATE: 'appointment-lock:create',
+  APPOINTMENT_LOCK_UPDATE: 'appointment-lock:update',
+  APPOINTMENT_LOCK_DELETE: 'appointment-lock:delete',
   ORDER_LIST: 'order:list',
   ORDER_DETAIL: 'order:detail',
   ORDER_UPDATE: 'order:update',
@@ -44,6 +67,11 @@ export const ADMIN_PERMISSION = {
   FINANCE_REFUND_RETRY: 'finance:refund:retry',
   FINANCE_POINT_LIST: 'finance:point:list',
   FINANCE_POINT_ADJUST: 'finance:point:adjust',
+  POINT_RULE_LIST: 'point-rule:list',
+  POINT_RULE_UPDATE: 'point-rule:update',
+  POINT_RULE_PUBLISH: 'point-rule:publish',
+  REFERRAL_LIST: 'referral:list',
+  REFERRAL_REVIEW: 'referral:review',
   FINANCE_WITHDRAW_LIST: 'finance:withdraw:list',
   FINANCE_WITHDRAW_DETAIL: 'finance:withdraw:detail',
   FINANCE_WITHDRAW_AUDIT: 'finance:withdraw:audit',
@@ -90,16 +118,38 @@ export const ADMIN_PERMISSION = {
   IMAGE_DELETE: 'image:delete',
   IMAGE_REBIND: 'image:rebind',
   IMAGE_BACKFILL: 'image:backfill',
+  ADMIN_ROLE_LIST: 'admin-role:list',
+  ADMIN_ROLE_UPDATE: 'admin-role:update',
+  ADMIN_ROLE_ASSIGN: 'admin-role:assign',
 } as const
+
+export const ADMIN_PERMISSION_CODES = new Set<string>(Object.values(ADMIN_PERMISSION))
 
 const OPERATOR_PERMISSIONS = [
   ADMIN_PERMISSION.DASHBOARD_VIEW,
   ADMIN_PERMISSION.USER_LIST,
   ADMIN_PERMISSION.USER_DETAIL,
   ADMIN_PERMISSION.USER_UPDATE,
+  ADMIN_PERMISSION.USER_COMMERCE_LIST,
+  ADMIN_PERMISSION.USER_COMMERCE_DETAIL,
+  ADMIN_PERMISSION.USER_ORDER_CREATE,
+  ADMIN_PERMISSION.USER_ORDER_UPDATE,
+  ADMIN_PERMISSION.USER_ORDER_CANCEL,
+  ADMIN_PERMISSION.USER_BOOKING_CREATE,
+  ADMIN_PERMISSION.USER_BOOKING_UPDATE,
+  ADMIN_PERMISSION.USER_BOOKING_RESCHEDULE,
+  ADMIN_PERMISSION.USER_BOOKING_ADDRESS_UPDATE,
+  ADMIN_PERMISSION.USER_BOOKING_ASSIGN,
+  ADMIN_PERMISSION.USER_BOOKING_CANCEL,
+  ADMIN_PERMISSION.USER_MEMBER_CARD_UPDATE,
+  ADMIN_PERMISSION.USER_MEMBER_CARD_SUSPEND,
   ADMIN_PERMISSION.SERVICE_LIST,
   ADMIN_PERMISSION.SERVICE_CREATE,
   ADMIN_PERMISSION.SERVICE_UPDATE,
+  ADMIN_PERMISSION.APPOINTMENT_LOCK_LIST,
+  ADMIN_PERMISSION.APPOINTMENT_LOCK_CREATE,
+  ADMIN_PERMISSION.APPOINTMENT_LOCK_UPDATE,
+  ADMIN_PERMISSION.APPOINTMENT_LOCK_DELETE,
   ADMIN_PERMISSION.ORDER_LIST,
   ADMIN_PERMISSION.ORDER_DETAIL,
   ADMIN_PERMISSION.ORDER_UPDATE,
@@ -112,6 +162,10 @@ const OPERATOR_PERMISSIONS = [
   ADMIN_PERMISSION.STAFF_NOTIFICATION_RESEND,
   ADMIN_PERMISSION.STAFF_PROFILE_CHANGE_VIEW,
   ADMIN_PERMISSION.STAFF_PROFILE_CHANGE_REVIEW,
+  ADMIN_PERMISSION.POINT_RULE_LIST,
+  ADMIN_PERMISSION.REFERRAL_LIST,
+  ADMIN_PERMISSION.REFERRAL_REVIEW,
+  ADMIN_PERMISSION.MEMBER_CARD_LIST,
   ADMIN_PERMISSION.ADDRESS_LIST,
   ADMIN_PERMISSION.ADDRESS_CREATE,
   ADMIN_PERMISSION.ADDRESS_UPDATE,
@@ -138,6 +192,8 @@ const OPERATOR_PERMISSIONS = [
 
 const FINANCE_PERMISSIONS = [
   ADMIN_PERMISSION.DASHBOARD_VIEW,
+  ADMIN_PERMISSION.USER_COMMERCE_LIST,
+  ADMIN_PERMISSION.USER_COMMERCE_DETAIL,
   ADMIN_PERMISSION.ORDER_LIST,
   ADMIN_PERMISSION.ORDER_DETAIL,
   ADMIN_PERMISSION.FINANCE_SUMMARY_VIEW,
@@ -147,6 +203,8 @@ const FINANCE_PERMISSIONS = [
   ADMIN_PERMISSION.FINANCE_REFUND_RETRY,
   ADMIN_PERMISSION.FINANCE_POINT_LIST,
   ADMIN_PERMISSION.FINANCE_POINT_ADJUST,
+  ADMIN_PERMISSION.POINT_RULE_LIST,
+  ADMIN_PERMISSION.REFERRAL_LIST,
   ADMIN_PERMISSION.FINANCE_WITHDRAW_LIST,
   ADMIN_PERMISSION.FINANCE_WITHDRAW_DETAIL,
   ADMIN_PERMISSION.FINANCE_WITHDRAW_AUDIT,
@@ -160,19 +218,29 @@ const FINANCE_PERMISSIONS = [
   ADMIN_PERMISSION.IMAGE_DETAIL,
 ]
 
-export function normalizeAdminRole(role: string | null | undefined): AdminRole {
-  if (role === ADMIN_ROLE.OPERATOR || role === ADMIN_ROLE.FINANCE) return role
-  return ADMIN_ROLE.SUPER_ADMIN
+export function normalizeAdminRole(role: string | null | undefined): AdminRole | null {
+  if (role === ADMIN_ROLE.SUPER_ADMIN || role === ADMIN_ROLE.OPERATOR || role === ADMIN_ROLE.FINANCE) return role
+  return null
 }
 
 export function getAdminRoles(role: string | null | undefined): string[] {
   const normalized = normalizeAdminRole(role)
+  if (!normalized) return []
   return [ADMIN_ROLE_RESPONSE[normalized]]
 }
 
 export function getAdminPermissions(role: string | null | undefined): string[] {
   const normalized = normalizeAdminRole(role)
+  if (!normalized) return []
   if (normalized === ADMIN_ROLE.SUPER_ADMIN) return ['*']
   if (normalized === ADMIN_ROLE.FINANCE) return FINANCE_PERMISSIONS
   return OPERATOR_PERMISSIONS
+}
+
+export function parseRolePermissions(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  const permissions = value.filter((item): item is string => typeof item === 'string')
+  if (permissions.length !== value.length) return null
+  if (permissions.some(permission => permission !== '*' && !ADMIN_PERMISSION_CODES.has(permission))) return null
+  return [...new Set(permissions)]
 }

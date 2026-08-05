@@ -3,6 +3,7 @@ import type { Address, Prisma } from '@prisma/client'
 import { AdminAuditService } from '../audit-log/admin-audit.service'
 import { BusinessException } from '../common/errors/business-exception'
 import { ErrorCode } from '../common/errors/error-code'
+import { clearDefaultAddresses, setAddressDefault } from './address-revision'
 import type { AdminSaveAddressDto, SaveAddressDto } from './dto/save-address.dto'
 import { AddressOwnerType, AddressesRepository } from './addresses.repository'
 
@@ -43,13 +44,21 @@ export class AddressesService {
   }
 
   async createAddress(params: OwnerAddressParams & { dto: SaveAddressDto, source?: string }) {
+    this.assertCoordinatePair(params.dto.latitude, params.dto.longitude)
     const addressType = params.addressType || params.dto.addressType || this.defaultAddressType(params.ownerType)
-    const data = this.toAddressCreateInput(params.ownerType, params.ownerId, addressType, params.dto, params.source || 'manual')
-    const address = await this.repository.createAddress({ ...params, addressType }, data)
+    const data = this.toAddressCreateInput(params.ownerType, params.ownerId, addressType, params.dto, params.dto.source || params.source || 'manual')
+    const address = await this.repository.createAddress({ ...params, addressType }, data, {
+      operatorType: params.ownerType,
+      operatorId: BigInt(params.ownerId),
+    })
     return this.presentAddress(address)
   }
 
   async updateAddress(params: OwnerAddressParams & { addressId: number, dto: SaveAddressDto }) {
+    if (params.dto.expectedVersion === undefined) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'expectedVersion is required', 400)
+    }
+    this.assertCoordinatePair(params.dto.latitude, params.dto.longitude)
     const addressType = params.addressType || params.dto.addressType
     const data = this.toAddressUpdateInput(params.dto)
     if (!params.addressType && params.dto.addressType) {
@@ -60,7 +69,11 @@ export class AddressesService {
       ownerId: params.ownerId,
       addressId: params.addressId,
       addressType,
-    }, data)
+    }, data, {
+      operatorType: params.ownerType,
+      operatorId: BigInt(params.ownerId),
+      expectedVersion: params.dto.expectedVersion,
+    })
     if (!address) throw this.addressNotFound()
     return this.presentAddress(address)
   }
@@ -69,6 +82,9 @@ export class AddressesService {
     const address = await this.repository.deleteAddress({
       ...params,
       addressType: params.addressType,
+    }, {
+      operatorType: params.ownerType,
+      operatorId: BigInt(params.ownerId),
     })
     if (!address) throw this.addressNotFound()
     return null
@@ -153,10 +169,15 @@ export class AddressesService {
   }
 
   async createAdminAddress(dto: AdminSaveAddressDto, context: AdminContext) {
+    this.assertCoordinatePair(dto.latitude, dto.longitude)
     const ownerType = this.parseOwnerType(dto.ownerType)
     const addressType = dto.addressType || this.defaultAddressType(ownerType)
     const data = this.toAddressCreateInput(ownerType, dto.ownerId, addressType, dto, 'admin')
-    const address = await this.repository.createAddress({ ownerType, ownerId: dto.ownerId, addressType }, data)
+    const address = await this.repository.createAddress({ ownerType, ownerId: dto.ownerId, addressType }, data, {
+      operatorType: 'admin',
+      operatorId: BigInt(context.adminId),
+      requestId: context.requestId,
+    })
     await this.audit.write({
       adminId: context.adminId,
       action: `${ownerType}-address:create`,
@@ -171,6 +192,10 @@ export class AddressesService {
   }
 
   async updateAdminAddress(addressId: number, dto: AdminSaveAddressDto, context: AdminContext) {
+    if (dto.expectedVersion === undefined) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'expectedVersion is required', 400)
+    }
+    this.assertCoordinatePair(dto.latitude, dto.longitude)
     const current = await this.repository.client.address.findFirst({
       where: { id: BigInt(addressId), deletedAt: null },
     })
@@ -180,10 +205,18 @@ export class AddressesService {
     const ownerId = dto.ownerId || Number(current.ownerId)
     const addressType = dto.addressType || current.addressType
     const address = await this.repository.client.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM addresses WHERE id = ${current.id} FOR UPDATE`
+      const lockedCurrent = await tx.address.findFirst({
+        where: { id: current.id, deletedAt: null },
+      })
+      if (!lockedCurrent) throw this.addressNotFound()
+      if (lockedCurrent.version !== dto.expectedVersion) {
+        throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'address version conflict', 409)
+      }
       const ownerIdBigInt = BigInt(ownerId)
-      const scopeChanged = current.ownerType !== ownerType
-        || current.ownerId !== ownerIdBigInt
-        || current.addressType !== addressType
+      const scopeChanged = lockedCurrent.ownerType !== ownerType
+        || lockedCurrent.ownerId !== ownerIdBigInt
+        || lockedCurrent.addressType !== addressType
       const targetScope = {
         ownerType,
         ownerId: ownerIdBigInt,
@@ -192,47 +225,58 @@ export class AddressesService {
         status: 1,
       }
       const targetExistingCount = scopeChanged
-        ? await tx.address.count({ where: { ...targetScope, id: { not: current.id } } })
+        ? await tx.address.count({ where: { ...targetScope, id: { not: lockedCurrent.id } } })
         : 1
       const shouldBeDefault = dto.isDefault === true
-        || (scopeChanged && current.isDefault)
+        || (scopeChanged && lockedCurrent.isDefault)
         || (scopeChanged && targetExistingCount === 0)
 
       if (shouldBeDefault) {
-        await tx.address.updateMany({
-          where: {
-            ...targetScope,
-            id: { not: current.id },
-          },
-          data: { isDefault: false },
+        await clearDefaultAddresses(tx, targetScope, lockedCurrent.id, {
+          operatorType: 'admin',
+          operatorId: BigInt(context.adminId),
+          reason: 'admin changed default address while updating address',
         })
       }
       const address = await tx.address.update({
-        where: { id: current.id },
+        where: { id: lockedCurrent.id },
         data: {
           ...this.toAddressUpdateInput(dto),
           ownerType,
           ownerId: ownerIdBigInt,
           addressType,
           ...(shouldBeDefault ? { isDefault: true } : {}),
+          version: { increment: 1 },
+        },
+      })
+      await tx.addressRevision.create({
+        data: {
+          addressId: address.id,
+          version: address.version,
+          snapshot: this.addressRevisionSnapshot(address),
+          changeType: 'admin_update',
+          operatorType: 'admin',
+          operatorId: BigInt(context.adminId),
+          reason: 'admin updated address',
         },
       })
 
-      if (scopeChanged && current.isDefault) {
+      if (scopeChanged && lockedCurrent.isDefault) {
         const replacement = await tx.address.findFirst({
           where: {
-            ownerType: current.ownerType,
-            ownerId: current.ownerId,
-            addressType: current.addressType,
+            ownerType: lockedCurrent.ownerType,
+            ownerId: lockedCurrent.ownerId,
+            addressType: lockedCurrent.addressType,
             deletedAt: null,
             status: 1,
           },
           orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
         })
         if (replacement) {
-          await tx.address.update({
-            where: { id: replacement.id },
-            data: { isDefault: true },
+          await setAddressDefault(tx, replacement, true, {
+            operatorType: 'admin',
+            operatorId: BigInt(context.adminId),
+            reason: 'admin selected replacement default after address scope change',
           })
         }
       }
@@ -283,6 +327,10 @@ export class AddressesService {
       ownerId: Number(current.ownerId),
       addressType: current.addressType,
       addressId,
+    }, {
+      operatorType: 'admin',
+      operatorId: BigInt(context.adminId),
+      requestId: context.requestId,
     })
     if (!address) throw this.addressNotFound()
     await this.audit.write({
@@ -301,30 +349,6 @@ export class AddressesService {
   async deleteAdminOwnerAddress(ownerType: AddressOwnerType, ownerId: number, addressId: number, context: AdminContext) {
     await this.ensureAddressOwner(ownerType, ownerId, addressId)
     return this.deleteAdminAddress(addressId, context)
-  }
-
-  toOrderAddressSnapshot(address: Address) {
-    return {
-      addressId: Number(address.id),
-      id: Number(address.id),
-      ownerType: address.ownerType,
-      addressType: address.addressType,
-      contactName: address.contactName,
-      contactPhone: address.contactPhone,
-      provinceName: address.province || '',
-      cityName: address.city || '',
-      districtName: address.district || '',
-      streetName: address.street || '',
-      addressTitle: address.addressTitle || '',
-      detailAddress: address.detailAddress,
-      houseNumber: address.houseNumber || '',
-      formattedAddress: address.formattedAddress,
-      latitude: address.latitude?.toNumber() ?? null,
-      longitude: address.longitude?.toNumber() ?? null,
-      coordinateType: address.coordinateType || '',
-      poiId: address.poiId || '',
-      mapProvider: address.mapProvider || '',
-    }
   }
 
   presentAddress(address: Address, options?: {
@@ -361,6 +385,7 @@ export class AddressesService {
       isDefault: address.isDefault,
       source: address.source,
       status: address.status,
+      version: address.version,
       city: address.city || '',
       district: address.district || '',
       address: address.formattedAddress,
@@ -390,11 +415,13 @@ export class AddressesService {
     if (dto.isDefault === undefined) {
       delete data.isDefault
     }
+    if (dto.source) data.source = dto.source
     return data
   }
 
   private toAddressBaseInput(dto: SaveAddressDto) {
     const formattedAddress = this.composeFormattedAddress(dto)
+    const hasCoordinates = dto.latitude !== undefined && dto.latitude !== null
     return {
       contactName: dto.contactName,
       contactPhone: dto.contactPhone,
@@ -409,9 +436,9 @@ export class AddressesService {
       formattedAddress,
       latitude: dto.latitude ?? null,
       longitude: dto.longitude ?? null,
-      coordinateType: dto.coordinateType || 'gcj02',
-      poiId: dto.poiId || null,
-      mapProvider: dto.mapProvider || null,
+      coordinateType: hasCoordinates ? dto.coordinateType || 'gcj02' : null,
+      poiId: hasCoordinates ? dto.poiId || null : null,
+      mapProvider: hasCoordinates ? dto.mapProvider || null : null,
       isDefault: dto.isDefault ?? false,
     }
   }
@@ -426,6 +453,14 @@ export class AddressesService {
       dto.detailAddress,
       dto.houseNumber,
     ].map(value => value?.trim()).filter(Boolean).join('')
+  }
+
+  private assertCoordinatePair(latitude?: number | null, longitude?: number | null) {
+    const hasLatitude = latitude !== undefined && latitude !== null
+    const hasLongitude = longitude !== undefined && longitude !== null
+    if (hasLatitude !== hasLongitude) {
+      throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, 'latitude and longitude must be provided together', 400)
+    }
   }
 
   private defaultAddressType(ownerType: AddressOwnerType) {
@@ -452,6 +487,36 @@ export class AddressesService {
       isDefault: address.isDefault,
       deletedAt: address.deletedAt?.toISOString() || null,
     }
+  }
+
+  private addressRevisionSnapshot(address: Address) {
+    return {
+      id: Number(address.id),
+      ownerType: address.ownerType,
+      ownerId: Number(address.ownerId),
+      addressType: address.addressType,
+      contactName: address.contactName,
+      contactPhone: address.contactPhone,
+      country: address.country,
+      provinceName: address.province,
+      cityName: address.city,
+      districtName: address.district,
+      streetName: address.street,
+      addressTitle: address.addressTitle,
+      detailAddress: address.detailAddress,
+      houseNumber: address.houseNumber,
+      formattedAddress: address.formattedAddress,
+      latitude: address.latitude?.toNumber() ?? null,
+      longitude: address.longitude?.toNumber() ?? null,
+      coordinateType: address.coordinateType,
+      poiId: address.poiId,
+      mapProvider: address.mapProvider,
+      isDefault: address.isDefault,
+      source: address.source,
+      status: address.status,
+      version: address.version,
+      deletedAt: address.deletedAt?.toISOString() || null,
+    } as Prisma.InputJsonObject
   }
 
   private async ensureAddressOwner(ownerType: AddressOwnerType, ownerId: number, addressId: number) {

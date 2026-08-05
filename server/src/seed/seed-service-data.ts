@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import { hashAdminPassword } from '../admin-auth/admin-password'
+import { addressRevisionSnapshot } from '../addresses/address-revision'
 import { categorySeeds, serviceSeeds } from './service-seeds'
 
 export interface SeedOptions {
@@ -56,7 +57,9 @@ export async function seedServiceData(prisma: PrismaClient, options: SeedOptions
 async function ensureDefaultMemberCards(prisma: PrismaClient) {
   const cards = [
     {
+      code: 'MC-DAILY-CLEAN-SEASON',
       name: '日常保洁季卡',
+      description: '季度日常保洁分钟权益',
       applicableServices: [
         '日常保洁 2 小时',
         'svc_jijie_daily_cleaning_3',
@@ -74,7 +77,9 @@ async function ensureDefaultMemberCards(prisma: PrismaClient) {
       status: 1,
     },
     {
+      code: 'MC-DAILY-CLEAN-YEAR',
       name: '日常保洁年卡',
+      description: '年度日常保洁分钟权益',
       applicableServices: [
         '日常保洁 2 小时',
         'svc_jijie_daily_cleaning_3',
@@ -384,16 +389,6 @@ async function ensureTestUser(prisma: PrismaClient) {
 }
 
 async function ensureTestUserAddress(prisma: PrismaClient, userId: bigint) {
-  const existing = await prisma.address.findFirst({
-    where: {
-      ownerType: 'user',
-      ownerId: userId,
-      addressType: 'service',
-      deletedAt: null,
-    },
-    orderBy: [{ isDefault: 'desc' }, { id: 'asc' }],
-  })
-
   const data = {
     ownerType: 'user',
     ownerId: userId,
@@ -409,6 +404,8 @@ async function ensureTestUserAddress(prisma: PrismaClient, userId: bigint) {
     detailAddress: '科技园测试小区 1 栋 101',
     houseNumber: '1栋101',
     formattedAddress: '广东省深圳市南山区粤海街道科技园测试小区 1 栋 101',
+    latitude: 22.5400000,
+    longitude: 113.9300000,
     coordinateType: 'gcj02',
     mapProvider: 'seed',
     isDefault: true,
@@ -417,14 +414,35 @@ async function ensureTestUserAddress(prisma: PrismaClient, userId: bigint) {
     deletedAt: null,
   }
 
-  if (existing) {
-    return prisma.address.update({
-      where: { id: existing.id },
-      data,
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.address.findFirst({
+      where: {
+        ownerType: 'user',
+        ownerId: userId,
+        addressType: 'service',
+        deletedAt: null,
+      },
+      orderBy: [{ isDefault: 'desc' }, { id: 'asc' }],
     })
-  }
-
-  return prisma.address.create({ data })
+    const address = existing
+      ? await tx.address.update({
+          where: { id: existing.id },
+          data: { ...data, version: { increment: 1 } },
+        })
+      : await tx.address.create({ data })
+    await tx.addressRevision.create({
+      data: {
+        addressId: address.id,
+        version: address.version,
+        snapshot: addressRevisionSnapshot(address),
+        changeType: existing ? 'seed_update' : 'seed_create',
+        operatorType: 'system',
+        operatorId: BigInt(0),
+        reason: 'seed ensured test user address',
+      },
+    })
+    return address
+  })
 }
 
 async function ensureSeedStaff(prisma: PrismaClient) {

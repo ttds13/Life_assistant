@@ -341,7 +341,6 @@ export class PaymentsService {
           },
         })
         await this.coupons.markCouponUsedForOrder(tx, order.id, now)
-        await this.users.ensureEarnedPointsForPaidOrder(tx, order, payment.amount)
         await this.notifications.createAdminOrderNotification({
           tx,
           orderId: order.id,
@@ -414,7 +413,6 @@ export class PaymentsService {
 
       const grantedCard = await this.memberCards.grantForPaidPurchaseOrder(tx, order, 'system', BigInt(0))
       await this.coupons.markCouponUsedForOrder(tx, order.id, now)
-      await this.users.ensureEarnedPointsForPaidOrder(tx, order, payment.amount)
 
       await tx.order.update({
         where: { id: order.id },
@@ -440,9 +438,9 @@ export class PaymentsService {
             paymentNo: payment.paymentNo,
             transactionNo,
             orderType: order.orderType,
-            purchaseCardId: order.purchaseCardId ? Number(order.purchaseCardId) : order.memberCardId ? Number(order.memberCardId) : null,
+            purchaseCardId: grantedCard ? Number(grantedCard.cardId) : order.purchaseCardId ? Number(order.purchaseCardId) : null,
             grantedUserMemberCardId: grantedCard ? Number(grantedCard.id) : order.grantedUserMemberCardId ? Number(order.grantedUserMemberCardId) : null,
-            totalUnits: order.memberCardConsumeUnits,
+            totalUnits: grantedCard?.totalMinutes || order.memberCardConsumeUnits,
           },
         },
       })

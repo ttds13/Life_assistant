@@ -77,6 +77,8 @@ export class TencentMapProvider implements MapProvider {
       province: component.province || '',
       city: component.city || '',
       district: component.district || '',
+      street: component.street || '',
+      streetNumber: component.street_number || '',
       address: [component.street, component.street_number].filter(Boolean).join('') || result.address || '',
       formattedAddress: result.formatted_addresses?.recommend || result.address || '',
       pois: (result.pois || []).map(item => ({
