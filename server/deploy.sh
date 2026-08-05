@@ -83,18 +83,18 @@ docker run --rm \
   --entrypoint node \
   "${IMAGE_REF}" scripts/release-preflight.cjs
 
+BACKUP_FILE="${BACKUP_DIR}/life_assistant_before_$(date -u +%Y%m%d%H%M%S).sql.gz"
+MYSQL_CONTAINER_NAME="${MYSQL_CONTAINER_NAME}" \
+MYSQL_DATABASE="${MYSQL_DATABASE}" \
+BACKUP_VERIFY_RESTORE="${BACKUP_VERIFY_RESTORE}" \
+  sh ./backup-before-migration.sh "${BACKUP_FILE}"
+
 docker run --rm \
   --network "${DOCKER_NETWORK}" \
   --env-file "${ENV_FILE}" \
   -v "${CERTS_MOUNT}:/app/certs:ro" \
   --entrypoint npm \
   "${IMAGE_REF}" run prisma:migrate:deploy
-
-BACKUP_FILE="${BACKUP_DIR}/life_assistant_before_$(date -u +%Y%m%d%H%M%S).sql.gz"
-MYSQL_CONTAINER_NAME="${MYSQL_CONTAINER_NAME}" \
-MYSQL_DATABASE="${MYSQL_DATABASE}" \
-BACKUP_VERIFY_RESTORE="${BACKUP_VERIFY_RESTORE}" \
-  sh ./backup-before-migration.sh "${BACKUP_FILE}"
 
 run_app() {
   name="$1"

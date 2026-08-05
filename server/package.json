@@ -32,13 +32,13 @@
     "oss:smoke": "tsx scripts/oss-smoke-test.ts"
   },
   "dependencies": {
-    "@nestjs/common": "^11.1.6",
+    "@nestjs/common": "^11.1.28",
     "@nestjs/config": "^4.0.2",
-    "@nestjs/core": "^11.1.6",
+    "@nestjs/core": "^11.1.28",
     "@nestjs/jwt": "^11.0.0",
-    "@nestjs/platform-express": "^11.1.6",
+    "@nestjs/platform-express": "^11.1.28",
     "@nestjs/serve-static": "^5.0.5",
-    "@nestjs/swagger": "^11.2.0",
+    "@nestjs/swagger": "^11.4.5",
     "@prisma/client": "^6.19.3",
     "ali-oss": "^6.23.0",
     "class-transformer": "^0.5.1",
