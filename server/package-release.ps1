@@ -44,6 +44,7 @@ $imageRef = "${imageName}:$ImageTag"
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
 docker build --build-arg "NODE_IMAGE=$NodeImage" -t $imageRef .
+docker run --rm --entrypoint node $imageRef -e "const { Prisma } = require('@prisma/client'); if (new Prisma.Decimal(0).toString() !== '0') process.exit(1)"
 docker save -o (Join-Path $OutputDir "$imageName.tar") $imageRef
 
 Copy-Item 'deploy.sh' (Join-Path $OutputDir 'deploy.sh') -Force

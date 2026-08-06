@@ -35,6 +35,7 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 COPY nest-cli.json tsconfig*.json ./
 COPY prisma ./prisma
+RUN npm run prisma:generate
 COPY scripts ./scripts
 COPY src ./src
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
