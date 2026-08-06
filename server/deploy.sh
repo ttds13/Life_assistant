@@ -1,4 +1,4 @@
-﻿#!/bin/sh
+#!/bin/sh
 set -eu
 
 IMAGE_NAME="${IMAGE_NAME:-life-assistant-server}"
@@ -18,6 +18,8 @@ NODE_IMAGE="${NODE_IMAGE:-node:22-bookworm-slim}"
 HEALTH_PATH="${HEALTH_PATH:-/api/health}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-24}"
 HEALTH_SLEEP_SECONDS="${HEALTH_SLEEP_SECONDS:-2}"
+MIGRATION_RETRIES="${MIGRATION_RETRIES:-3}"
+MIGRATION_SLEEP_SECONDS="${MIGRATION_SLEEP_SECONDS:-5}"
 APP_DATA_DIR="${APP_DATA_DIR:-$(pwd)}"
 
 if [ -z "${IMAGE_TAG}" ] && [ -f .image-tag ]; then
@@ -94,12 +96,27 @@ MYSQL_DATABASE="${MYSQL_DATABASE}" \
 BACKUP_VERIFY_RESTORE="${BACKUP_VERIFY_RESTORE}" \
   sh ./backup-before-migration.sh "${BACKUP_FILE}"
 
-docker run --rm \
-  --network "${DOCKER_NETWORK}" \
-  --env-file "${ENV_FILE}" \
-  -v "${CERTS_MOUNT}:/app/certs:ro" \
-  --entrypoint npm \
-  "${IMAGE_REF}" run prisma:migrate:deploy
+run_migrations() {
+  attempt=1
+  while [ "${attempt}" -le "${MIGRATION_RETRIES}" ]; do
+    if docker run --rm \
+      --network "${DOCKER_NETWORK}" \
+      --env-file "${ENV_FILE}" \
+      -v "${CERTS_MOUNT}:/app/certs:ro" \
+      --entrypoint npm \
+      "${IMAGE_REF}" run prisma:migrate:deploy; then
+      return 0
+    fi
+    if [ "${attempt}" -ge "${MIGRATION_RETRIES}" ]; then
+      return 1
+    fi
+    echo "migration attempt ${attempt} failed; retrying in ${MIGRATION_SLEEP_SECONDS}s"
+    sleep "${MIGRATION_SLEEP_SECONDS}"
+    attempt=$((attempt + 1))
+  done
+}
+
+run_migrations
 
 run_app() {
   name="$1"
