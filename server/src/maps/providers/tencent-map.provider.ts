@@ -132,10 +132,14 @@ export class TencentMapProvider implements MapProvider {
       if (value !== undefined && value !== '') search.set(name, String(value))
     }
     const timeoutMs = Number(this.config.get<string | number>('MAP_API_TIMEOUT_MS', 5000))
+    const referer = this.config.get<string>('MAP_REQUEST_REFERER', this.config.get<string>('PUBLIC_BASE_URL', '')).trim()
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
-      const response = await fetch(`${url}?${search.toString()}`, { signal: controller.signal })
+      const response = await fetch(`${url}?${search.toString()}`, {
+        signal: controller.signal,
+        headers: referer ? { Referer: referer } : undefined,
+      })
       const payload = await response.json() as TencentResponse<T>
       if (!response.ok || payload.status !== 0) {
         throw new BusinessException(ErrorCode.COMMON_BAD_REQUEST, payload.message || 'map api failed', 400)
