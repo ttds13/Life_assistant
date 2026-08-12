@@ -461,7 +461,7 @@ async function fetchProducts() {
 async function loadServiceOptions() {
   const result = await LifeAPI.getResourcePage("services", {
     pageNum: 1,
-    pageSize: 200,
+    pageSize: 100,
     keywords: "",
     status: "active",
     module: "services",
