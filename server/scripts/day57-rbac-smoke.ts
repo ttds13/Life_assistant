@@ -38,7 +38,12 @@ async function main() {
   assert.equal((await request('/admin/roles', token(operatorAdmin))).status, 403, 'operator must not access role management')
   assert.equal((await request('/admin/dashboard', token(unknownAdmin))).status, 403, 'unknown role must fail closed')
 
-  console.log(JSON.stringify({ databaseRbac: true, operatorLeastPrivilege: true, unknownRoleDenied: true }, null, 2))
+  const operatorPermissions = JSON.parse(JSON.stringify(operatorRole.permissions)) as string[]
+  assert(operatorPermissions.includes('member-card:list'), 'operator member-card list permission missing')
+  assert(operatorPermissions.includes('member-card:create'), 'operator member-card create permission missing')
+  assert(operatorPermissions.includes('member-card:update'), 'operator member-card update permission missing')
+
+  console.log(JSON.stringify({ databaseRbac: true, operatorLeastPrivilege: true, operatorMemberCardProductCrud: true, unknownRoleDenied: true }, null, 2))
 }
 
 main()
