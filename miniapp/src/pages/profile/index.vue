@@ -13,6 +13,8 @@ definePage({
     navigationBarTitleText: '我的',
     navigationBarBackgroundColor: '#F5F7FA',
     navigationBarTextStyle: 'black',
+    enableShareAppMessage: true,
+    enableShareTimeline: true,
   },
 })
 
@@ -344,6 +346,16 @@ onShow(() => {
   loadProfileStats()
   loadOrderStats()
 })
+
+onShareAppMessage(() => ({
+  title: '双鸭山吉茸便民居家服务',
+  path: '/pages/home/index',
+}))
+
+onShareTimeline(() => ({
+  title: '双鸭山吉茸便民居家服务',
+  query: '',
+}))
 </script>
 
 <template>
